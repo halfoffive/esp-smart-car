@@ -211,6 +211,13 @@ void applyVehicleMotion(const VehicleMotion& motion) {
 - 速度：数字键 1-9 或滑块
 - 云台：方向键或控制面板
 
+## 测试
+
+```bash
+cd desktop/backend
+cargo test         # 运行所有 Rust 测试（无需硬件连接）
+```
+
 ## 故障排除
 
 ### 无线通信失败
@@ -234,6 +241,7 @@ void applyVehicleMotion(const VehicleMotion& motion) {
   - 前端依赖大版本升级：TailwindCSS v3 → v4，Vite 5 → 8，Vue 3.4 → 3.5.35
   - 修复滑块 thumb 垂直对齐
   - 移除 tailwind.config.js、postcss.config.js（迁移到 CSS @theme）
+  - 新增 Rust 自动化测试（25 个测试用例）
 
 - v1.1.3 - 2026-06-07
   - 修复滑块 thumb 垂直对齐（`margin-top: -6px`）

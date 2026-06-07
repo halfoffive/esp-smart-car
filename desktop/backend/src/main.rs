@@ -1,7 +1,3 @@
-mod api;
-mod serial;
-mod websocket;
-
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -9,43 +5,9 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use tokio::sync::Mutex;
 use tracing::{info, warn};
 
-pub use serial::OdometryData;
-
-/// 应用状态（共享状态）
-pub struct AppState {
-    /// 串口连接管理器
-    pub serial_manager: Arc<Mutex<serial::SerialManager>>,
-    /// WebSocket连接管理器
-    pub ws_manager: Arc<Mutex<websocket::WebSocketManager>>,
-    /// 视频帧数据
-    pub video_frame: Arc<Mutex<Option<Vec<u8>>>>,
-    /// 当前速度
-    pub current_speed: Arc<Mutex<u8>>,
-    /// 测速数据
-    pub odometry: Arc<Mutex<OdometryData>>,
-    /// 最后心跳时间
-    pub last_heartbeat: Arc<Mutex<std::time::Instant>>,
-    /// 服务器启动时间（用于计算运行时长）
-    pub started_at: std::time::Instant,
-}
-
-impl AppState {
-    /// 创建新状态
-    pub fn new() -> Self {
-        Self {
-            serial_manager: Arc::new(Mutex::new(serial::SerialManager::new())),
-            ws_manager: Arc::new(Mutex::new(websocket::WebSocketManager::new())),
-            video_frame: Arc::new(Mutex::new(None)),
-            current_speed: Arc::new(Mutex::new(5)),
-            odometry: Arc::new(Mutex::new(OdometryData::default())),
-            last_heartbeat: Arc::new(Mutex::new(std::time::Instant::now())),
-            started_at: std::time::Instant::now(),
-        }
-    }
-}
+use esp_smart_car_backend::{api, serial, websocket, AppState};
 
 /// 主函数
 #[tokio::main]
@@ -99,4 +61,19 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use esp_smart_car_backend::AppState;
+
+    /// 测试 AppState 初始状态
+    #[tokio::test]
+    async fn test_app_state_new() {
+        let state = AppState::new();
+        let current_speed = state.current_speed.lock().await;
+        assert_eq!(*current_speed, 5);
+        let video_frame = state.video_frame.lock().await;
+        assert!(video_frame.is_none());
+    }
 }

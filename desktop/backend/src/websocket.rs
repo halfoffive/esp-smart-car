@@ -295,3 +295,52 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
 fn base64_encode(data: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(data)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试 WebSocketManager 初始状态
+    #[test]
+    fn test_ws_manager_new() {
+        let manager = WebSocketManager::new();
+        assert_eq!(manager.client_count(), 0);
+    }
+
+    /// 测试添加客户端递增 ID 和计数
+    #[test]
+    fn test_add_client() {
+        let mut manager = WebSocketManager::new();
+        let id1 = manager.add_client();
+        let id2 = manager.add_client();
+        assert_eq!(id1, 1);
+        assert_eq!(id2, 2);
+        assert_eq!(manager.client_count(), 2);
+    }
+
+    /// 测试移除客户端减少计数
+    #[test]
+    fn test_remove_client() {
+        let mut manager = WebSocketManager::new();
+        let id1 = manager.add_client();
+        let _id2 = manager.add_client();
+        manager.remove_client(id1);
+        assert_eq!(manager.client_count(), 1);
+    }
+
+    /// 测试移除不存在的客户端无 panic
+    #[test]
+    fn test_remove_nonexistent_client() {
+        let mut manager = WebSocketManager::new();
+        manager.add_client();
+        manager.remove_client(999);
+        assert_eq!(manager.client_count(), 1);
+    }
+
+    /// 测试 base64 编码
+    #[test]
+    fn test_base64_encode() {
+        let encoded = base64_encode(&[0x00, 0x01, 0x02]);
+        assert_eq!(encoded, "AAEC");
+    }
+}

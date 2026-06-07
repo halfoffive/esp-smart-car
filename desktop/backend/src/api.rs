@@ -245,3 +245,81 @@ pub async fn disconnect_serial(
         }),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试 CommandRequest 反序列化（含 speed）
+    #[test]
+    fn test_command_request_with_speed() {
+        let json = r#"{"command":"W","speed":5}"#;
+        let req: CommandRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.command, "W");
+        assert_eq!(req.speed, Some(5));
+    }
+
+    /// 测试 CommandRequest 反序列化（无 speed）
+    #[test]
+    fn test_command_request_without_speed() {
+        let json = r#"{"command":"S"}"#;
+        let req: CommandRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.command, "S");
+        assert_eq!(req.speed, None);
+    }
+
+    /// 测试 ConnectRequest 反序列化（含 baud_rate）
+    #[test]
+    fn test_connect_request_with_baud_rate() {
+        let json = r#"{"port_name":"COM3","baud_rate":115200}"#;
+        let req: ConnectRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.port_name, "COM3");
+        assert_eq!(req.baud_rate, Some(115200));
+    }
+
+    /// 测试 ConnectRequest 反序列化（无 baud_rate）
+    #[test]
+    fn test_connect_request_without_baud_rate() {
+        let json = r#"{"port_name":"/dev/ttyUSB0"}"#;
+        let req: ConnectRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.port_name, "/dev/ttyUSB0");
+        assert_eq!(req.baud_rate, None);
+    }
+
+    /// 测试 ApiResponse 序列化
+    #[test]
+    fn test_api_response_serialize() {
+        let resp = ApiResponse {
+            success: true,
+            message: "ok".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"success\":true"));
+        assert!(json.contains("\"message\":\"ok\""));
+    }
+
+    /// 测试 StatusResponse 序列化
+    #[test]
+    fn test_status_response_serialize() {
+        let resp = StatusResponse {
+            serial_status: "未连接".to_string(),
+            port_name: None,
+            baud_rate: None,
+            frame_count: 0,
+            bytes_sent: 0,
+            current_speed: 5,
+            ws_clients: 0,
+            uptime: 42,
+            version: "1.1.0".to_string(),
+            left_speed: 0.0,
+            right_speed: 0.0,
+            heading: 0.0,
+            total_distance: 0.0,
+            command_count: 0,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"serial_status\":\"未连接\""));
+        assert!(json.contains("\"current_speed\":5"));
+        assert!(json.contains("\"version\":\"1.1.0\""));
+    }
+}

@@ -95,6 +95,7 @@ esp-smart-car/
 cd desktop/backend
 cargo build        # Build
 cargo run          # Run server (serves frontend at http://localhost:8080)
+cargo test         # Run all tests
 
 # Frontend (Vue + Bun)
 cd desktop/frontend
@@ -130,6 +131,15 @@ Key connections:
 - **Calibration**: Servo angles may need adjustment based on physical mounting
 
 ## 近期修复记录
+
+### 2026-06-07 - Rust 自动化测试
+- **新增**: 25 个自动化测试（19 单元 + 1 主模块 + 5 集成），覆盖 serial/websocket/api 模块
+- **serial.rs**: 8 个测试 — 初始状态、未连接发送/断开、测速 JSON 解析（有效/非odom/无效JSON/缺字段）、OdometryData 默认值
+- **websocket.rs**: 5 个测试 — WebSocketManager 增删客户端、base64 编码
+- **api.rs**: 6 个测试 — CommandRequest/ConnectRequest 反序列化、ApiResponse/StatusResponse 序列化
+- **main.rs**: 1 个测试 — AppState 初始状态
+- **tests/api_integration.rs**: 5 个集成测试 — GET /api/status、POST /api/command(503)、POST /api/disconnect、POST /api/connect(503)、WebSocket 升级
+- **重构**: AppState 从 main.rs 迁移到 lib.rs，支持集成测试访问公共 API
 
 ### 2026-06-07 - 前端依赖大版本升级
 - **TailwindCSS v3 → v4**: 配置从 JS 迁移到 CSS `@theme`，移除 `tailwind.config.js` 和 `postcss.config.js`，改用 `@tailwindcss/vite` 插件

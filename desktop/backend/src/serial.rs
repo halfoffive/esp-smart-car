@@ -330,3 +330,76 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 测试 SerialManager 初始状态
+    #[test]
+    fn test_serial_manager_new() {
+        let manager = SerialManager::new();
+        assert!(matches!(manager.state, SerialConnectionState::Disconnected));
+        assert_eq!(manager.frame_count, 0);
+        assert_eq!(manager.bytes_sent, 0);
+        assert_eq!(manager.command_count, 0);
+    }
+
+    /// 测试未连接时发送命令返回错误
+    #[test]
+    fn test_send_command_disconnected() {
+        let mut manager = SerialManager::new();
+        let result = manager.send_command(0x57);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("串口未连接"));
+    }
+
+    /// 测试未连接时断开无 panic
+    #[test]
+    fn test_disconnect_when_disconnected() {
+        let mut manager = SerialManager::new();
+        manager.disconnect();
+        assert!(matches!(manager.state, SerialConnectionState::Disconnected));
+    }
+
+    /// 测试测速 JSON 解析 - 有效数据
+    #[test]
+    fn test_parse_odometry_line_valid() {
+        let line = r#"{"t":"odom","ls":100.5,"rs":99.3,"hd":18000,"dist":12345}"#;
+        let odom = SerialManager::parse_odometry_line(line).unwrap();
+        assert!((odom.left_speed_mmps - 100.5).abs() < 0.1);
+        assert!((odom.right_speed_mmps - 99.3).abs() < 0.1);
+        assert!((odom.heading - 180.0).abs() < 0.1);
+        assert!((odom.total_distance_mm - 12345.0).abs() < 0.1);
+    }
+
+    /// 测试测速 JSON 解析 - 非 odom 消息
+    #[test]
+    fn test_parse_odometry_line_not_odom() {
+        let line = r#"{"t":"other","ls":100}"#;
+        assert!(SerialManager::parse_odometry_line(line).is_none());
+    }
+
+    /// 测试测速 JSON 解析 - 无效 JSON
+    #[test]
+    fn test_parse_odometry_line_invalid_json() {
+        assert!(SerialManager::parse_odometry_line("not json").is_none());
+    }
+
+    /// 测试测速 JSON 解析 - 缺少字段
+    #[test]
+    fn test_parse_odometry_line_missing_fields() {
+        let line = r#"{"t":"odom","ls":100}"#;
+        assert!(SerialManager::parse_odometry_line(line).is_none());
+    }
+
+    /// 测试 OdometryData 默认值
+    #[test]
+    fn test_odometry_default() {
+        let odom = OdometryData::default();
+        assert!((odom.left_speed_mmps - 0.0).abs() < f32::EPSILON);
+        assert!((odom.right_speed_mmps - 0.0).abs() < f32::EPSILON);
+        assert!((odom.heading - 0.0).abs() < f32::EPSILON);
+        assert!((odom.total_distance_mm - 0.0).abs() < f32::EPSILON);
+    }
+}

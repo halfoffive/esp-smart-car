@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Rust 自动化测试** — 25 个测试覆盖 serial/websocket/api 模块（8+5+6+1 单元 + 5 集成），无需硬件即可运行
 - **测速模块**（`odometer.h`）- 完整的编码器测速系统
   - 霍尔/红外编码器中断读取（GPIO 0/1）
   - 左右轮实时速度计算（RPM + mm/s）
