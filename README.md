@@ -7,18 +7,18 @@
 ```
 esp-smart-car/
 ├── firmware/                    # 嵌入式固件
-│   ├── car-controller/          # 车载控制器（ESP32-C6）
+│   ├── car_controller/          # 车载控制器（ESP32-C6）
 │   │   ├── motor_control.h      # 电机控制（函数式编程，差速支持）
 │   │   ├── servo_control.h      # 舵机控制（函数式编程）
 │   │   ├── wireless.h           # 无线通信（ESP-NOW，含测速协议）
 │   │   ├── odometer.h           # 编码器测速模块
 │   │   ├── pid_control.h        # PID控制器（直线修正+航向锁定）
 │   │   └── car_controller.ino   # 主程序
-│   ├── camera-module/           # 摄像头模块（ESP32-S3 CAM）
+│   ├── camera_module/           # 摄像头模块（ESP32-S3 CAM）
 │   │   ├── camera_config.h      # 摄像头配置
 │   │   ├── video_stream.h       # 视频流传输
 │   │   └── camera_module.ino    # 主程序
-│   └── receiver-dongle/         # 电脑端接收器（ESP32-C6）
+│   └── receiver_dongle/         # 电脑端接收器（ESP32-C6）
 │       └── receiver_dongle.ino  # 主程序（含测速数据转发）
 ├── desktop/                     # 桌面端控制界面
 │   ├── backend/                 # Rust 后端

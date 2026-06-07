@@ -9,9 +9,9 @@
 ```
 esp-smart-car/
 ├── firmware/              # Embedded firmware (Arduino IDE)
-│   ├── car-controller/     # Vehicle controller (ESP32-C6)
-│   ├── camera-module/     # Camera module (ESP32-S3 CAM)
-│   └── receiver-dongle/   # USB receiver (ESP32-C6)
+│   ├── car_controller/     # Vehicle controller (ESP32-C6)
+│   ├── camera_module/     # Camera module (ESP32-S3 CAM)
+│   └── receiver_dongle/   # USB receiver (ESP32-C6)
 ├── desktop/               # Desktop control interface
 │   ├── backend/           # Rust backend (Axum + WebSocket)
 │   └── frontend/          # Vue frontend (Web UI)
@@ -22,11 +22,11 @@ esp-smart-car/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| Add motor control logic | `firmware/car-controller/motor_control.h` | Functional programming style |
-| Add servo control logic | `firmware/car-controller/servo_control.h` | Smooth movement algorithm |
-| Modify wireless protocol | `firmware/car-controller/wireless.h` | ESP-NOW protocol |
-| Add camera resolution | `firmware/camera-module/camera_config.h` | OV2640 configuration |
-| Add video streaming | `firmware/camera-module/video_stream.h` | Frame packetization |
+| Add motor control logic | `firmware/car_controller/motor_control.h` | Functional programming style |
+| Add servo control logic | `firmware/car_controller/servo_control.h` | Smooth movement algorithm |
+| Modify wireless protocol | `firmware/car_controller/wireless.h` | ESP-NOW protocol |
+| Add camera resolution | `firmware/camera_module/camera_config.h` | OV2640 configuration |
+| Add video streaming | `firmware/camera_module/video_stream.h` | Frame packetization |
 | Add serial communication | `desktop/backend/src/serial.rs` | USB serial port |
 | Add WebSocket handlers | `desktop/backend/src/websocket.rs` | Real-time video |
 | Add REST API endpoints | `desktop/backend/src/api.rs` | HTTP API |

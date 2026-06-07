@@ -8,18 +8,18 @@
 
 ```
 firmware/
-├── car-controller/          # 车载 ESP32-C6
+├── car_controller/          # 车载 ESP32-C6
 │   ├── motor_control.h      # 函数式电机控制
 │   ├── servo_control.h      # 函数式舵机控制
 │   ├── wireless.h           # ESP-NOW 通信
 │   ├── odometer.h           # 编码器测速模块
 │   ├── pid_control.h        # PID控制器（直线修正）
 │   └── car_controller.ino   # 主程序
-├── camera-module/          # 摄像头 ESP32-S3 CAM
+├── camera_module/          # 摄像头 ESP32-S3 CAM
 │   ├── camera_config.h      # OV2640 配置
 │   ├── video_stream.h       # 视频流传输
 │   └── camera_module.ino    # 主程序
-└── receiver-dongle/          # 接收器 ESP32-C6
+└── receiver_dongle/          # 接收器 ESP32-C6
     └── receiver_dongle.ino  # USB桥接 + 测速数据转发
 ```
 
@@ -27,14 +27,14 @@ firmware/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| 修改电机控制 | `car-controller/motor_control.h` | 纯函数，差速控制 |
-| 修改舵机控制 | `car-controller/servo_control.h` | 平滑移动算法 |
-| 修改无线协议 | `car-controller/wireless.h` | 8字节数据包 + 测速包 |
-| 修改测速模块 | `car-controller/odometer.h` | 编码器中断+速度计算 |
-| 修改PID控制 | `car-controller/pid_control.h` | 直线修正+航向锁定 |
-| 修改摄像头配置 | `camera-module/camera_config.h` | 分辨率/质量 |
-| 修改视频传输 | `camera-module/video_stream.h` | 帧分包传输 |
-| 修改接收器逻辑 | `receiver-dongle/receiver_dongle.ino` | USB桥接+测速转发 |
+| 修改电机控制 | `car_controller/motor_control.h` | 纯函数，差速控制 |
+| 修改舵机控制 | `car_controller/servo_control.h` | 平滑移动算法 |
+| 修改无线协议 | `car_controller/wireless.h` | 8字节数据包 + 测速包 |
+| 修改测速模块 | `car_controller/odometer.h` | 编码器中断+速度计算 |
+| 修改PID控制 | `car_controller/pid_control.h` | 直线修正+航向锁定 |
+| 修改摄像头配置 | `camera_module/camera_config.h` | 分辨率/质量 |
+| 修改视频传输 | `camera_module/video_stream.h` | 帧分包传输 |
+| 修改接收器逻辑 | `receiver_dongle/receiver_dongle.ino` | USB桥接+测速转发 |
 
 ## Code Map
 
