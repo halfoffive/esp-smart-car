@@ -1,0 +1,47 @@
+[package]
+name = "esp-smart-car-backend"
+version = "1.0.0"
+edition = "2021"
+authors = ["智能车项目团队"]
+description = "智能车桌面端后端 - 基于 Axum + WebSocket"
+
+[dependencies]
+# Web框架
+axum = { version = "0.7", features = ["ws"] }
+tower = { version = "0.4", features = ["full"] }
+tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# WebSocket
+futures = "0.3"
+
+# 序列化
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# 串口通信
+serialport = "4.3"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 错误处理
+anyhow = "1.0"
+
+# 时间处理
+chrono = { version = "0.4", features = ["serde"] }
+
+# 配置
+dotenvy = "0.15"
+
+# Base64编码
+base64 = "0.22"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

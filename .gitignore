@@ -1,0 +1,50 @@
+# 智能车项目 - Git 忽略配置
+
+# 后端
+/desktop/backend/target/
+/desktop/backend/Cargo.lock
+/desktop/backend/*.log
+
+# 前端
+/desktop/frontend/node_modules/
+/desktop/frontend/dist/
+/desktop/frontend/*.log
+
+# 构建产物
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.temp
+temp/
+tmp/
+
+# 日志
+*.log
+logs/
+
+# 环境配置（包含敏感信息）
+.env.local
+.env.production
+
+# 文档生成
+/docs/generated/
+
+# 固件编译产物
+*.bin
+*.elf
+*.hex

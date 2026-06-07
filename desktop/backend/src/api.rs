@@ -1,0 +1,223 @@
+/**
+ * HTTP API 模块
+ * 基于 Axum 框架，提供 RESTful API
+ * 
+ * 端点：
+ * POST /api/command - 发送控制命令
+ * GET /api/status - 获取系统状态
+ * POST /api/connect - 连接串口
+ * POST /api/disconnect - 断开串口
+ * 
+ * 数据格式：JSON
+ */
+
+use std::sync::Arc;
+
+use axum::{
+    extract::State,
+    http::StatusCode,
+    Json,
+};
+use serde::{Deserialize, Serialize};
+use tracing::{info, warn};
+
+use crate::AppState;
+use crate::serial::SerialConnectionState;
+
+/// 命令请求
+#[derive(Debug, Deserialize)]
+pub struct CommandRequest {
+    /// 命令字符
+    pub command: String,
+    /// 可选速度参数
+    pub speed: Option<u8>,
+}
+
+/// 状态响应
+#[derive(Debug, Serialize)]
+pub struct StatusResponse {
+    /// 串口连接状态
+    pub serial_status: String,
+    /// 串口端口名
+    pub port_name: Option<String>,
+    /// 串口波特率
+    pub baud_rate: Option<u32>,
+    /// 已接收帧数
+    pub frame_count: u32,
+    /// 已发送字节数
+    pub bytes_sent: u64,
+    /// 当前速度
+    pub current_speed: u8,
+    /// WebSocket连接数
+    pub ws_clients: usize,
+    /// 运行时间（秒）
+    pub uptime: u64,
+    /// 系统版本
+    pub version: String,
+}
+
+/// 串口连接请求
+#[derive(Debug, Deserialize)]
+pub struct ConnectRequest {
+    /// 串口名称
+    pub port_name: String,
+    /// 波特率（可选，默认 921600）
+    pub baud_rate: Option<u32>,
+}
+
+/// 通用响应
+#[derive(Debug, Serialize)]
+pub struct ApiResponse {
+    /// 是否成功
+    pub success: bool,
+    /// 消息
+    pub message: String,
+}
+
+/// 处理命令
+pub async fn handle_command(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<CommandRequest>,
+) -> (StatusCode, Json<ApiResponse>) {
+    let cmd = request.command.as_bytes().first().copied().unwrap_or(0);
+    
+    let mut manager = state.serial_manager.lock().await;
+    
+    match manager.send_command(cmd) {
+        Ok(()) => {
+            info!("发送命令: {}", request.command);
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    message: format!("命令 '{}' 已发送", request.command),
+                }),
+            )
+        }
+        Err(e) => {
+            warn!("发送命令失败: {}", e);
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiResponse {
+                    success: false,
+                    message: format!("发送失败: {}", e),
+                }),
+            )
+        }
+    }
+}
+
+/// 获取系统状态
+pub async fn get_status(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<StatusResponse>) {
+    let manager = state.serial_manager.lock().await;
+    let ws_manager = state.ws_manager.lock().await;
+    let current_speed = state.current_speed.lock().await;
+    
+    let serial_status = match &manager.state {
+        SerialConnectionState::Disconnected => "未连接",
+        SerialConnectionState::Connecting => "连接中",
+        SerialConnectionState::Connected { port_name, baud_rate } => {
+            return (
+                StatusCode::OK,
+                Json(StatusResponse {
+                    serial_status: "已连接".to_string(),
+                    port_name: Some(port_name.clone()),
+                    baud_rate: Some(*baud_rate),
+                    frame_count: manager.frame_count,
+                    bytes_sent: manager.bytes_sent,
+                    current_speed: *current_speed,
+                    ws_clients: ws_manager.client_count(),
+                    uptime: 0,
+                    version: "1.0.0".to_string(),
+                }),
+            );
+        }
+        SerialConnectionState::Error(msg) => {
+            return (
+                StatusCode::OK,
+                Json(StatusResponse {
+                    serial_status: format!("错误: {}", msg),
+                    port_name: None,
+                    baud_rate: None,
+                    frame_count: manager.frame_count,
+                    bytes_sent: manager.bytes_sent,
+                    current_speed: *current_speed,
+                    ws_clients: ws_manager.client_count(),
+                    uptime: 0,
+                    version: "1.0.0".to_string(),
+                }),
+            );
+        }
+    };
+    
+    (
+        StatusCode::OK,
+        Json(StatusResponse {
+            serial_status: serial_status.to_string(),
+            port_name: None,
+            baud_rate: None,
+            frame_count: manager.frame_count,
+            bytes_sent: manager.bytes_sent,
+            current_speed: *current_speed,
+            ws_clients: ws_manager.client_count(),
+            uptime: 0,
+            version: "1.0.0".to_string(),
+        }),
+    )
+}
+
+/// 连接串口
+pub async fn connect_serial(
+    State(state): State<Arc<AppState>>,
+    Json(request): Json<ConnectRequest>,
+) -> (StatusCode, Json<ApiResponse>) {
+    let baud_rate = request.baud_rate.unwrap_or(921_600);
+    
+    let mut manager = state.serial_manager.lock().await;
+    
+    // 先断开现有连接
+    manager.disconnect();
+    
+    match manager.connect(&request.port_name, baud_rate) {
+        Ok(()) => {
+            info!("串口连接成功: {} @ {}", request.port_name, baud_rate);
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    message: format!("已连接到 {}", request.port_name),
+                }),
+            )
+        }
+        Err(e) => {
+            warn!("串口连接失败: {}", e);
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ApiResponse {
+                    success: false,
+                    message: format!("连接失败: {}", e),
+                }),
+            )
+        }
+    }
+}
+
+/// 断开串口
+pub async fn disconnect_serial(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<ApiResponse>) {
+    let mut manager = state.serial_manager.lock().await;
+    manager.disconnect();
+    
+    info!("串口已断开");
+    
+    (
+        StatusCode::OK,
+        Json(ApiResponse {
+            success: true,
+            message: "串口已断开".to_string(),
+        }),
+    )
+}
