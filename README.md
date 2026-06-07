@@ -231,6 +231,10 @@ void applyVehicleMotion(const VehicleMotion& motion) {
 
 ## 版本历史
 
+- v1.1.3 - 2026-06-07
+  - 修复滑块 thumb 垂直对齐（`margin-top: -6px`）
+  - Rust `cargo build` 自动构建前端（新增 `build.rs`）
+
 - v1.1.2 - 2026-06-07
   - 速度滑块改为无极调节（step 0.1），移除快速按钮
 

@@ -145,6 +145,13 @@ Key connections:
 - **改动**: 滑块 step 从 1 改为 0.1，移除下方快速按钮，发送时取整
 - **文件**: `desktop/frontend/src/components/ControlPanel.vue`
 
+### 2026-06-07 - 滑块 thumb 对齐与 Rust 自动构建前端
+- **问题**: 滑块 thumb 中心与轨道中心不对齐；`cargo build` 不会自动构建前端
+- **修复**:
+  - `desktop/frontend/src/style.css` — thumb 添加 `margin-top: -6px` + `box-sizing: border-box` 垂直居中
+  - `desktop/backend/build.rs` — 新增构建脚本，自动检测并构建前端
+  - `desktop/backend/Cargo.toml` — 添加 `build = "build.rs"`
+
 ## 额外要求
 
 在修改代码时，严格遵守：
