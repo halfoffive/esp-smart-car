@@ -7,9 +7,9 @@ description = "智能车桌面端后端 - 基于 Axum + WebSocket"
 
 [dependencies]
 # Web框架
-axum = { version = "0.7", features = ["ws"] }
-tower = { version = "0.4", features = ["full"] }
-tower-http = { version = "0.5", features = ["fs", "cors", "trace"] }
+axum = { version = "0.8", features = ["ws"] }
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs"] }
 
 # 异步运行时
 tokio = { version = "1", features = ["full"] }

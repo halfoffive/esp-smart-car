@@ -18,8 +18,7 @@ use std::io::{Read, Write};
 use std::time::Duration;
 
 use anyhow::Result;
-use serialport::{SerialPort, SerialPortType, UsbPortInfo};
-use tokio::sync::Mutex;
+use serialport::{SerialPort, SerialPortType};
 use tracing::{debug, error, info, warn};
 
 use crate::AppState;
@@ -27,7 +26,7 @@ use crate::AppState;
 /// 串口帧头
 const FRAME_HEADER: [u8; 2] = [0xAA, 0x55];
 /// 默认波特率
-const DEFAULT_BAUD_RATE: u32 = 921_600;
+pub const DEFAULT_BAUD_RATE: u32 = 921_600;
 /// 读取超时
 const READ_TIMEOUT: Duration = Duration::from_millis(100);
 
@@ -90,6 +89,7 @@ impl SerialManager {
                         SerialPortType::BluetoothPort => "Bluetooth".to_string(),
                         SerialPortType::PciPort => "PCI".to_string(),
                         SerialPortType::Unknown => "Unknown".to_string(),
+                        #[allow(unreachable_patterns)]
                         _ => "Other".to_string(),
                     };
                     ports.push((port.port_name, info));

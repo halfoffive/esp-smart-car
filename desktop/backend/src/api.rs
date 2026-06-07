@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::AppState;
-use crate::serial::SerialConnectionState;
+use crate::serial::{SerialConnectionState, DEFAULT_BAUD_RATE};
 
 /// 命令请求
 #[derive(Debug, Deserialize)]
@@ -30,6 +30,7 @@ pub struct CommandRequest {
     /// 命令字符
     pub command: String,
     /// 可选速度参数
+    #[allow(dead_code)]
     pub speed: Option<u8>,
 }
 
@@ -114,6 +115,7 @@ pub async fn get_status(
     let manager = state.serial_manager.lock().await;
     let ws_manager = state.ws_manager.lock().await;
     let current_speed = state.current_speed.lock().await;
+    let uptime = state.started_at.elapsed().as_secs();
     
     let serial_status = match &manager.state {
         SerialConnectionState::Disconnected => "未连接",
@@ -129,7 +131,7 @@ pub async fn get_status(
                     bytes_sent: manager.bytes_sent,
                     current_speed: *current_speed,
                     ws_clients: ws_manager.client_count(),
-                    uptime: 0,
+                    uptime,
                     version: "1.0.0".to_string(),
                 }),
             );
@@ -145,7 +147,7 @@ pub async fn get_status(
                     bytes_sent: manager.bytes_sent,
                     current_speed: *current_speed,
                     ws_clients: ws_manager.client_count(),
-                    uptime: 0,
+                    uptime,
                     version: "1.0.0".to_string(),
                 }),
             );
@@ -162,7 +164,7 @@ pub async fn get_status(
             bytes_sent: manager.bytes_sent,
             current_speed: *current_speed,
             ws_clients: ws_manager.client_count(),
-            uptime: 0,
+            uptime,
             version: "1.0.0".to_string(),
         }),
     )
@@ -173,7 +175,7 @@ pub async fn connect_serial(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ConnectRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    let baud_rate = request.baud_rate.unwrap_or(921_600);
+    let baud_rate = request.baud_rate.unwrap_or(DEFAULT_BAUD_RATE);
     
     let mut manager = state.serial_manager.lock().await;
     

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-06-07
+
+### Changed
+- 升级 Rust 后端依赖到 axum 0.8 / tower 0.5 / tower-http 0.6
+- 重构 WebSocket 处理为 mpsc channel 模式（适配 axum 0.8 的 SplitSink 变化）
+- Message 类型适配 axum 0.8（Utf8Bytes/Bytes）
+- 从 tower-http features 中移除未使用的 cors 和 trace
+
+### Fixed
+- 修复所有编译警告（未使用导入、不可达模式、未使用变量）
+- 修复 uptime 硬编码为 0 的问题（使用 started_at 计算实际运行时间）
+- 添加 base64::Engine trait 导入以适配 base64 0.22
+
+### Removed
+- 移除 broadcast_video_frames 死代码函数及对应 spawn 调用
+
 ## [1.0.0] - 2026-06-07
 
 ### Added
@@ -124,7 +140,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ESP-NOW 协议（内置）
 
 #### 后端（Rust）
-- axum 0.7（Web 框架）
+- axum 0.8（Web 框架）
 - tokio 1（异步运行时）
 - serialport 4.3（串口通信）
 - serde 1.0（序列化）
@@ -156,5 +172,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/yourusername/esp-smart-car/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/yourusername/esp-smart-car/releases/tag/v1.0.0
+[Unreleased]: https://github.com/halfoffive/esp-smart-car/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/halfoffive/esp-smart-car/releases/tag/v1.1.0
+[1.0.0]: https://github.com/halfoffive/esp-smart-car/releases/tag/v1.0.0

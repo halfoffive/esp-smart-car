@@ -42,6 +42,8 @@ pub struct AppState {
     pub current_speed: Arc<Mutex<u8>>,
     /// 最后心跳时间
     pub last_heartbeat: Arc<Mutex<std::time::Instant>>,
+    /// 服务器启动时间（用于计算运行时长）
+    pub started_at: std::time::Instant,
 }
 
 impl AppState {
@@ -53,6 +55,7 @@ impl AppState {
             video_frame: Arc::new(Mutex::new(None)),
             current_speed: Arc::new(Mutex::new(128)),
             last_heartbeat: Arc::new(Mutex::new(std::time::Instant::now())),
+            started_at: std::time::Instant::now(),
         }
     }
 }
@@ -80,12 +83,6 @@ async fn main() -> anyhow::Result<()> {
         if let Err(e) = serial::run_serial_task(serial_state).await {
             warn!("串口任务错误: {}", e);
         }
-    });
-    
-    // 启动视频帧广播任务
-    let video_state = state.clone();
-    tokio::spawn(async move {
-        websocket::broadcast_video_frames(video_state).await;
     });
     
     // 构建路由

@@ -20,8 +20,9 @@ use axum::{
     extract::State,
     response::IntoResponse,
 };
+use base64::Engine;
 use futures::{sink::SinkExt, stream::StreamExt};
-use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::AppState;
@@ -30,6 +31,7 @@ use crate::AppState;
 #[derive(Debug)]
 struct ClientConnection {
     id: u64,
+    #[allow(dead_code)]
     connected_at: std::time::Instant,
 }
 
@@ -88,7 +90,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         manager.add_client()
     };
     
-    let (mut sender, mut receiver) = socket.split();
+    // 拆分 WebSocket 为发送/接收
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+    
+    // 创建 mpsc 通道用于发送消息（tx 可 clone）
+    let (tx, mut rx) = mpsc::channel::<Message>(32);
+    
+    // 转发任务：从 mpsc 通道接收消息并发送到 WebSocket
+    let forward_task = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            if ws_sender.send(msg).await.is_err() {
+                break;
+            }
+        }
+    });
     
     // 发送欢迎消息
     let welcome = serde_json::json!({
@@ -97,15 +112,20 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         "message": "已连接到智能车控制系统"
     });
     
-    if let Err(e) = sender.send(Message::Text(welcome.to_string())).await {
+    if let Err(e) = tx.send(Message::Text(welcome.to_string().into())).await {
         error!("发送欢迎消息失败: {}", e);
+        forward_task.abort();
+        {
+            let mut manager = state.ws_manager.lock().await;
+            manager.remove_client(client_id);
+        }
         return;
     }
     
-    // 创建任务：发送视频帧
-    let video_sender = sender.clone();
+    // 视频任务：通过 mpsc tx 发送视频帧
+    let video_tx = tx.clone();
     let video_state = state.clone();
-    let mut video_task = tokio::spawn(async move {
+    let video_task = tokio::spawn(async move {
         loop {
             // 获取视频帧
             let frame = {
@@ -115,7 +135,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             
             if let Some(frame_data) = frame {
                 // 编码为Base64
-let base64 = base64_encode(&frame_data);
+                let base64 = base64_encode(&frame_data);
                 
                 let message = serde_json::json!({
                     "type": "video",
@@ -124,7 +144,7 @@ let base64 = base64_encode(&frame_data);
                     "timestamp": chrono::Utc::now().timestamp_millis()
                 });
                 
-                if let Err(e) = video_sender.send(Message::Text(message.to_string())).await {
+                if let Err(e) = video_tx.send(Message::Text(message.to_string().into())).await {
                     debug!("视频发送失败: {}", e);
                     break;
                 }
@@ -136,7 +156,7 @@ let base64 = base64_encode(&frame_data);
     });
     
     // 处理接收到的消息
-    while let Some(result) = receiver.next().await {
+    while let Some(result) = ws_receiver.next().await {
         match result {
             Ok(Message::Text(text)) => {
                 debug!("收到消息: {}", text);
@@ -153,7 +173,7 @@ let base64 = base64_encode(&frame_data);
                 break;
             }
             Ok(Message::Ping(data)) => {
-                if let Err(e) = sender.send(Message::Pong(data)).await {
+                if let Err(e) = tx.send(Message::Pong(data)).await {
                     warn!("发送Pong失败: {}", e);
                     break;
                 }
@@ -170,6 +190,8 @@ let base64 = base64_encode(&frame_data);
     
     // 取消视频任务
     video_task.abort();
+    // 取消转发任务
+    forward_task.abort();
     
     // 注销客户端
     {
@@ -216,34 +238,6 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
     }
     
     Ok(())
-}
-
-/// 广播视频帧（全局广播）
-pub async fn broadcast_video_frames(state: Arc<AppState>) {
-    loop {
-        // 获取视频帧
-        let frame = {
-            let video = state.video_frame.lock().await;
-            video.clone()
-        };
-        
-        if let Some(frame_data) = frame {
-            // 编码为Base64
-            let base64 = base64_encode(&frame_data);
-            
-            let message = serde_json::json!({
-                "type": "video",
-                "format": "jpeg",
-                "data": base64,
-                "timestamp": chrono::Utc::now().timestamp_millis()
-            });
-            
-            // 这里可以实现广播逻辑
-            // 目前每个WebSocket连接有自己的视频发送任务
-        }
-        
-        tokio::time::sleep(std::time::Duration::from_millis(33)).await;
-    }
 }
 
 /// Base64编码
