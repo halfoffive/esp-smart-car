@@ -131,28 +131,30 @@ esp-smart-car/
 
 ### 桌面端
 
+前端已集成到后端中，构建一次后启动后端即可直接访问 Web UI。
+
 #### 后端（Rust）
 ```bash
 cd desktop/backend
 
-# 安装依赖
+# 编译后端
 cargo build
 
-# 运行
+# 运行（自动提供前端页面，访问 http://localhost:8080）
 cargo run
 ```
 
-#### 前端（Vue）
+#### 前端（Vue）- 开发调试
 ```bash
 cd desktop/frontend
 
 # 使用 bun 安装依赖
 bun install
 
-# 开发模式
+# 开发模式（独立前端开发服务器，端口 3000，代理 API 到后端）
 bun run dev
 
-# 构建
+# 构建（产物输出到 desktop/backend/frontend/dist，供后端集成）
 bun run build
 ```
 
@@ -161,8 +163,8 @@ bun run build
 1. 启动车载控制器（ESP32-C6）
 2. 启动摄像头模块（ESP32-S3 CAM）
 3. 连接电脑端接收器（ESP32-C6）到电脑 USB
-4. 启动 Rust 后端
-5. 启动 Vue 前端
+4. 启动 Rust 后端（自动提供前端页面）
+5. 在浏览器中打开 `http://localhost:8080`
 6. 在 Web UI 中连接串口
 
 ## 开发说明

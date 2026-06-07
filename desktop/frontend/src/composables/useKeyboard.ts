@@ -24,7 +24,7 @@
  * - C: 云台居中
  */
 
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onUnmounted } from 'vue'
 
 // 当前激活的按键
 export const activeKeys = ref<Set<string>>(new Set())

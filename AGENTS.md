@@ -94,13 +94,13 @@ esp-smart-car/
 # Backend (Rust)
 cd desktop/backend
 cargo build        # Build
-cargo run          # Run server
+cargo run          # Run server (serves frontend at http://localhost:8080)
 
 # Frontend (Vue + Bun)
 cd desktop/frontend
 bun install        # Install dependencies
-bun run dev        # Development server
-bun run build      # Production build
+bun run dev        # Development server (port 3000)
+bun run build      # Production build (outputs to ../backend/frontend/dist)
 
 # Firmware (Arduino IDE)
 # Open .ino files in Arduino IDE

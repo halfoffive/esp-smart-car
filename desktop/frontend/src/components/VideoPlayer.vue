@@ -74,17 +74,16 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
 
-const { isConnected, videoFrame, connect } = useWebSocket()
+const { videoFrame, isConnected } = useWebSocket()
 
 const videoSrc = ref<string | null>(null)
 const fps = ref(0)
 const resolution = ref('')
 const isRecording = ref(false)
 
-let lastFrameTime = 0
 let frameCount = 0
 let lastFpsUpdate = 0
 
@@ -103,7 +102,6 @@ const updateVideo = () => {
       lastFpsUpdate = now
     }
     
-    lastFrameTime = now
   }
   
   requestAnimationFrame(updateVideo)

@@ -10,6 +10,9 @@
 /desktop/frontend/dist/
 /desktop/frontend/*.log
 
+# 后端内嵌的前端构建产物
+/desktop/backend/frontend/
+
 # 构建产物
 *.exe
 *.dll

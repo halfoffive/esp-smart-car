@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- 前端构建产物直接输出到后端目录（`vite.config.ts` 的 `outDir` 改为 `../backend/frontend/dist`）
+- 后端静态文件服务支持 SPA fallback（未匹配路由返回 `index.html`）
+
+### Fixed
+- 修复前端未使用变量导致的 `vue-tsc` 编译错误
+- 修复 axum 0.8 中 `nest_service` 在根路径不再支持的问题（改为 `fallback_service`）
+
 ## [1.1.0] - 2026-06-07
 
 ### Changed

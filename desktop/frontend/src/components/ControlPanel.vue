@@ -236,7 +236,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
 import { useKeyboard } from '../composables/useKeyboard'
 
-const { sendCommand: wsSendCommand, isConnected: wsConnected, connect: wsConnect, disconnect: wsDisconnect } = useWebSocket()
+const { sendCommand: wsSendCommand, connect: wsConnect, disconnect: wsDisconnect } = useWebSocket()
 const { activeKeys, setupKeyboardListeners } = useKeyboard()
 
 const selectedPort = ref('')
