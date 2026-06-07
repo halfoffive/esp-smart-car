@@ -32,24 +32,26 @@
         <span class="text-sm text-primary-400 font-mono font-bold">{{ speedPercent }}%</span>
       </div>
       
+      <!-- 滑块和按钮共享同一容器宽度，确保对齐 -->
       <div class="flex items-center gap-2">
-        <span class="text-[10px] text-dark-500 font-mono">1</span>
+        <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">1</span>
         <div class="flex-1 relative">
-          <input 
+          <input
             v-model.number="currentSpeed"
             type="range"
             min="1"
             max="9"
             step="1"
             class="speed-slider w-full"
+            :style="{ background: sliderBackground }"
             @input="setSpeed"
           />
         </div>
-        <span class="text-[10px] text-dark-500 font-mono">9</span>
+        <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">9</span>
       </div>
-      
+
       <!-- 快速速度按钮 -->
-      <div class="flex gap-1 mt-1.5">
+      <div class="grid grid-cols-5 gap-1 mt-1.5 ml-5 mr-5">
         <button 
           v-for="s in [1, 3, 5, 7, 9]" 
           :key="s"
@@ -262,6 +264,11 @@ const smartDriveOn = ref(true)
 const logs = ref<{ time: string, message: string, color: string }[]>([])
 
 const speedPercent = computed(() => Math.round((currentSpeed.value / 9) * 100))
+
+const sliderBackground = computed(() => {
+  const percent = ((currentSpeed.value - 1) / 8) * 100
+  return `linear-gradient(to right, #0ea5e9 0%, #0ea5e9 ${percent}%, #374151 ${percent}%, #374151 100%)`
+})
 
 const toggleSmartDrive = () => {
   smartDriveOn.value = !smartDriveOn.value

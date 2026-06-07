@@ -39,7 +39,7 @@ impl AppState {
             serial_manager: Arc::new(Mutex::new(serial::SerialManager::new())),
             ws_manager: Arc::new(Mutex::new(websocket::WebSocketManager::new())),
             video_frame: Arc::new(Mutex::new(None)),
-            current_speed: Arc::new(Mutex::new(128)),
+            current_speed: Arc::new(Mutex::new(5)),
             odometry: Arc::new(Mutex::new(OdometryData::default())),
             last_heartbeat: Arc::new(Mutex::new(std::time::Instant::now())),
             started_at: std::time::Instant::now(),

@@ -94,7 +94,7 @@
   }
 
   .speed-slider {
-    @apply w-full h-2 bg-dark-700 rounded-lg appearance-none cursor-pointer;
+    @apply w-full h-2 rounded-lg appearance-none cursor-pointer;
     accent-color: #0ea5e9;
   }
 
@@ -104,7 +104,7 @@
   }
 
   .speed-slider::-webkit-slider-runnable-track {
-    @apply h-2 bg-dark-700 rounded-lg;
+    @apply h-2 rounded-lg;
   }
 
   .speed-slider::-moz-range-thumb {
@@ -112,7 +112,7 @@
   }
 
   .speed-slider::-moz-range-track {
-    @apply h-2 bg-dark-700 rounded-lg;
+    @apply h-2 rounded-lg;
   }
 }
 

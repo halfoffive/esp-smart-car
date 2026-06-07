@@ -1,6 +1,6 @@
 <template>
   <div class="grid grid-cols-2 gap-2">
-    <!-- 当前速度 -->
+    <!-- 当前速度（左右轮实际速度） -->
     <div class="speed-module">
       <div class="flex items-center gap-1 mb-0.5">
         <svg class="w-3 h-3 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -8,12 +8,13 @@
         </svg>
         <span class="text-[10px] text-dark-400 font-medium">当前速度</span>
       </div>
-      <div class="flex items-baseline gap-1">
-        <span class="text-xl font-bold font-mono text-primary-400">{{ displayCurrentSpeed }}</span>
-        <span class="text-[10px] text-dark-500">%</span>
+      <div class="flex items-baseline gap-1.5">
+        <span class="text-sm font-bold font-mono text-primary-400">L {{ leftSpeedCm }}</span>
+        <span class="text-sm font-bold font-mono text-primary-400">R {{ rightSpeedCm }}</span>
+        <span class="text-[10px] text-dark-500">cm/s</span>
       </div>
       <div class="speed-bar mt-1">
-        <div class="speed-fill bg-primary-500" :style="{ width: currentSpeedPercent + '%' }"></div>
+        <div class="speed-fill bg-primary-500" :style="{ width: currentSpeedBarPercent + '%' }"></div>
       </div>
     </div>
 
@@ -27,11 +28,11 @@
         <span class="text-[10px] text-dark-400 font-medium">最高速度</span>
       </div>
       <div class="flex items-baseline gap-1">
-        <span class="text-xl font-bold font-mono text-red-400">{{ displayMaxSpeed }}</span>
-        <span class="text-[10px] text-dark-500">%</span>
+        <span class="text-xl font-bold font-mono text-red-400">{{ maxSpeedCm }}</span>
+        <span class="text-[10px] text-dark-500">cm/s</span>
       </div>
       <div class="speed-bar mt-1">
-        <div class="speed-fill bg-red-500" :style="{ width: maxSpeedPercent + '%' }"></div>
+        <div class="speed-fill bg-red-500" :style="{ width: maxSpeedBarPercent + '%' }"></div>
       </div>
     </div>
 
@@ -44,15 +45,15 @@
         <span class="text-[10px] text-dark-400 font-medium">平均速度</span>
       </div>
       <div class="flex items-baseline gap-1">
-        <span class="text-xl font-bold font-mono text-green-400">{{ displayAvgSpeed }}</span>
-        <span class="text-[10px] text-dark-500">%</span>
+        <span class="text-xl font-bold font-mono text-green-400">{{ avgSpeedCm }}</span>
+        <span class="text-[10px] text-dark-500">cm/s</span>
       </div>
       <div class="speed-bar mt-1">
-        <div class="speed-fill bg-green-500" :style="{ width: avgSpeedPercent + '%' }"></div>
+        <div class="speed-fill bg-green-500" :style="{ width: avgSpeedBarPercent + '%' }"></div>
       </div>
     </div>
 
-    <!-- 速度记录 -->
+    <!-- 运行时长 -->
     <div class="speed-module">
       <div class="flex items-center gap-1 mb-0.5">
         <svg class="w-3 h-3 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -73,28 +74,64 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { useWebSocket } from '../composables/useWebSocket'
 
-const currentSpeedLevel = ref(5)
-const maxSpeedLevel = ref(5)
-const avgSpeedLevel = ref(5)
+// WebSocket 测速数据
+const { odometry } = useWebSocket()
+
+// 速度条最大参考值：50 cm/s（对应 500 mm/s）
+const MAX_SPEED_MMS = 500
+
+// 当前左右轮速度（cm/s）
+const leftSpeedCm = computed(() => (odometry.value.leftSpeed / 10).toFixed(1))
+const rightSpeedCm = computed(() => (odometry.value.rightSpeed / 10).toFixed(1))
+
+// 当前速度条百分比（取左右轮绝对值较大者）
+const currentSpeedBarPercent = computed(() => {
+  const maxWheelSpeed = Math.max(Math.abs(odometry.value.leftSpeed), Math.abs(odometry.value.rightSpeed))
+  return Math.min(100, Math.round((maxWheelSpeed / MAX_SPEED_MMS) * 100))
+})
+
+// 最高速度追踪（mm/s）
+const maxSpeedMms = ref(0)
+const maxSpeedCm = computed(() => (maxSpeedMms.value / 10).toFixed(1))
+const maxSpeedBarPercent = computed(() => Math.min(100, Math.round((maxSpeedMms.value / MAX_SPEED_MMS) * 100)))
+
+// 平均速度追踪
+const speedSamples = ref<number[]>([])
+const MAX_SAMPLES = 100
+const avgSpeedMms = ref(0)
+const avgSpeedCm = computed(() => (avgSpeedMms.value / 10).toFixed(1))
+const avgSpeedBarPercent = computed(() => Math.min(100, Math.round((avgSpeedMms.value / MAX_SPEED_MMS) * 100)))
+
+// 监听测速数据更新，追踪最高速度和平均速度
+watch(odometry, (newOdom) => {
+  const leftAbs = Math.abs(newOdom.leftSpeed)
+  const rightAbs = Math.abs(newOdom.rightSpeed)
+  const currentMax = Math.max(leftAbs, rightAbs)
+
+  // 更新最高速度
+  if (currentMax > maxSpeedMms.value) {
+    maxSpeedMms.value = currentMax
+  }
+
+  // 记录速度样本（取两轮绝对值平均值）
+  const avg = (leftAbs + rightAbs) / 2
+  speedSamples.value.push(avg)
+  if (speedSamples.value.length > MAX_SAMPLES) {
+    speedSamples.value.shift()
+  }
+
+  // 计算平均速度
+  const sum = speedSamples.value.reduce((a, b) => a + b, 0)
+  avgSpeedMms.value = sum / speedSamples.value.length
+})
+
+// 运行时长
 const commandCount = ref(0)
 const runStartTime = ref<number>(Date.now())
 const runTimeSeconds = ref(0)
-
-// 速度历史记录（用于计算平均值）
-const speedHistory = ref<number[]>([])
-const MAX_HISTORY = 100
-
-const speedToPercent = (level: number) => Math.round((level / 9) * 100)
-
-const currentSpeedPercent = computed(() => speedToPercent(currentSpeedLevel.value))
-const maxSpeedPercent = computed(() => speedToPercent(maxSpeedLevel.value))
-const avgSpeedPercent = computed(() => speedToPercent(avgSpeedLevel.value))
-
-const displayCurrentSpeed = computed(() => currentSpeedPercent.value)
-const displayMaxSpeed = computed(() => maxSpeedPercent.value)
-const displayAvgSpeed = computed(() => avgSpeedPercent.value)
 
 const displayRunTime = computed(() => {
   const s = runTimeSeconds.value
@@ -110,36 +147,19 @@ const runTimeUnit = computed(() => {
   return '小时'
 })
 
-// 定期更新状态
-let statusInterval: number
+// 定期更新运行时长和命令数
 let timeInterval: number
+let statusInterval: number
 
-const updateStatus = async () => {
+const updateRunTime = () => {
+  runTimeSeconds.value = Math.floor((Date.now() - runStartTime.value) / 1000)
+}
+
+// 仅轮询命令数（速度数据已从 WebSocket 获取）
+const updateCommandCount = async () => {
   try {
     const response = await fetch('/api/status')
     const status = await response.json()
-    
-    const newSpeed = status.current_speed || 5
-    
-    // 更新当前速度
-    currentSpeedLevel.value = newSpeed
-    
-    // 更新最高速度
-    if (newSpeed > maxSpeedLevel.value) {
-      maxSpeedLevel.value = newSpeed
-    }
-    
-    // 记录速度历史
-    speedHistory.value.push(newSpeed)
-    if (speedHistory.value.length > MAX_HISTORY) {
-      speedHistory.value.shift()
-    }
-    
-    // 计算平均速度
-    const sum = speedHistory.value.reduce((a, b) => a + b, 0)
-    avgSpeedLevel.value = Math.round(sum / speedHistory.value.length)
-    
-    // 更新命令数
     if (status.command_count !== undefined) {
       commandCount.value = status.command_count
     }
@@ -148,19 +168,16 @@ const updateStatus = async () => {
   }
 }
 
-const updateRunTime = () => {
-  runTimeSeconds.value = Math.floor((Date.now() - runStartTime.value) / 1000)
-}
-
 const resetMaxSpeed = () => {
-  maxSpeedLevel.value = currentSpeedLevel.value
-  speedHistory.value = []
+  maxSpeedMms.value = 0
+  speedSamples.value = []
+  avgSpeedMms.value = 0
 }
 
 onMounted(() => {
   runStartTime.value = Date.now()
-  updateStatus()
-  statusInterval = setInterval(updateStatus, 500) as unknown as number
+  updateCommandCount()
+  statusInterval = setInterval(updateCommandCount, 2000) as unknown as number
   timeInterval = setInterval(updateRunTime, 1000) as unknown as number
 })
 

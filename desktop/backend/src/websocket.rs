@@ -241,6 +241,11 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
         "command" => {
             // 转发命令到串口
             if let Some(cmd_byte) = data.bytes().next() {
+                // 如果是速度等级命令(1-9)，同步更新 current_speed
+                if cmd_byte >= b'1' && cmd_byte <= b'9' {
+                    let mut current_speed = state.current_speed.lock().await;
+                    *current_speed = cmd_byte - b'0';
+                }
                 let mut manager = state.serial_manager.lock().await;
                 if let Err(e) = manager.send_command(cmd_byte) {
                     warn!("发送命令失败: {}", e);

@@ -70,7 +70,8 @@ const updateStatus = async () => {
     
     serialConnected.value = status.serial_status === '已连接'
     fps.value = status.fps || 0
-    currentSpeed.value = status.current_speed || 5
+    // 将速度等级限制在 1-9 范围内，防止后端返回异常值
+    currentSpeed.value = Math.min(9, Math.max(1, status.current_speed || 5))
     frameCount.value = status.frame_count || 0
   } catch {
     // 忽略错误

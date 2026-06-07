@@ -231,6 +231,16 @@ void applyVehicleMotion(const VehicleMotion& motion) {
 
 ## 版本历史
 
+- v1.1.1 - 2026-06-07
+  - 修复速度显示异常（`current_speed` 初始值从 128 改为 5）
+  - 修复速度滑块与快速按钮视觉对齐
+  - SpeedDashboard 改用 WebSocket odometry 实时数据
+
+- v1.1.0 - 2026-06-07
+  - 升级 axum 0.8 / tower 0.5
+  - 重构 WebSocket 为 mpsc channel 模式
+  - 修复编译警告和 uptime 计算
+
 - v1.0.0 - 初始版本
   - 基础运动控制
   - 视频传输

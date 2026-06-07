@@ -129,7 +129,21 @@ Key connections:
 - **Timeout protection**: 1-second auto-stop if no commands received
 - **Calibration**: Servo angles may need adjustment based on physical mounting
 
+## 近期修复记录
+
+### 2026-06-07 - 速度显示异常与滑块对齐修复
+- **问题**: 速度显示 1422%（`current_speed` 初始值为 128 导致），速度滑块与快速按钮宽度不对齐
+- **修复文件**:
+  - `desktop/backend/src/main.rs` — `current_speed` 初始值从 128 改为 5
+  - `desktop/backend/src/websocket.rs` — 收到速度命令 '1'-'9' 时同步更新 `current_speed`
+  - `desktop/frontend/src/components/SpeedDashboard.vue` — 改用 WebSocket odometry 数据显示实际轮速（cm/s）
+  - `desktop/frontend/src/components/StatusBar.vue` — 添加 clamp 保护确保速度等级在 1-9 范围
+  - `desktop/frontend/src/components/ControlPanel.vue` — 修复滑块与按钮宽度对齐（统一左右边距）
+  - `desktop/frontend/src/style.css` — 移除轨道背景色避免覆盖动态渐变
+
 ## 额外要求
 
+在修改代码时，严格遵守：
+
 - **编程风格**: 函数式编程，大量中文注释。
-- **当完成修改**: 更新"AGENTS.md","CHANGELOG","README"，然后提交并推送git。
+- **当完成修改时**: 更新"AGENTS.md","CHANGELOG.md","README.md"，然后提交并推送git。

@@ -53,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 版本号升至 1.1.0
 
 ### Fixed
+- **速度显示异常** — `current_speed` 初始值 128 导致显示 1422%，改为 5（速度等级）
+- **速度命令同步** — WebSocket 收到 '1'-'9' 命令时同步更新后端 `current_speed`
+- **SpeedDashboard 数据** — 改用 WebSocket odometry 数据显示实际轮速（cm/s），移除 `/api/status` 轮询
+- **StatusBar 速度显示** — 添加 clamp 保护（1-9），防止异常值显示
+- **速度滑块对齐** — 滑块轨道与快速按钮统一左右边距（`ml-5 mr-5`），确保视觉对齐
 - 修复前端未使用变量导致的 `vue-tsc` 编译错误
 - 修复 axum 0.8 中 `nest_service` 在根路径不再支持的问题
 
