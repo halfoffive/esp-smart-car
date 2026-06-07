@@ -50,6 +50,16 @@ pub struct StatusResponse {
     pub uptime: u64,
     /// 系统版本
     pub version: String,
+    /// 左轮速度(mm/s)
+    pub left_speed: f32,
+    /// 右轮速度(mm/s)
+    pub right_speed: f32,
+    /// 航向角(弧度)
+    pub heading: f32,
+    /// 总行走距离(mm)
+    pub total_distance: f32,
+    /// 已发送命令数
+    pub command_count: u64,
 }
 
 /// 串口连接请求
@@ -108,6 +118,7 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
     let manager = state.serial_manager.lock().await;
     let ws_manager = state.ws_manager.lock().await;
     let current_speed = state.current_speed.lock().await;
+    let odom = state.odometry.lock().await;
     let uptime = state.started_at.elapsed().as_secs();
 
     let serial_status = match &manager.state {
@@ -128,7 +139,12 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
                     current_speed: *current_speed,
                     ws_clients: ws_manager.client_count(),
                     uptime,
-                    version: "1.0.0".to_string(),
+                    version: "1.1.0".to_string(),
+                    left_speed: odom.left_speed_mmps,
+                    right_speed: odom.right_speed_mmps,
+                    heading: odom.heading,
+                    total_distance: odom.total_distance_mm,
+                    command_count: manager.command_count,
                 }),
             );
         }
@@ -144,7 +160,12 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
                     current_speed: *current_speed,
                     ws_clients: ws_manager.client_count(),
                     uptime,
-                    version: "1.0.0".to_string(),
+                    version: "1.1.0".to_string(),
+                    left_speed: odom.left_speed_mmps,
+                    right_speed: odom.right_speed_mmps,
+                    heading: odom.heading,
+                    total_distance: odom.total_distance_mm,
+                    command_count: manager.command_count,
                 }),
             );
         }
@@ -161,7 +182,12 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
             current_speed: *current_speed,
             ws_clients: ws_manager.client_count(),
             uptime,
-            version: "1.0.0".to_string(),
+            version: "1.1.0".to_string(),
+            left_speed: odom.left_speed_mmps,
+            right_speed: odom.right_speed_mmps,
+            heading: odom.heading,
+            total_distance: odom.total_distance_mm,
+            command_count: manager.command_count,
         }),
     )
 }

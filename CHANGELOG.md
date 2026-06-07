@@ -7,13 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **测速模块**（`odometer.h`）- 完整的编码器测速系统
+  - 霍尔/红外编码器中断读取（GPIO 0/1）
+  - 左右轮实时速度计算（RPM + mm/s）
+  - 行走距离累计
+  - 航向角计算（基于差速推算）
+  - 自动校准功能（补偿左右轮速度差异）
+  
+- **PID 控制器**（`pid_control.h`）- 直线行走修正系统
+  - 位置式PID算法，防积分饱和
+  - 直线修正模式：自动补偿左右轮速度差
+  - 航向锁定模式：保持固定航向
+  - 智能差速输出：根据PID修正值调整左右电机PWM
+
+- **智能行走系统** - 不同电机速度差异的自动补偿
+  - 直线修正：前进/后退时自动保持直线
+  - 差速运动函数：`createDifferentialState()` 支持左右轮独立PWM
+  - 前端开关：可随时启用/禁用智能修正
+
+- **测速数据传输链路**
+  - 固件：OdometryPacket 结构体，ESP-NOW 发送测速数据
+  - 接收器：JSON格式转发测速数据到PC（`{"t":"odom","ls":...,"rs":...,"hd":...,"dist":...}`)
+  - 后端：serial.rs 解析测速JSON行，AppState存储测速数据
+  - WebSocket：广播 odometry 类型消息到前端
+  - API：/api/status 返回左右轮速度、航向、距离、命令数
+
+- **4个测速模块前端显示**（SpeedDashboard.vue）
+  - 当前速度：实时显示左右轮速度 + 进度条
+  - 最高速度：记录最高速度 + 重置按钮
+  - 平均速度：历史平均 + 航向角显示
+  - 运行信息：运行时长 + 行走距离 + 命令数
+
+- **全屏自适应UI改造**
+  - 100vh 全视口布局，无滚动
+  - 右侧面板适配 SpeedDashboard 模块
+  - 紧凑控制面板（control-key-sm 样式）
+
 ### Changed
-- 前端构建产物直接输出到后端目录（`vite.config.ts` 的 `outDir` 改为 `../backend/frontend/dist`）
-- 后端静态文件服务支持 SPA fallback（未匹配路由返回 `index.html`）
+- 前端构建产物直接输出到后端目录
+- 后端静态文件服务支持 SPA fallback
+- Web UI 自适应布局，不同屏幕无需滚动
+- 速度控制显示改为百分比（基于 1-9 级别映射到 0-100%）
+- 云台下按钮命令从 'D' 修正为 'J'
+- 版本号升至 1.1.0
 
 ### Fixed
 - 修复前端未使用变量导致的 `vue-tsc` 编译错误
-- 修复 axum 0.8 中 `nest_service` 在根路径不再支持的问题（改为 `fallback_service`）
+- 修复 axum 0.8 中 `nest_service` 在根路径不再支持的问题
 
 ## [1.1.0] - 2026-06-07
 

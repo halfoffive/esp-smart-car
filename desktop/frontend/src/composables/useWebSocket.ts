@@ -6,7 +6,8 @@
  * 1. 连接/断开 WebSocket
  * 2. 发送控制命令
  * 3. 接收视频帧
- * 4. 心跳保活
+ * 4. 接收测速数据
+ * 5. 心跳保活
  */
 
 import { ref, onMounted, onUnmounted } from 'vue'
@@ -14,9 +15,25 @@ import { ref, onMounted, onUnmounted } from 'vue'
 const WS_URL = 'ws://localhost:8080/ws'
 const HEARTBEAT_INTERVAL = 30000 // 30秒
 
+// 测速数据接口
+export interface OdometryData {
+  leftSpeed: number    // 左轮速度(mm/s)
+  rightSpeed: number   // 右轮速度(mm/s)
+  heading: number      // 航向角(弧度)
+  distance: number     // 总行走距离(mm)
+  timestamp: number    // 时间戳
+}
+
 // 全局状态
 const isConnected = ref(false)
 const videoFrame = ref<string | null>(null)
+const odometry = ref<OdometryData>({
+  leftSpeed: 0,
+  rightSpeed: 0,
+  heading: 0,
+  distance: 0,
+  timestamp: 0
+})
 const ws = ref<WebSocket | null>(null)
 let heartbeatTimer: number | null = null
 let reconnectTimer: number | null = null
@@ -53,6 +70,19 @@ export const connect = () => {
             // 接收视频帧
             if (message.data) {
               videoFrame.value = `data:image/jpeg;base64,${message.data}`
+            }
+            break
+            
+          case 'odometry':
+            // 接收测速数据
+            if (message.leftSpeed !== undefined) {
+              odometry.value = {
+                leftSpeed: message.leftSpeed as number,
+                rightSpeed: message.rightSpeed as number,
+                heading: message.heading as number,
+                distance: message.distance as number,
+                timestamp: message.timestamp as number
+              }
             }
             break
             
@@ -174,27 +204,44 @@ const stopHeartbeat = () => {
 }
 
 /**
+ * 发送行走模式切换命令
+ */
+export const sendDriveMode = (mode: number) => {
+  if (ws.value?.readyState !== WebSocket.OPEN) {
+    return
+  }
+  
+  const message = {
+    type: 'drive_mode',
+    mode,
+    timestamp: Date.now()
+  }
+  
+  ws.value.send(JSON.stringify(message))
+}
+
+/**
  * 组合式函数
  */
 export const useWebSocket = () => {
   onMounted(() => {
-    // 组件挂载时自动连接
     if (!isConnected.value) {
       connect()
     }
   })
   
   onUnmounted(() => {
-    // 组件卸载时断开
     disconnect()
   })
   
   return {
     isConnected,
     videoFrame,
+    odometry,
     connect,
     disconnect,
     sendCommand,
-    sendSpeed
+    sendSpeed,
+    sendDriveMode
   }
 }

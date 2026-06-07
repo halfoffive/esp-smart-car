@@ -3,18 +3,23 @@
 @tailwind utilities;
 
 @layer base {
-  body {
+  html, body {
     @apply bg-dark-950 text-dark-100 font-sans antialiased;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
   }
   
   #app {
-    @apply min-h-screen flex flex-col;
+    @apply h-screen w-screen flex flex-col overflow-hidden;
   }
 }
 
 @layer components {
   .btn {
-    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 
+    @apply px-3 py-1.5 rounded-lg font-medium transition-all duration-200 
            focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-dark-950;
   }
   
@@ -34,17 +39,17 @@
   }
   
   .panel {
-    @apply bg-dark-900 border border-dark-700 rounded-xl p-4 
+    @apply bg-dark-900 border border-dark-700 rounded-xl p-3 
            shadow-lg shadow-black/20;
   }
   
   .panel-header {
-    @apply text-lg font-semibold text-dark-100 mb-4 pb-2 
+    @apply text-sm font-semibold text-dark-100 pb-2 
            border-b border-dark-700;
   }
   
   .status-indicator {
-    @apply inline-flex items-center gap-2 px-3 py-1 rounded-full text-sm font-medium;
+    @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium;
   }
   
   .status-online {
@@ -59,20 +64,22 @@
     @apply status-indicator bg-yellow-500/20 text-yellow-400 border border-yellow-500/30;
   }
   
-  .control-key {
-    @apply w-14 h-14 flex items-center justify-center rounded-lg 
+  .control-key-sm {
+    @apply w-10 h-10 flex items-center justify-center rounded-md 
            bg-dark-700 border border-dark-600 text-dark-100 
-           font-mono text-lg font-bold shadow-lg
-           transition-all duration-150 select-none;
+           font-mono text-xs font-bold shadow-md
+           transition-all duration-150 select-none cursor-pointer
+           hover:bg-dark-600 active:bg-primary-600 active:border-primary-500;
   }
   
-  .control-key:active,
-  .control-key.active {
+  .control-key-sm:active,
+  .control-key-sm.active,
+  .control-key-sm.control-key-active {
     @apply bg-primary-600 border-primary-500 text-white 
            shadow-primary-500/30 shadow-lg transform scale-95;
   }
   
-  .control-key:disabled {
+  .control-key-sm:disabled {
     @apply opacity-50 cursor-not-allowed;
   }
   
@@ -84,6 +91,28 @@
   .video-placeholder {
     @apply absolute inset-0 flex items-center justify-center 
            bg-dark-900 text-dark-500;
+  }
+
+  .speed-slider {
+    @apply w-full h-2 bg-dark-700 rounded-lg appearance-none cursor-pointer;
+    accent-color: #0ea5e9;
+  }
+
+  .speed-slider::-webkit-slider-thumb {
+    @apply appearance-none w-4 h-4 rounded-full bg-primary-500 cursor-pointer shadow-md;
+    border: 2px solid #0284c7;
+  }
+
+  .speed-slider::-webkit-slider-runnable-track {
+    @apply h-2 bg-dark-700 rounded-lg;
+  }
+
+  .speed-slider::-moz-range-thumb {
+    @apply w-4 h-4 rounded-full bg-primary-500 cursor-pointer shadow-md border-2 border-primary-700;
+  }
+
+  .speed-slider::-moz-range-track {
+    @apply h-2 bg-dark-700 rounded-lg;
   }
 }
 

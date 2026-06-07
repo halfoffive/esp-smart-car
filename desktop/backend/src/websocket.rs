@@ -160,6 +160,26 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
 
+            // 发送测速数据
+            {
+                let odom = video_state.odometry.lock().await;
+                let message = serde_json::json!({
+                    "type": "odometry",
+                    "leftSpeed": odom.left_speed_mmps,
+                    "rightSpeed": odom.right_speed_mmps,
+                    "heading": odom.heading,
+                    "distance": odom.total_distance_mm,
+                    "timestamp": chrono::Utc::now().timestamp_millis()
+                });
+
+                if let Err(e) = video_tx
+                    .send(Message::Text(message.to_string().into()))
+                    .await
+                {
+                    debug!("测速数据发送失败: {}", e);
+                }
+            }
+
             // 控制帧率
             tokio::time::sleep(std::time::Duration::from_millis(33)).await; // ~30 FPS
         }
@@ -241,6 +261,22 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             // 心跳
             let mut last = state.last_heartbeat.lock().await;
             *last = std::time::Instant::now();
+        }
+        "drive_mode" => {
+            // 行走模式切换
+            if let Some(mode) = message["mode"].as_u64() {
+                let cmd = match mode {
+                    0 => 'M', // 普通模式
+                    1 => 'L', // 直线修正模式
+                    2 => 'H', // 航向锁定模式
+                    _ => 'L',
+                };
+                let mut manager = state.serial_manager.lock().await;
+                let _ = manager.send_command(cmd as u8);
+                let mut manager2 = state.serial_manager.lock().await;
+                let _ = manager2.send_command(mode as u8);
+                info!("切换行走模式: {}", mode);
+            }
         }
         _ => {
             warn!("未知消息类型: {}", msg_type);

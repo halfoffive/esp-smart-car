@@ -8,23 +8,25 @@
 esp-smart-car/
 ├── firmware/                    # 嵌入式固件
 │   ├── car-controller/          # 车载控制器（ESP32-C6）
-│   │   ├── motor_control.h      # 电机控制（函数式编程）
+│   │   ├── motor_control.h      # 电机控制（函数式编程，差速支持）
 │   │   ├── servo_control.h      # 舵机控制（函数式编程）
-│   │   ├── wireless.h           # 无线通信（ESP-NOW）
+│   │   ├── wireless.h           # 无线通信（ESP-NOW，含测速协议）
+│   │   ├── odometer.h           # 编码器测速模块
+│   │   ├── pid_control.h        # PID控制器（直线修正+航向锁定）
 │   │   └── car_controller.ino   # 主程序
 │   ├── camera-module/           # 摄像头模块（ESP32-S3 CAM）
 │   │   ├── camera_config.h      # 摄像头配置
 │   │   ├── video_stream.h       # 视频流传输
 │   │   └── camera_module.ino    # 主程序
 │   └── receiver-dongle/         # 电脑端接收器（ESP32-C6）
-│       └── receiver_dongle.ino  # 主程序
+│       └── receiver_dongle.ino  # 主程序（含测速数据转发）
 ├── desktop/                     # 桌面端控制界面
 │   ├── backend/                 # Rust 后端
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── main.rs          # 主程序
-│   │       ├── serial.rs        # 串口通信
-│   │       ├── websocket.rs     # WebSocket 处理
+│   │       ├── serial.rs        # 串口通信（含测速数据解析）
+│   │       ├── websocket.rs     # WebSocket 处理（含测速广播）
 │   │       └── api.rs           # HTTP API
 │   └── frontend/                # Vue 前端
 │       ├── package.json
@@ -37,7 +39,8 @@ esp-smart-car/
 │           ├── components/
 │           │   ├── VideoPlayer.vue
 │           │   ├── ControlPanel.vue
-│           │   └── StatusBar.vue
+│           │   ├── StatusBar.vue
+│           │   └── SpeedDashboard.vue
 │           └── composables/
 │               ├── useWebSocket.ts
 │               └── useKeyboard.ts
@@ -65,6 +68,11 @@ esp-smart-car/
 - **SG90 舵机** x2
   - 水平舵机：摄像头左右旋转
   - 垂直舵机：摄像头上下旋转
+
+- **霍尔编码器/红外编码器** x2
+  - 左轮编码器：每圈20脉冲
+  - 右轮编码器：每圈20脉冲
+  - 用于测速和直线修正
 
 ### 电机
 - **直流减速电机** x4
@@ -112,6 +120,9 @@ esp-smart-car/
 | H | 云台左 | - |
 | K | 云台右 | - |
 | C | 云台居中 | - |
+| M | 普通模式（无修正） | mode=0 |
+| L | 直线修正模式 | mode=1 |
+| B | 航向锁定模式 | mode=2 |
 
 ## 安装说明
 

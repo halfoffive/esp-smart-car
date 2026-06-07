@@ -15,15 +15,16 @@ desktop/frontend/
 ├── index.html             # 入口 HTML
 ├── tsconfig.json          # TypeScript 配置
 └── src/
-    ├── App.vue            # 根组件
+    ├── App.vue            # 根组件（全屏自适应布局）
     ├── main.ts            # 入口文件
-    ├── style.css          # 全局样式
+    ├── style.css          # 全局样式（含速度滑块样式）
     ├── components/
     │   ├── VideoPlayer.vue    # 视频播放器
-    │   ├── ControlPanel.vue   # 控制面板
-    │   └── StatusBar.vue      # 状态栏
+    │   ├── ControlPanel.vue   # 控制面板（含直线修正开关）
+    │   ├── StatusBar.vue      # 状态栏
+    │   └── SpeedDashboard.vue # 测速仪表盘（4模块）
     └── composables/
-        ├── useWebSocket.ts   # WebSocket 连接
+        ├── useWebSocket.ts   # WebSocket + 测速数据
         └── useKeyboard.ts   # 键盘控制
 ```
 
@@ -31,11 +32,12 @@ desktop/frontend/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| 修改 UI 布局 | `src/App.vue` | 主布局结构 |
+| 修改 UI 布局 | `src/App.vue` | 全屏自适应布局 |
 | 修改视频显示 | `src/components/VideoPlayer.vue` | 实时视频 |
-| 修改控制面板 | `src/components/ControlPanel.vue` | WASD + 云台 |
+| 修改控制面板 | `src/components/ControlPanel.vue` | WASD + 云台 + 直线修正开关 |
 | 修改状态栏 | `src/components/StatusBar.vue` | 连接状态 |
-| 修改 WebSocket | `src/composables/useWebSocket.ts` | 连接管理 |
+| 修改测速显示 | `src/components/SpeedDashboard.vue` | 4模块：当前/最高/平均速度+运行信息 |
+| 修改 WebSocket | `src/composables/useWebSocket.ts` | 连接管理+测速数据解析 |
 | 修改键盘控制 | `src/composables/useKeyboard.ts` | 键盘映射 |
 | 修改样式 | `src/style.css` | TailwindCSS 自定义 |
 
@@ -45,10 +47,12 @@ desktop/frontend/
 |--------|------|----------|------|
 | `App` | Vue SFC | `App.vue` | 根组件 |
 | `VideoPlayer` | Vue SFC | `VideoPlayer.vue` | 视频显示 |
-| `ControlPanel` | Vue SFC | `ControlPanel.vue` | 控制面板 |
+| `ControlPanel` | Vue SFC | `ControlPanel.vue` | 控制面板+直线修正 |
 | `StatusBar` | Vue SFC | `StatusBar.vue` | 状态栏 |
-| `useWebSocket` | Composable | `useWebSocket.ts` | WebSocket |
+| `SpeedDashboard` | Vue SFC | `SpeedDashboard.vue` | 测速仪表盘 |
+| `useWebSocket` | Composable | `useWebSocket.ts` | WebSocket+测速 |
 | `useKeyboard` | Composable | `useKeyboard.ts` | 键盘控制 |
+| `OdometryData` | Interface | `useWebSocket.ts` | 测速数据类型 |
 
 ## Conventions
 
@@ -70,21 +74,26 @@ desktop/frontend/
 ### ControlPanel
 - **Props**: 无
 - **Emits**: `command`, `speed`
-- **State**: `activeKeys`, `currentSpeed`, `logs`
-- **Features**: WASD 控制、速度调节、云台控制、日志
+- **State**: `activeKeys`, `currentSpeed`, `logs`, `smartDriveOn`
+- **Features**: WASD 控制、速度调节、云台控制、直线修正开关、系统日志
+
+### SpeedDashboard
+- **Props**: 无（从 useWebSocket 获取测速数据）
+- **State**: `maxLeftSpeed`, `maxRightSpeed`, `commandCount`, `runTimeSeconds`
+- **Features**: 4个测速模块、实时速度显示、最高速度记录、平均速度、航向角、运行时长
 
 ### StatusBar
 - **Props**: 无
-- **Emits**: 无
-- **State**: `isConnected`, `fps`, `currentSpeed`
+- **State**: `isConnected`, `serialConnected`, `fps`, `currentSpeed`, `frameCount`
 - **Features**: 连接状态、帧率、速度显示
 
 ## Anti-Patterns
 
-- **禁止使用 `any`**：TypeScript 严格类型
-- **禁止使用 `@ts-ignore`**：类型错误必须修复
-- **禁止空 catch 块**：错误必须处理或上报
-- **禁止全局状态**：使用 Pinia 或组合式函数
+- **禁止使用 `any` 或 `@ts-ignore`**：类型安全是强制性的
+- **禁止空 catch 块**：错误必须被处理或报告
+- **禁止删除失败的测试**：修复代码，而不是测试
+- **禁止全局可变状态**：使用 Pinia 或组合式函数
+- **禁止全屏滚动**：UI 必须适应 100vh，无需滚动
 
 ## Commands
 
@@ -106,6 +115,8 @@ bun run preview      # 预览生产构建
 
 - **代理**：Vite 配置代理 `/api` 和 `/ws` 到后端（端口 8080）
 - **视频帧**：WebSocket 接收 Base64 JPEG，显示为 `data:image/jpeg;base64,...`
-- **键盘**：支持 WASD + 空格 + Q/E + U/D/L/R/C + 1-9
-- **响应式**：控制面板自适应，移动端友好
+- **测速数据**：WebSocket 接收 `odometry` 类型消息，包含左右轮速度、航向、距离
+- **键盘**：支持 WASD + 空格 + Q/E + U/J/H/K/C + 1-9
+- **智能修正**：通过 WebSocket 发送 `drive_mode` 命令切换
+- **响应式**：全屏100vh布局，右侧面板含控制+测速模块
 - **主题**：深色模式，使用 `dark-` 颜色系列

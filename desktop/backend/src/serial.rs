@@ -22,6 +22,33 @@ use tracing::{debug, error, info, warn};
 
 use crate::AppState;
 
+/// 测速数据
+#[derive(Debug, Clone)]
+pub struct OdometryData {
+    /// 左轮速度(mm/s)
+    pub left_speed_mmps: f32,
+    /// 右轮速度(mm/s)
+    pub right_speed_mmps: f32,
+    /// 航向角(弧度)
+    pub heading: f32,
+    /// 总行走距离(mm)
+    pub total_distance_mm: f32,
+    /// 最后更新时间
+    pub last_update: std::time::Instant,
+}
+
+impl Default for OdometryData {
+    fn default() -> Self {
+        Self {
+            left_speed_mmps: 0.0,
+            right_speed_mmps: 0.0,
+            heading: 0.0,
+            total_distance_mm: 0.0,
+            last_update: std::time::Instant::now(),
+        }
+    }
+}
+
 /// 串口帧头
 const FRAME_HEADER: [u8; 2] = [0xAA, 0x55];
 /// 默认波特率
@@ -52,6 +79,10 @@ pub struct SerialManager {
     pub frame_count: u32,
     /// 已发送的字节数
     pub bytes_sent: u64,
+    /// 已发送的命令数
+    pub command_count: u64,
+    /// 行缓冲区（用于解析测速JSON行）
+    line_buffer: Vec<u8>,
 }
 
 impl SerialManager {
@@ -62,6 +93,8 @@ impl SerialManager {
             state: SerialConnectionState::Disconnected,
             frame_count: 0,
             bytes_sent: 0,
+            command_count: 0,
+            line_buffer: Vec::new(),
         }
     }
 
@@ -138,11 +171,69 @@ impl SerialManager {
             port.write_all(&[cmd])?;
             port.flush()?;
             self.bytes_sent += 1;
+            self.command_count += 1;
             debug!("发送命令: 0x{:02X} ('{}')", cmd, cmd as char);
             Ok(())
         } else {
             Err(anyhow::anyhow!("串口未连接"))
         }
+    }
+    
+    /// 读取串口行数据（非视频帧，测速JSON行）
+    /// 返回完整行（去除换行符）
+    pub fn read_line(&mut self) -> Option<String> {
+        if let Some(ref mut port) = self.port {
+            let mut byte = [0u8; 1];
+            loop {
+                match port.read_exact(&mut byte) {
+                    Ok(()) => {
+                        self.line_buffer.push(byte[0]);
+                        // 检测换行符
+                        if byte[0] == b'\n' {
+                            // 去除可能的 \r\n
+                            while self.line_buffer.last() == Some(&b'\n') || 
+                                  self.line_buffer.last() == Some(&b'\r') {
+                                self.line_buffer.pop();
+                            }
+                            if !self.line_buffer.is_empty() {
+                                let line = String::from_utf8_lossy(&self.line_buffer).to_string();
+                                self.line_buffer.clear();
+                                return Some(line);
+                            }
+                            self.line_buffer.clear();
+                        }
+                    }
+                    Err(_) => {
+                        // 超时或错误，返回当前缓冲区
+                        return None;
+                    }
+                }
+            }
+        }
+        None
+    }
+    
+    /// 解析测速JSON行
+    /// 格式: {"t":"odom","ls":左速度,"rs":右速度,"hd":航向*100,"dist":距离}
+    pub fn parse_odometry_line(line: &str) -> Option<OdometryData> {
+        if !line.contains("\"t\":\"odom\"") {
+            return None;
+        }
+        
+        let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+        
+        let left_speed = parsed["ls"].as_f64()? as f32;
+        let right_speed = parsed["rs"].as_f64()? as f32;
+        let heading_x100 = parsed["hd"].as_f64()? as f32;
+        let total_dist = parsed["dist"].as_f64()? as f32;
+        
+        Some(OdometryData {
+            left_speed_mmps: left_speed,
+            right_speed_mmps: right_speed,
+            heading: heading_x100 / 100.0,
+            total_distance_mm: total_dist,
+            last_update: std::time::Instant::now(),
+        })
     }
 
     /// 读取视频帧
@@ -208,9 +299,9 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
         };
 
         if is_connected {
-            // 读取视频帧
             let mut manager = state.serial_manager.lock().await;
 
+            // 读取视频帧
             match manager.read_video_frame(&mut frame_buffer) {
                 Ok(true) => {
                     // 成功读取帧，更新共享状态
@@ -218,7 +309,15 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                     *video = Some(frame_buffer.clone());
                 }
                 Ok(false) => {
-                    // 未读取到帧
+                    // 尝试读取测速数据行
+                    if let Some(line) = manager.read_line() {
+                        if let Some(odom_data) = SerialManager::parse_odometry_line(&line) {
+                            let mut odom = state.odometry.lock().await;
+                            *odom = odom_data;
+                            debug!("测速数据: 左={}mm/s, 右={}mm/s, 航向={}rad",
+                                   odom.left_speed_mmps as f64, odom.right_speed_mmps as f64, odom.heading as f64);
+                        }
+                    }
                 }
                 Err(e) => {
                     error!("串口读取错误: {}", e);

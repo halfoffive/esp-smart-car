@@ -254,11 +254,35 @@ void onReceiverDataRecv(const uint8_t* mac, const uint8_t* data, int len) {
     if (len >= sizeof(WirelessPacket)) {
         const WirelessPacket* packet = reinterpret_cast<const WirelessPacket*>(data);
         if (validatePacket(*packet)) {
-            // 处理状态反馈等
+            // 处理状态反馈和测速数据
             if (packet->type == CommandType::STATUS) {
                 // 转发状态到电脑
                 Serial.write(data, len);
             }
+            // 测速数据：转发到PC端（JSON格式便于后端解析）
+            else if (packet->type == CommandType::ODOMETRY) {
+                // 从 WirelessPacket 解析测速数据
+                // 测速数据存放在 data 字段的扩展中
+                // 直接透传原始数据
+                Serial.write(data, len);
+            }
+        }
+    }
+    
+    // 处理测速数据包（OdometryPacket 格式）
+    // OdometryPacket 包含左右轮速度、航向角等信息
+    if (len >= sizeof(OdometryPacket)) {
+        const OdometryPacket* odomPacket = reinterpret_cast<const OdometryPacket*>(data);
+        if (odomPacket->magic == WirelessConfig::MAGIC_BYTE && 
+            odomPacket->version == WirelessConfig::PROTOCOL_VERSION &&
+            odomPacket->type == CommandType::ODOMETRY) {
+            // 转发测速数据到PC端，使用JSON格式便于后端解析
+            // 格式: {"t":"odom","ls":左速度,"rs":右速度,"hd":航向,"dist":距离}\n
+            Serial.printf("{\"t\":\"odom\",\"ls\":%d,\"rs\":%d,\"hd\":%d,\"dist\":%u}\n",
+                         odomPacket->leftSpeedMmps,
+                         odomPacket->rightSpeedMmps,
+                         odomPacket->headingX100,
+                         odomPacket->totalDistMm);
         }
     }
 }

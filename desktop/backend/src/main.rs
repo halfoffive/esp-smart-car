@@ -1,21 +1,4 @@
 mod api;
-/**
- * 智能车桌面端后端 - 主程序
- * 基于 Rust + Axum + WebSocket
- *
- * 功能：
- * 1. HTTP Web服务器（提供静态文件和API）
- * 2. WebSocket（实时视频传输和命令）
- * 3. 串口通信（与ESP32接收器通信）
- *
- * 架构：
- * - HTTP: 提供前端静态文件和REST API
- * - WebSocket: 双向实时通信（视频流 + 控制命令）
- * - Serial: 与ESP32接收器通过USB串口通信
- *
- * 作者：智能车项目团队
- * 版本：1.0.0
- */
 mod serial;
 mod websocket;
 
@@ -29,6 +12,8 @@ use axum::{
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
+pub use serial::OdometryData;
+
 /// 应用状态（共享状态）
 pub struct AppState {
     /// 串口连接管理器
@@ -39,6 +24,8 @@ pub struct AppState {
     pub video_frame: Arc<Mutex<Option<Vec<u8>>>>,
     /// 当前速度
     pub current_speed: Arc<Mutex<u8>>,
+    /// 测速数据
+    pub odometry: Arc<Mutex<OdometryData>>,
     /// 最后心跳时间
     pub last_heartbeat: Arc<Mutex<std::time::Instant>>,
     /// 服务器启动时间（用于计算运行时长）
@@ -53,6 +40,7 @@ impl AppState {
             ws_manager: Arc::new(Mutex::new(websocket::WebSocketManager::new())),
             video_frame: Arc::new(Mutex::new(None)),
             current_speed: Arc::new(Mutex::new(128)),
+            odometry: Arc::new(Mutex::new(OdometryData::default())),
             last_heartbeat: Arc::new(Mutex::new(std::time::Instant::now())),
             started_at: std::time::Instant::now(),
         }
@@ -68,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     info!("智能车桌面端后端启动");
-    info!("版本: 1.0.0");
+    info!("版本: 1.1.0");
 
     // 加载环境变量
     dotenvy::dotenv().ok();

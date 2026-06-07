@@ -29,7 +29,10 @@ enum class CommandType : uint8_t {
     LIGHT = 4,       // 车灯控制
     HORN = 5,        // 喇叭
     STOP = 6,        // 紧急停止
-    STATUS = 7       // 状态查询
+    STATUS = 7,      // 状态查询
+    ODOMETRY = 8,    // 测速数据上报
+    CALIBRATE = 9,   // 校准命令
+    DRIVE_MODE = 10  // 行走模式切换
 };
 
 /**
@@ -50,6 +53,28 @@ struct __attribute__((packed)) WirelessPacket {
         uint8_t m, uint8_t v, CommandType t,
         uint8_t d, uint8_t s, uint16_t sq, uint8_t c
     ) : magic(m), version(v), type(t), data(d), speed(s), seq(sq), checksum(c) {}
+};
+
+/**
+ * 测速数据上报结构体
+ * 用于向PC端发送左右轮速度数据
+ * 方向：车载端 -> 接收器 -> PC
+ */
+struct __attribute__((packed)) OdometryPacket {
+    const uint8_t magic;            // 魔术字(0xAA)
+    const uint8_t version;          // 协议版本
+    const CommandType type;         // ODOMETRY
+    const int16_t leftSpeedMmps;    // 左轮速度(mm/s)，有符号
+    const int16_t rightSpeedMmps;   // 右轮速度(mm/s)，有符号
+    const int16_t headingX100;      // 航向角(弧度*100)，有符号
+    const uint16_t totalDistMm;     // 总行走距离(mm)
+    const uint8_t checksum;         // 校验和
+    
+    constexpr OdometryPacket(
+        uint8_t m, uint8_t v, CommandType t,
+        int16_t ls, int16_t rs, int16_t hd, uint16_t td, uint8_t c
+    ) : magic(m), version(v), type(t), leftSpeedMmps(ls),
+        rightSpeedMmps(rs), headingX100(hd), totalDistMm(td), checksum(c) {}
 };
 
 /**

@@ -302,6 +302,28 @@ inline void applyVehicleMotion(const VehicleMotion& motion) {
     applyMotorState(motion.rearRight);
 }
 
+/**
+ * 纯函数：创建差速运动状态（左右轮不同速度）
+ * 用于PID修正后的精确控制
+ * 输入：左电机方向+速度，右电机方向+速度
+ * 输出：整车运动状态
+ */
+inline VehicleMotion createDifferentialState(
+    MotorDirection leftDir, uint8_t leftSpeed,
+    MotorDirection rightDir, uint8_t rightSpeed
+) {
+    return VehicleMotion(
+        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+                   leftDir, leftSpeed),
+        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+                   rightDir, rightSpeed),
+        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+                   leftDir, leftSpeed),
+        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+                   rightDir, rightSpeed)
+    );
+}
+
 // ============================================
 // 命令解析函数：从WASD映射到运动状态
 // ============================================
