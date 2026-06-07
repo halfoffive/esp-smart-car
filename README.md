@@ -31,7 +31,6 @@ esp-smart-car/
 │   └── frontend/                # Vue 前端
 │       ├── package.json
 │       ├── vite.config.ts
-│       ├── tailwind.config.js
 │       └── src/
 │           ├── App.vue
 │           ├── main.ts
@@ -230,6 +229,11 @@ void applyVehicleMotion(const VehicleMotion& motion) {
 - 检查 PWM 信号
 
 ## 版本历史
+
+- v1.2.0 - 2026-06-07
+  - 前端依赖大版本升级：TailwindCSS v3 → v4，Vite 5 → 8，Vue 3.4 → 3.5.35
+  - 修复滑块 thumb 垂直对齐
+  - 移除 tailwind.config.js、postcss.config.js（迁移到 CSS @theme）
 
 - v1.1.3 - 2026-06-07
   - 修复滑块 thumb 垂直对齐（`margin-top: -6px`）

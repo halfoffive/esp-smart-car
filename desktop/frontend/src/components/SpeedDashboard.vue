@@ -191,14 +191,21 @@ defineExpose({ resetMaxSpeed })
 
 <style scoped>
 .speed-module {
-  @apply bg-dark-800 rounded-lg p-2.5;
+  background-color: var(--color-dark-800);
+  border-radius: 0.5rem;
+  padding: 0.625rem;
 }
 
 .speed-bar {
-  @apply h-1 bg-dark-700 rounded-full overflow-hidden;
+  height: 0.25rem;
+  background-color: var(--color-dark-700);
+  border-radius: 9999px;
+  overflow: hidden;
 }
 
 .speed-fill {
-  @apply h-full rounded-full transition-all duration-300;
+  height: 100%;
+  border-radius: 9999px;
+  transition: all 0.3s;
 }
 </style>

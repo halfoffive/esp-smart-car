@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 紧凑控制面板（control-key-sm 样式）
 
 ### Changed
+- **前端依赖大版本升级** — TailwindCSS v3 → v4（CSS-first 配置 + Oxide 引擎），Vite 5 → 8（Rolldown 统一打包器），Vue 3.4 → 3.5.35
 - 前端构建产物直接输出到后端目录
 - 后端静态文件服务支持 SPA fallback
 - Web UI 自适应布局，不同屏幕无需滚动
@@ -53,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 版本号升至 1.1.0
 
 ### Fixed
+- **滑块 thumb 对齐** — WebKit `margin-top` 从 `-6px` 改为 `-4px`，Firefox 移除 `margin-top`
+- **TailwindCSS v4 兼容** — `@apply` 不能引用自定义组件类，改为内联样式；SpeedDashboard scoped 样式改用原生 CSS 变量
+- **移除废弃依赖** — `autoprefixer`、`postcss`（TailwindCSS v4 内置），`tailwind.config.js`、`postcss.config.js`（迁移到 CSS `@theme`）
 - **速度显示异常** — `current_speed` 初始值 128 导致显示 1422%，改为 5（速度等级）
 - **速度命令同步** — WebSocket 收到 '1'-'9' 命令时同步更新后端 `current_speed`
 - **SpeedDashboard 数据** — 改用 WebSocket odometry 数据显示实际轮速（cm/s），移除 `/api/status` 轮询
@@ -208,9 +212,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - dotenvy 0.15（环境变量）
 
 #### 前端（Node.js/Bun）
-- vue 3.4.21
-- vite 5.2.8
-- tailwindcss 3.4.3
+- vue 3.5.35
+- vite 8.0.16
+- tailwindcss 4
+- @tailwindcss/vite
 - typescript 5.4.5
 - pinia 2.1.7
 

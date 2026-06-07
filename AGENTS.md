@@ -131,6 +131,16 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-07 - 前端依赖大版本升级
+- **TailwindCSS v3 → v4**: 配置从 JS 迁移到 CSS `@theme`，移除 `tailwind.config.js` 和 `postcss.config.js`，改用 `@tailwindcss/vite` 插件
+- **Vite 5 → 8**: 统一 Rolldown 打包器，构建速度提升 10-30x
+- **Vue 3.4 → 3.5.35**: 响应式性能提升
+- **@vitejs/plugin-vue 5 → 6**: 兼容 Vite 8
+- **移除**: `autoprefixer`、`postcss` 依赖（v4 内置）
+- **修复**: 滑块 thumb 对齐（WebKit `margin-top: -4px`，Firefox 无偏移）
+- **修复**: SpeedDashboard scoped 样式改用原生 CSS 变量（v4 `@apply` 在 scoped 样式中需 `@reference`）
+- **修复**: `@apply` 不能引用自定义组件类（`btn`、`status-indicator` 样式内联）
+
 ### 2026-06-07 - 速度显示异常与滑块对齐修复
 - **问题**: 速度显示 1422%（`current_speed` 初始值为 128 导致），速度滑块与快速按钮宽度不对齐
 - **修复文件**:

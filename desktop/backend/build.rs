@@ -62,6 +62,7 @@ fn main() {
     // 监听前端源码变化（可选，用于开发时触发重新构建）
     println!("cargo:rerun-if-changed=../frontend/src");
     println!("cargo:rerun-if-changed=../frontend/package.json");
+    println!("cargo:rerun-if-changed=../frontend/vite.config.ts");
 }
 
 /// 检查前端源码是否比 dist 目录新
