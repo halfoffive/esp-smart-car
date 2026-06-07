@@ -128,3 +128,8 @@ Key connections:
 - **Video buffer**: 4096 bytes for frame reassembly
 - **Timeout protection**: 1-second auto-stop if no commands received
 - **Calibration**: Servo angles may need adjustment based on physical mounting
+
+## 额外要求
+
+- **编程风格**: 函数式编程，大量中文注释。
+- **当完成修改**: 更新"AGENTS.md","CHANGELOG","README"，然后提交并推送git。

@@ -1,28 +1,23 @@
 /**
  * HTTP API 模块
  * 基于 Axum 框架，提供 RESTful API
- * 
+ *
  * 端点：
  * POST /api/command - 发送控制命令
  * GET /api/status - 获取系统状态
  * POST /api/connect - 连接串口
  * POST /api/disconnect - 断开串口
- * 
+ *
  * 数据格式：JSON
  */
-
 use std::sync::Arc;
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use crate::AppState;
 use crate::serial::{SerialConnectionState, DEFAULT_BAUD_RATE};
+use crate::AppState;
 
 /// 命令请求
 #[derive(Debug, Deserialize)]
@@ -81,9 +76,9 @@ pub async fn handle_command(
     Json(request): Json<CommandRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
     let cmd = request.command.as_bytes().first().copied().unwrap_or(0);
-    
+
     let mut manager = state.serial_manager.lock().await;
-    
+
     match manager.send_command(cmd) {
         Ok(()) => {
             info!("发送命令: {}", request.command);
@@ -109,18 +104,19 @@ pub async fn handle_command(
 }
 
 /// 获取系统状态
-pub async fn get_status(
-    State(state): State<Arc<AppState>>,
-) -> (StatusCode, Json<StatusResponse>) {
+pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json<StatusResponse>) {
     let manager = state.serial_manager.lock().await;
     let ws_manager = state.ws_manager.lock().await;
     let current_speed = state.current_speed.lock().await;
     let uptime = state.started_at.elapsed().as_secs();
-    
+
     let serial_status = match &manager.state {
         SerialConnectionState::Disconnected => "未连接",
         SerialConnectionState::Connecting => "连接中",
-        SerialConnectionState::Connected { port_name, baud_rate } => {
+        SerialConnectionState::Connected {
+            port_name,
+            baud_rate,
+        } => {
             return (
                 StatusCode::OK,
                 Json(StatusResponse {
@@ -153,7 +149,7 @@ pub async fn get_status(
             );
         }
     };
-    
+
     (
         StatusCode::OK,
         Json(StatusResponse {
@@ -176,12 +172,12 @@ pub async fn connect_serial(
     Json(request): Json<ConnectRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
     let baud_rate = request.baud_rate.unwrap_or(DEFAULT_BAUD_RATE);
-    
+
     let mut manager = state.serial_manager.lock().await;
-    
+
     // 先断开现有连接
     manager.disconnect();
-    
+
     match manager.connect(&request.port_name, baud_rate) {
         Ok(()) => {
             info!("串口连接成功: {} @ {}", request.port_name, baud_rate);
@@ -212,9 +208,9 @@ pub async fn disconnect_serial(
 ) -> (StatusCode, Json<ApiResponse>) {
     let mut manager = state.serial_manager.lock().await;
     manager.disconnect();
-    
+
     info!("串口已断开");
-    
+
     (
         StatusCode::OK,
         Json(ApiResponse {

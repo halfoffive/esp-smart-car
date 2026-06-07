@@ -1,18 +1,17 @@
 /**
  * WebSocket通信模块
  * 基于 Axum WebSocket，实现实时双向通信
- * 
+ *
  * 功能：
  * 1. 处理客户端连接
  * 2. 广播视频帧
  * 3. 接收控制命令并转发到串口
  * 4. 管理连接状态
- * 
+ *
  * 消息格式：
  * 发送：{"type": "video", "data": "base64..."}
  * 接收：{"type": "command", "data": "W"}
  */
-
 use std::sync::Arc;
 
 use axum::{
@@ -50,25 +49,33 @@ impl WebSocketManager {
             next_id: 1,
         }
     }
-    
+
     pub fn add_client(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
-        
+
         self.clients.push(ClientConnection {
             id,
             connected_at: std::time::Instant::now(),
         });
-        
-        info!("WebSocket客户端连接: #{} (总计: {})", id, self.clients.len());
+
+        info!(
+            "WebSocket客户端连接: #{} (总计: {})",
+            id,
+            self.clients.len()
+        );
         id
     }
-    
+
     pub fn remove_client(&mut self, id: u64) {
         self.clients.retain(|c| c.id != id);
-        info!("WebSocket客户端断开: #{} (剩余: {})", id, self.clients.len());
+        info!(
+            "WebSocket客户端断开: #{} (剩余: {})",
+            id,
+            self.clients.len()
+        );
     }
-    
+
     pub fn client_count(&self) -> usize {
         self.clients.len()
     }
@@ -89,13 +96,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         let mut manager = state.ws_manager.lock().await;
         manager.add_client()
     };
-    
+
     // 拆分 WebSocket 为发送/接收
     let (mut ws_sender, mut ws_receiver) = socket.split();
-    
+
     // 创建 mpsc 通道用于发送消息（tx 可 clone）
     let (tx, mut rx) = mpsc::channel::<Message>(32);
-    
+
     // 转发任务：从 mpsc 通道接收消息并发送到 WebSocket
     let forward_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -104,14 +111,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             }
         }
     });
-    
+
     // 发送欢迎消息
     let welcome = serde_json::json!({
         "type": "connected",
         "client_id": client_id,
         "message": "已连接到智能车控制系统"
     });
-    
+
     if let Err(e) = tx.send(Message::Text(welcome.to_string().into())).await {
         error!("发送欢迎消息失败: {}", e);
         forward_task.abort();
@@ -121,7 +128,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         }
         return;
     }
-    
+
     // 视频任务：通过 mpsc tx 发送视频帧
     let video_tx = tx.clone();
     let video_state = state.clone();
@@ -132,35 +139,38 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 let video = video_state.video_frame.lock().await;
                 video.clone()
             };
-            
+
             if let Some(frame_data) = frame {
                 // 编码为Base64
                 let base64 = base64_encode(&frame_data);
-                
+
                 let message = serde_json::json!({
                     "type": "video",
                     "format": "jpeg",
                     "data": base64,
                     "timestamp": chrono::Utc::now().timestamp_millis()
                 });
-                
-                if let Err(e) = video_tx.send(Message::Text(message.to_string().into())).await {
+
+                if let Err(e) = video_tx
+                    .send(Message::Text(message.to_string().into()))
+                    .await
+                {
                     debug!("视频发送失败: {}", e);
                     break;
                 }
             }
-            
+
             // 控制帧率
             tokio::time::sleep(std::time::Duration::from_millis(33)).await; // ~30 FPS
         }
     });
-    
+
     // 处理接收到的消息
     while let Some(result) = ws_receiver.next().await {
         match result {
             Ok(Message::Text(text)) => {
                 debug!("收到消息: {}", text);
-                
+
                 if let Err(e) = handle_message(&text, &state).await {
                     warn!("处理消息失败: {}", e);
                 }
@@ -187,12 +197,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             }
         }
     }
-    
+
     // 取消视频任务
     video_task.abort();
     // 取消转发任务
     forward_task.abort();
-    
+
     // 注销客户端
     {
         let mut manager = state.ws_manager.lock().await;
@@ -203,10 +213,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 /// 处理消息
 async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()> {
     let message: serde_json::Value = serde_json::from_str(text)?;
-    
+
     let msg_type = message["type"].as_str().unwrap_or("");
     let data = message["data"].as_str().unwrap_or("");
-    
+
     match msg_type {
         "command" => {
             // 转发命令到串口
@@ -236,7 +246,7 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             warn!("未知消息类型: {}", msg_type);
         }
     }
-    
+
     Ok(())
 }
 
