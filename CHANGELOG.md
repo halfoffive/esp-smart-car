@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **SpeedDashboard 数据** — 改用 WebSocket odometry 数据显示实际轮速（cm/s），移除 `/api/status` 轮询
 - **StatusBar 速度显示** — 添加 clamp 保护（1-9），防止异常值显示
 - **速度滑块对齐** — 滑块轨道与快速按钮统一左右边距（`ml-5 mr-5`），确保视觉对齐
+- **速度滑块无极调节** — step 从 1 改为 0.1，移除下方快速按钮，发送固件时取整
 - 修复前端未使用变量导致的 `vue-tsc` 编译错误
 - 修复 axum 0.8 中 `nest_service` 在根路径不再支持的问题
 

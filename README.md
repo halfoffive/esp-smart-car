@@ -231,6 +231,9 @@ void applyVehicleMotion(const VehicleMotion& motion) {
 
 ## 版本历史
 
+- v1.1.2 - 2026-06-07
+  - 速度滑块改为无极调节（step 0.1），移除快速按钮
+
 - v1.1.1 - 2026-06-07
   - 修复速度显示异常（`current_speed` 初始值从 128 改为 5）
   - 修复速度滑块与快速按钮视觉对齐

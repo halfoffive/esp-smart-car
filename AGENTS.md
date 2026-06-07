@@ -141,6 +141,10 @@ Key connections:
   - `desktop/frontend/src/components/ControlPanel.vue` — 修复滑块与按钮宽度对齐（统一左右边距）
   - `desktop/frontend/src/style.css` — 移除轨道背景色避免覆盖动态渐变
 
+### 2026-06-07 - 速度滑块改为无极调节
+- **改动**: 滑块 step 从 1 改为 0.1，移除下方快速按钮，发送时取整
+- **文件**: `desktop/frontend/src/components/ControlPanel.vue`
+
 ## 额外要求
 
 在修改代码时，严格遵守：

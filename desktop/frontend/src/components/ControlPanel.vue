@@ -32,7 +32,7 @@
         <span class="text-sm text-primary-400 font-mono font-bold">{{ speedPercent }}%</span>
       </div>
       
-      <!-- 滑块和按钮共享同一容器宽度，确保对齐 -->
+      <!-- 无极速度滑块 -->
       <div class="flex items-center gap-2">
         <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">1</span>
         <div class="flex-1 relative">
@@ -41,26 +41,13 @@
             type="range"
             min="1"
             max="9"
-            step="1"
+            step="0.1"
             class="speed-slider w-full"
             :style="{ background: sliderBackground }"
             @input="setSpeed"
           />
         </div>
         <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">9</span>
-      </div>
-
-      <!-- 快速速度按钮 -->
-      <div class="grid grid-cols-5 gap-1 mt-1.5 ml-5 mr-5">
-        <button 
-          v-for="s in [1, 3, 5, 7, 9]" 
-          :key="s"
-          @click="currentSpeed = s; setSpeed()"
-          :class="['text-[10px] font-mono px-1.5 py-0.5 rounded transition-colors', 
-                    currentSpeed === s ? 'bg-primary-600 text-white' : 'bg-dark-700 text-dark-400 hover:bg-dark-600']"
-        >
-          {{ s }}
-        </button>
       </div>
     </div>
     
@@ -305,7 +292,8 @@ const sendCommand = (cmd: string) => {
 }
 
 const setSpeed = () => {
-  const speed = currentSpeed.value.toString()
+  // 无极滑块值取整后发送给固件（固件只接受整数速度 1-9）
+  const speed = Math.round(currentSpeed.value).toString()
   sendCommand(speed)
 }
 
