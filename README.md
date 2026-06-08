@@ -237,6 +237,13 @@ cargo test         # 运行所有 Rust 测试（无需硬件连接）
 
 ## 版本历史
 
+- v1.2.1 - 2026-06-08
+  - 修复 api.rs 空命令发送 0x00 问题（改为返回 400 Bad Request）
+  - 重构 api.rs StatusResponse 构造（DRY，消除三段重复代码）
+  - 优化 api.rs `get_status` 锁争用（逐把加锁释放，减少同时持有）
+  - 统一 websocket.rs `handle_message` 锁顺序与 `get_status` 一致
+  - 修复 websocket.rs drive_mode 分支重复加锁问题
+
 - v1.2.0 - 2026-06-07
   - 前端依赖大版本升级：TailwindCSS v3 → v4，Vite 5 → 8，Vue 3.4 → 3.5.35
   - 修复滑块 thumb 垂直对齐

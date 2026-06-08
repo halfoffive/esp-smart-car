@@ -85,7 +85,18 @@ pub async fn handle_command(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CommandRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    let cmd = request.command.as_bytes().first().copied().unwrap_or(0);
+    let cmd = match request.command.as_bytes().first().copied() {
+        Some(c) => c,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse {
+                    success: false,
+                    message: "命令不能为空".to_string(),
+                }),
+            );
+        }
+    };
 
     let mut manager = state.serial_manager.lock().await;
 
@@ -115,81 +126,66 @@ pub async fn handle_command(
 
 /// 获取系统状态
 pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json<StatusResponse>) {
-    let manager = state.serial_manager.lock().await;
-    let ws_manager = state.ws_manager.lock().await;
-    let current_speed = state.current_speed.lock().await;
-    let odom = state.odometry.lock().await;
-    let uptime = state.started_at.elapsed().as_secs();
-
-    let serial_status = match &manager.state {
-        SerialConnectionState::Disconnected => "未连接",
-        SerialConnectionState::Connecting => "连接中",
-        SerialConnectionState::Connected {
+    // 逐把加锁，复制数据后立即释放，减少锁争用
+    let (serial_status, port_name, baud_rate, frame_count, bytes_sent, command_count) = {
+        let manager = state.serial_manager.lock().await;
+        let (serial_status, port_name, baud_rate) = match &manager.state {
+            SerialConnectionState::Disconnected => ("未连接".to_string(), None, None),
+            SerialConnectionState::Connecting => ("连接中".to_string(), None, None),
+            SerialConnectionState::Connected { port_name, baud_rate } => {
+                ("已连接".to_string(), Some(port_name.clone()), Some(*baud_rate))
+            }
+            SerialConnectionState::Error(msg) => {
+                (format!("错误: {}", msg), None, None)
+            }
+        };
+        (
+            serial_status,
             port_name,
             baud_rate,
-        } => {
-            return (
-                StatusCode::OK,
-                Json(StatusResponse {
-                    serial_status: "已连接".to_string(),
-                    port_name: Some(port_name.clone()),
-                    baud_rate: Some(*baud_rate),
-                    frame_count: manager.frame_count,
-                    bytes_sent: manager.bytes_sent,
-                    current_speed: *current_speed,
-                    ws_clients: ws_manager.client_count(),
-                    uptime,
-                    version: "1.1.0".to_string(),
-                    left_speed: odom.left_speed_mmps,
-                    right_speed: odom.right_speed_mmps,
-                    heading: odom.heading,
-                    total_distance: odom.total_distance_mm,
-                    command_count: manager.command_count,
-                }),
-            );
-        }
-        SerialConnectionState::Error(msg) => {
-            return (
-                StatusCode::OK,
-                Json(StatusResponse {
-                    serial_status: format!("错误: {}", msg),
-                    port_name: None,
-                    baud_rate: None,
-                    frame_count: manager.frame_count,
-                    bytes_sent: manager.bytes_sent,
-                    current_speed: *current_speed,
-                    ws_clients: ws_manager.client_count(),
-                    uptime,
-                    version: "1.1.0".to_string(),
-                    left_speed: odom.left_speed_mmps,
-                    right_speed: odom.right_speed_mmps,
-                    heading: odom.heading,
-                    total_distance: odom.total_distance_mm,
-                    command_count: manager.command_count,
-                }),
-            );
-        }
+            manager.frame_count,
+            manager.bytes_sent,
+            manager.command_count,
+        )
     };
 
-    (
-        StatusCode::OK,
-        Json(StatusResponse {
-            serial_status: serial_status.to_string(),
-            port_name: None,
-            baud_rate: None,
-            frame_count: manager.frame_count,
-            bytes_sent: manager.bytes_sent,
-            current_speed: *current_speed,
-            ws_clients: ws_manager.client_count(),
-            uptime,
-            version: "1.1.0".to_string(),
-            left_speed: odom.left_speed_mmps,
-            right_speed: odom.right_speed_mmps,
-            heading: odom.heading,
-            total_distance: odom.total_distance_mm,
-            command_count: manager.command_count,
-        }),
-    )
+    let ws_clients = {
+        let ws_manager = state.ws_manager.lock().await;
+        ws_manager.client_count()
+    };
+
+    let current_speed = *state.current_speed.lock().await;
+
+    let (left_speed, right_speed, heading, total_distance) = {
+        let odom = state.odometry.lock().await;
+        (
+            odom.left_speed_mmps,
+            odom.right_speed_mmps,
+            odom.heading,
+            odom.total_distance_mm,
+        )
+    };
+
+    let uptime = state.started_at.elapsed().as_secs();
+
+    let response = StatusResponse {
+        serial_status,
+        port_name,
+        baud_rate,
+        frame_count,
+        bytes_sent,
+        current_speed,
+        ws_clients,
+        uptime,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        left_speed,
+        right_speed,
+        heading,
+        total_distance,
+        command_count,
+    };
+
+    (StatusCode::OK, Json(response))
 }
 
 /// 连接串口
@@ -310,7 +306,7 @@ mod tests {
             current_speed: 5,
             ws_clients: 0,
             uptime: 42,
-            version: "1.1.0".to_string(),
+            version: "1.2.0".to_string(),
             left_speed: 0.0,
             right_speed: 0.0,
             heading: 0.0,
@@ -320,6 +316,6 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"serial_status\":\"未连接\""));
         assert!(json.contains("\"current_speed\":5"));
-        assert!(json.contains("\"version\":\"1.1.0\""));
+        assert!(json.contains("\"version\":\"1.2.0\""));
     }
 }

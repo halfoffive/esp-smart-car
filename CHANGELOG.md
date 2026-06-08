@@ -55,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 版本号升至 1.1.0
 
 ### Fixed
+- **api.rs 空命令处理** — `handle_command` 空字符串时不再发送 0x00 到串口，改为返回 400 Bad Request
+- **api.rs StatusResponse DRY** — 三段重复构造抽取为单次构造，通过 match 统一设置变化的 serial_status/port_name/baud_rate
+- **api.rs 锁争用优化** — `get_status` 从同时持有 4 把锁改为逐把加锁、复制数据后立即释放
+- **websocket.rs 锁顺序一致** — `handle_message` command 分支改为先 `serial_manager` 后 `current_speed`，与 `get_status` 顺序一致；修复 drive_mode 分支重复加锁问题
 - **滑块 thumb 对齐** — WebKit `margin-top` 从 `-6px` 改为 `-4px`，Firefox 移除 `margin-top`
 - **TailwindCSS v4 兼容** — `@apply` 不能引用自定义组件类，改为内联样式；SpeedDashboard scoped 样式改用原生 CSS 变量
 - **移除废弃依赖** — `autoprefixer`、`postcss`（TailwindCSS v4 内置），`tailwind.config.js`、`postcss.config.js`（迁移到 CSS `@theme`）

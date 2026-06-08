@@ -30,8 +30,6 @@ use crate::AppState;
 #[derive(Debug)]
 struct ClientConnection {
     id: u64,
-    #[allow(dead_code)]
-    connected_at: std::time::Instant,
 }
 
 /// WebSocket管理器
@@ -54,10 +52,7 @@ impl WebSocketManager {
         let id = self.next_id;
         self.next_id += 1;
 
-        self.clients.push(ClientConnection {
-            id,
-            connected_at: std::time::Instant::now(),
-        });
+        self.clients.push(ClientConnection { id });
 
         info!(
             "WebSocket客户端连接: #{} (总计: {})",
@@ -241,16 +236,19 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
         "command" => {
             // 转发命令到串口
             if let Some(cmd_byte) = data.bytes().next() {
-                // 如果是速度等级命令(1-9)，同步更新 current_speed
-                if cmd_byte >= b'1' && cmd_byte <= b'9' {
-                    let mut current_speed = state.current_speed.lock().await;
-                    *current_speed = cmd_byte - b'0';
-                }
+                // 先获取 serial_manager 锁（与 get_status 锁顺序一致：serial_manager → current_speed）
                 let mut manager = state.serial_manager.lock().await;
                 if let Err(e) = manager.send_command(cmd_byte) {
                     warn!("发送命令失败: {}", e);
                 } else {
                     debug!("转发命令: {}", data);
+                }
+                drop(manager); // 显式释放 serial_manager 锁
+
+                // 如果是速度等级命令(1-9)，同步更新 current_speed
+                if (b'1'..=b'9').contains(&cmd_byte) {
+                    let mut current_speed = state.current_speed.lock().await;
+                    *current_speed = cmd_byte - b'0';
                 }
             }
         }
@@ -273,13 +271,12 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
                 let cmd = match mode {
                     0 => 'M', // 普通模式
                     1 => 'L', // 直线修正模式
-                    2 => 'H', // 航向锁定模式
+                    2 => 'B', // 航向锁定模式
                     _ => 'L',
                 };
                 let mut manager = state.serial_manager.lock().await;
                 let _ = manager.send_command(cmd as u8);
-                let mut manager2 = state.serial_manager.lock().await;
-                let _ = manager2.send_command(mode as u8);
+                let _ = manager.send_command(mode as u8);
                 info!("切换行走模式: {}", mode);
             }
         }
