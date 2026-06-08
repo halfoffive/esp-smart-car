@@ -18,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     info!("智能车桌面端后端启动");
-    info!("版本: 1.1.0");
+    info!("版本: 1.2.0");
 
     // 加载环境变量
     dotenvy::dotenv().ok();

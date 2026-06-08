@@ -2,7 +2,6 @@
 
 # 后端
 /desktop/backend/target/
-/desktop/backend/Cargo.lock
 /desktop/backend/*.log
 
 # 前端

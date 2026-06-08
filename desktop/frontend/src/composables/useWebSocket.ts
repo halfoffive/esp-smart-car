@@ -8,9 +8,14 @@
  * 3. 接收视频帧
  * 4. 接收测速数据
  * 5. 心跳保活
+ * 
+ * 设计模式：单管理员模式
+ * - 只有 owner=true 的调用者才能执行 connect() 和 disconnect()
+ * - 其他调用者只消费状态（isConnected, videoFrame, odometry 等）
+ * - 防止多组件卸载时意外断开全局 WebSocket
  */
 
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref } from 'vue'
 
 const WS_URL = 'ws://localhost:8080/ws'
 const HEARTBEAT_INTERVAL = 30000 // 30秒
@@ -37,6 +42,7 @@ const odometry = ref<OdometryData>({
 const ws = ref<WebSocket | null>(null)
 let heartbeatTimer: number | null = null
 let reconnectTimer: number | null = null
+let shouldReconnect = true
 
 /**
  * 连接 WebSocket
@@ -45,79 +51,79 @@ export const connect = () => {
   if (ws.value?.readyState === WebSocket.OPEN) {
     return
   }
-  
+
+  // 重置重连标志，允许自动重连
+  shouldReconnect = true
+
   try {
     const socket = new WebSocket(WS_URL)
-    
+
     socket.onopen = () => {
-      console.log('[WebSocket] 连接成功')
       isConnected.value = true
-      
+
       // 启动心跳
       startHeartbeat()
     }
-    
+
     socket.onmessage = (event) => {
       try {
         const message = JSON.parse(event.data)
-        
+
         switch (message.type) {
           case 'connected':
-            console.log('[WebSocket] 已连接:', message.message)
             break
-            
+
           case 'video':
             // 接收视频帧
             if (message.data) {
               videoFrame.value = `data:image/jpeg;base64,${message.data}`
             }
             break
-            
+
           case 'odometry':
             // 接收测速数据
             if (message.leftSpeed !== undefined) {
               odometry.value = {
-                leftSpeed: message.leftSpeed as number,
-                rightSpeed: message.rightSpeed as number,
-                heading: message.heading as number,
-                distance: message.distance as number,
-                timestamp: message.timestamp as number
+                leftSpeed: typeof message.leftSpeed === 'number' ? message.leftSpeed : 0,
+                rightSpeed: typeof message.rightSpeed === 'number' ? message.rightSpeed : 0,
+                heading: typeof message.heading === 'number' ? message.heading : 0,
+                distance: typeof message.distance === 'number' ? message.distance : 0,
+                timestamp: typeof message.timestamp === 'number' ? message.timestamp : 0
               }
             }
             break
-            
+
           case 'status':
-            console.log('[WebSocket] 状态:', message)
             break
-            
+
           default:
-            console.log('[WebSocket] 收到消息:', message)
+            break
         }
-      } catch (e) {
-        console.error('[WebSocket] 解析消息失败:', e)
+      } catch {
+        // JSON 解析失败，忽略非标准消息
       }
     }
-    
-    socket.onerror = (error) => {
-      console.error('[WebSocket] 错误:', error)
+
+    socket.onerror = () => {
       isConnected.value = false
     }
-    
+
     socket.onclose = () => {
-      console.log('[WebSocket] 连接关闭')
       isConnected.value = false
       stopHeartbeat()
-      
-      // 自动重连
-      reconnectTimer = setTimeout(() => {
-        console.log('[WebSocket] 尝试重连...')
-        connect()
-      }, 5000) as unknown as number
+
+      // 自动重连（仅在非主动断开时）
+      if (shouldReconnect) {
+        reconnectTimer = setTimeout(() => {
+          if (shouldReconnect) {
+            connect()
+          }
+        }, 5000) as unknown as number
+      }
     }
-    
+
     ws.value = socket
-  } catch (e) {
-    console.error('[WebSocket] 连接失败:', e)
+  } catch {
     isConnected.value = false
   }
 }
@@ -126,18 +132,21 @@ export const connect = () => {
  * 断开 WebSocket
  */
 export const disconnect = () => {
+  // 先设置标志，防止 onclose handler 触发自动重连
+  shouldReconnect = false
+
   stopHeartbeat()
-  
+
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
-  
+
   if (ws.value) {
     ws.value.close()
     ws.value = null
   }
-  
+
   isConnected.value = false
   videoFrame.value = null
 }
@@ -147,17 +156,20 @@ export const disconnect = () => {
  */
 export const sendCommand = (command: string) => {
   if (ws.value?.readyState !== WebSocket.OPEN) {
-    console.warn('[WebSocket] 未连接，无法发送命令')
     return
   }
-  
+
   const message = {
     type: 'command',
     data: command,
     timestamp: Date.now()
   }
-  
-  ws.value.send(JSON.stringify(message))
+
+  try {
+    ws.value.send(JSON.stringify(message))
+  } catch {
+    // send 失败时连接已断开，onclose 会自动处理重连
+  }
 }
 
 /**
@@ -167,14 +179,18 @@ export const sendSpeed = (speed: number) => {
   if (ws.value?.readyState !== WebSocket.OPEN) {
     return
   }
-  
+
   const message = {
     type: 'speed',
     data: speed.toString(),
     timestamp: Date.now()
   }
-  
-  ws.value.send(JSON.stringify(message))
+
+  try {
+    ws.value.send(JSON.stringify(message))
+  } catch {
+    // send 失败时连接已断开，onclose 会自动处理重连
+  }
 }
 
 /**
@@ -182,13 +198,17 @@ export const sendSpeed = (speed: number) => {
  */
 const startHeartbeat = () => {
   stopHeartbeat()
-  
+
   heartbeatTimer = setInterval(() => {
     if (ws.value?.readyState === WebSocket.OPEN) {
-      ws.value.send(JSON.stringify({
-        type: 'heartbeat',
-        timestamp: Date.now()
-      }))
+      try {
+        ws.value.send(JSON.stringify({
+          type: 'heartbeat',
+          timestamp: Date.now()
+        }))
+      } catch {
+        // send 失败时连接已断开，onclose 会自动处理重连
+      }
     }
   }, HEARTBEAT_INTERVAL) as unknown as number
 }
@@ -210,36 +230,46 @@ export const sendDriveMode = (mode: number) => {
   if (ws.value?.readyState !== WebSocket.OPEN) {
     return
   }
-  
+
   const message = {
     type: 'drive_mode',
     mode,
     timestamp: Date.now()
   }
-  
-  ws.value.send(JSON.stringify(message))
+
+  try {
+    ws.value.send(JSON.stringify(message))
+  } catch {
+    // send 失败时连接已断开，onclose 会自动处理重连
+  }
 }
 
 /**
  * 组合式函数
+ * 
+ * @param owner - 是否为管理员组件。只有管理员才能调用 connect() 和 disconnect()
+ *              其他组件只应消费状态（isConnected, videoFrame, odometry 等）
  */
-export const useWebSocket = () => {
-  onMounted(() => {
-    if (!isConnected.value) {
-      connect()
-    }
-  })
-  
-  onUnmounted(() => {
-    disconnect()
-  })
-  
+export const useWebSocket = (owner = false) => {
+  // 单管理员模式：只有 owner 才能执行连接管理操作
+  const safeConnect = owner
+    ? connect
+    : () => {
+        // 非管理员组件无法调用 connect()
+      }
+
+  const safeDisconnect = owner
+    ? disconnect
+    : () => {
+        // 非管理员组件无法调用 disconnect()
+      }
+
   return {
     isConnected,
     videoFrame,
     odometry,
-    connect,
-    disconnect,
+    connect: safeConnect,
+    disconnect: safeDisconnect,
     sendCommand,
     sendSpeed,
     sendDriveMode

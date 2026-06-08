@@ -1,6 +1,6 @@
 [package]
 name = "esp-smart-car-backend"
-version = "1.0.0"
+version = "1.2.0"
 edition = "2021"
 authors = ["智能车项目团队"]
 description = "智能车桌面端后端 - 基于 Axum + WebSocket"

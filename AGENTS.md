@@ -132,6 +132,16 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-08 - 前端关键 bug 修复
+- **问题**: useWebSocket.ts 存在重连竞争、多组件卸载时意外断开全局 WebSocket、双重连接；VideoPlayer.vue 组件卸载后 RAF 递归调用导致内存泄漏；ControlPanel.vue 云台指令错误（'L'/'R'）、smartDriveOn 初始值与固件不匹配、速度滑块无防抖频繁发送命令；StatusBar.vue 连接状态使用独立 ref 导致永远显示 OFF
+- **修复文件**:
+  - `desktop/frontend/src/composables/useWebSocket.ts` — 引入单管理员模式（`owner` 参数），只有 `owner=true` 的调用者才能执行 `connect()`/`disconnect()`，其他组件只消费状态；添加 `shouldReconnect` flag，`disconnect()` 先设 flag 为 `false` 再关闭 socket，阻止 `onclose` handler 自动重连；移除 `onMounted`/`onUnmounted` 中的自动连接/断开逻辑；odometry 数据解析从 `as number` 不安全类型断言改为 `typeof` 运行时校验；`sendCommand` 和所有 `ws.value.send()` 调用处添加 try-catch；清理 10 处 `console.log`
+  - `desktop/frontend/src/App.vue` — 使用 `useWebSocket(true)` 作为管理员，在 `onMounted` 中调用 `connect()`；版本号显示 `v1.0.0` → `v1.2.0`
+  - `desktop/frontend/src/components/VideoPlayer.vue` — 添加 `onUnmounted` 钩子调用 `cancelAnimationFrame(rafId)` 终止递归动画帧；`lastFpsUpdate` 初始值从 `0` 改为 `Date.now()`；移除录制按钮、`isRecording` 状态、`toggleRecording` 函数和 `resolution` 显示（录制功能为空操作）
+  - `desktop/frontend/src/components/ControlPanel.vue` — 云台左按钮指令从 'L'（航线修正）修正为 'H'（云台左），云台右按钮从 'R'（无效指令）修正为 'K'（云台右）；`smartDriveOn` 初始值从 `true` 改为 `false`，匹配固件默认模式 0；速度滑块 `@input` 事件添加 200ms 防抖（`setTimeout`/`clearTimeout`），快速拖动时只发送最终值
+  - `desktop/frontend/src/components/StatusBar.vue` — 删除本地 `const isConnected = ref(false)`，改为从 `useWebSocket()` 导入 `isConnected`，确保状态与实际 WebSocket 连接一致
+- **验证**: `bun run build` 成功，`npx vue-tsc --noEmit` 无类型错误
+
 ### 2026-06-08 - serial.rs 阻塞 I/O 与锁优化修复
 - **问题**: `run_serial_task` 直接调用阻塞串口 I/O（`read_exact`, `write_all`）在 async 上下文；持有 `serial_manager` 锁的同时获取 `video_frame`/`odometry` 锁；`read_line` 中 `line_buffer.clear()` 冗余
 - **修复文件**:

@@ -10,8 +10,7 @@ fn main() {
 
     // 检查前端源码是否比构建产物新
     let need_rebuild = if dist_exists {
-        let src_newer = check_src_newer_than_dist(frontend_dir, dist_dir);
-        src_newer
+        check_src_newer_than_dist(frontend_dir, dist_dir)
     } else {
         true
     };
@@ -25,24 +24,27 @@ fn main() {
             .output();
 
         if bun_check.is_err() {
-            println!("cargo:warning=未找到 bun，跳过前端自动构建。请手动运行: cd ../frontend && bun install && bun run build");
-            return;
+            panic!("未找到 bun，无法自动构建前端。请手动运行: cd ../frontend && bun install && bun run build");
         }
 
         // 安装依赖
         let install_result = Command::new("bun")
-            .args(&["install"])
+            .args(["install"])
             .current_dir(frontend_dir)
             .status();
 
         if let Err(e) = install_result {
-            println!("cargo:warning=前端依赖安装失败: {}", e);
-            return;
+            panic!("前端依赖安装失败: {}", e);
+        }
+
+        // 检查 node_modules 是否存在，确保依赖已安装
+        if !std::path::Path::new(&format!("{}/node_modules", frontend_dir)).exists() {
+            panic!("前端依赖安装后 node_modules 目录不存在，请手动运行: cd ../frontend && bun install");
         }
 
         // 构建前端
         let build_result = Command::new("bun")
-            .args(&["run", "build"])
+            .args(["run", "build"])
             .current_dir(frontend_dir)
             .status();
 
@@ -51,18 +53,22 @@ fn main() {
                 println!("cargo:warning=前端构建成功");
             }
             Ok(status) => {
-                println!("cargo:warning=前端构建失败，退出码: {:?}", status.code());
+                panic!("前端构建失败，退出码: {:?}", status.code());
             }
             Err(e) => {
-                println!("cargo:warning=前端构建执行失败: {}", e);
+                panic!("前端构建执行失败: {}", e);
             }
         }
     }
 
-    // 监听前端源码变化（可选，用于开发时触发重新构建）
+    // 监听前端源码变化（用于开发时触发重新构建）
     println!("cargo:rerun-if-changed=../frontend/src");
+    println!("cargo:rerun-if-changed=../frontend/index.html");
     println!("cargo:rerun-if-changed=../frontend/package.json");
     println!("cargo:rerun-if-changed=../frontend/vite.config.ts");
+    println!("cargo:rerun-if-changed=../frontend/tsconfig.json");
+    println!("cargo:rerun-if-changed=../frontend/tsconfig.node.json");
+    println!("cargo:rerun-if-changed=../frontend/public");
 }
 
 /// 检查前端源码是否比 dist 目录新

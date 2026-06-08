@@ -54,8 +54,9 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue'
+import { useWebSocket } from '../composables/useWebSocket'
 
-const isConnected = ref(false)
+const { isConnected } = useWebSocket()
 const serialConnected = ref(false)
 const fps = ref(0)
 const currentSpeed = ref(5)

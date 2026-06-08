@@ -1,6 +1,6 @@
 {
   "name": "esp-smart-car-frontend",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "智能车桌面控制端前端 - Vue + Vite + TailwindCSS",
   "type": "module",
   "scripts": {

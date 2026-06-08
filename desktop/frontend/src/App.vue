@@ -12,7 +12,7 @@
           </div>
           <h1 class="text-base font-bold text-dark-100">智能车控制系统</h1>
           <span class="text-[10px] text-dark-500 bg-dark-800 px-1.5 py-0.5 rounded">
-            v1.0.0
+            v1.2.0
           </span>
         </div>
         
@@ -46,7 +46,7 @@ import StatusBar from './components/StatusBar.vue'
 import SpeedDashboard from './components/SpeedDashboard.vue'
 import { useWebSocket } from './composables/useWebSocket'
 
-const { connect } = useWebSocket()
+const { connect } = useWebSocket(true)
 
 onMounted(() => {
   connect()

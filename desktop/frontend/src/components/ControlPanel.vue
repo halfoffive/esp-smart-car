@@ -44,7 +44,7 @@
             step="0.1"
             class="speed-slider w-full"
             :style="{ background: sliderBackground }"
-            @input="setSpeed"
+            @input="handleSpeedInput"
           />
         </div>
         <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">9</span>
@@ -148,7 +148,7 @@
         <div></div>
         
         <button 
-          @mousedown="sendCommand('L')"
+          @mousedown="sendCommand('H')"
           @mouseup="sendCommand(' ')"
           class="control-key-sm"
           title="左"
@@ -164,7 +164,7 @@
           C
         </button>
         <button 
-          @mousedown="sendCommand('R')"
+          @mousedown="sendCommand('K')"
           @mouseup="sendCommand(' ')"
           class="control-key-sm"
           title="右"
@@ -247,7 +247,10 @@ const selectedPort = ref('')
 const availablePorts = ref<string[]>([])
 const currentSpeed = ref(5)
 const isConnected = ref(false)
-const smartDriveOn = ref(true)
+
+/** 速度滑块防抖定时器：快速拖动时只发送最终值，不发送中间值 */
+let speedDebounceTimer: number | null = null
+const smartDriveOn = ref(false)
 const logs = ref<{ time: string, message: string, color: string }[]>([])
 
 const speedPercent = computed(() => Math.round((currentSpeed.value / 9) * 100))
@@ -289,6 +292,19 @@ const sendCommand = (cmd: string) => {
   
   wsSendCommand(cmd)
   addLog(`发送命令: ${cmd}`)
+}
+
+/** 速度滑块输入处理（带 200ms 防抖）：只发送最终值，不发送中间值 */
+const handleSpeedInput = (event: Event) => {
+  const target = event.target as HTMLInputElement
+  currentSpeed.value = parseFloat(target.value)
+  if (speedDebounceTimer !== null) {
+    clearTimeout(speedDebounceTimer)
+  }
+  speedDebounceTimer = window.setTimeout(() => {
+    speedDebounceTimer = null
+    setSpeed()
+  }, 200)
 }
 
 const setSpeed = () => {

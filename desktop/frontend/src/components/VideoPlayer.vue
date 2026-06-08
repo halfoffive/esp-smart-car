@@ -6,9 +6,6 @@
         <span v-if="fps > 0" class="text-xs text-primary-400 font-mono">
           {{ fps }} FPS
         </span>
-        <span v-if="resolution" class="text-[10px] text-dark-500">
-          {{ resolution }}
-        </span>
       </div>
     </div>
     
@@ -31,10 +28,6 @@
         </div>
       </div>
       
-      <div v-if="isRecording" class="absolute top-2 left-2 flex items-center gap-1 bg-red-600/90 text-white px-2 py-0.5 rounded-full text-xs">
-        <span class="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></span>
-        录制中
-      </div>
       
       <div class="absolute top-2 right-2">
         <span v-if="isConnected" class="status-online text-xs">
@@ -50,15 +43,6 @@
     
     <div class="flex items-center gap-2 mt-2">
       <button 
-        @click="toggleRecording"
-        :class="isRecording ? 'btn-danger' : 'btn-secondary'"
-        class="flex-1 text-xs py-1.5"
-      >
-        <span v-if="isRecording">停止录制</span>
-        <span v-else>录制</span>
-      </button>
-      
-      <button 
         @click="takeSnapshot"
         class="btn-secondary flex-1 text-xs py-1.5"
       >
@@ -69,18 +53,17 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
 
 const { videoFrame, isConnected } = useWebSocket()
 
 const videoSrc = ref<string | null>(null)
 const fps = ref(0)
-const resolution = ref('')
-const isRecording = ref(false)
 
 let frameCount = 0
-let lastFpsUpdate = 0
+let lastFpsUpdate = Date.now()
+let rafId: number | null = null
 
 const updateVideo = () => {
   if (videoFrame.value) {
@@ -96,16 +79,19 @@ const updateVideo = () => {
     }
   }
   
-  requestAnimationFrame(updateVideo)
+  rafId = requestAnimationFrame(updateVideo)
 }
 
 onMounted(() => {
-  requestAnimationFrame(updateVideo)
+  rafId = requestAnimationFrame(updateVideo)
 })
 
-const toggleRecording = () => {
-  isRecording.value = !isRecording.value
-}
+onUnmounted(() => {
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId)
+    rafId = null
+  }
+})
 
 const takeSnapshot = () => {
   if (videoSrc.value) {

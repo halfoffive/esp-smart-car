@@ -248,6 +248,18 @@ cargo test         # 运行所有 Rust 测试（无需硬件连接）
   - 优化 api.rs `get_status` 锁争用（逐把加锁释放，减少同时持有）
   - 统一 websocket.rs `handle_message` 锁顺序与 `get_status` 一致
   - 修复 websocket.rs drive_mode 分支重复加锁问题
+  - 修复 websocket.rs drive_mode 2 错误指令字符（'H' 改为 'B'，航向锁定模式）
+  - 重构 useWebSocket.ts 生命周期（单管理员模式，防止多组件卸载断连）
+  - 修复 useWebSocket.ts 重连竞争（添加 shouldReconnect flag）
+  - 修复 VideoPlayer.vue RAF 内存泄漏（添加 onUnmounted 取消 requestAnimationFrame）
+  - 修复 VideoPlayer.vue FPS 计算初始值不准确（lastFpsUpdate 从 0 改为 Date.now()）
+  - 修复 ControlPanel.vue 云台指令（左 'L'→'H'，右 'R'→'K'）
+  - 修复 ControlPanel.vue smartDriveOn 初始值（true→false，匹配固件默认）
+  - 添加 ControlPanel.vue 速度滑块 200ms 防抖
+  - 修复 StatusBar.vue 连接状态（isConnected 从本地 ref 改为 useWebSocket 导入）
+  - 修复 useWebSocket.ts 类型安全（odometry 解析运行时校验替代 as number）
+  - 修复 useWebSocket.ts 错误处理（sendCommand 添加 try-catch）
+  - 移除 VideoPlayer.vue 录制空操作按钮（无实际录制逻辑）
 
 - v1.2.0 - 2026-06-07
   - 前端依赖大版本升级：TailwindCSS v3 → v4，Vite 5 → 8，Vue 3.4 → 3.5.35

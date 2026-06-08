@@ -29,6 +29,12 @@ pub struct AppState {
     pub started_at: std::time::Instant,
 }
 
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AppState {
     /// 创建新状态
     pub fn new() -> Self {

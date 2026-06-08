@@ -86,6 +86,12 @@ pub struct SerialManager {
     line_buffer: Vec<u8>,
 }
 
+impl Default for SerialManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SerialManager {
     /// 创建新管理器
     pub fn new() -> Self {

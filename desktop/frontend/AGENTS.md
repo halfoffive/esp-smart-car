@@ -11,7 +11,6 @@
 desktop/frontend/
 ├── package.json           # 依赖配置
 ├── vite.config.ts         # Vite 配置
-├── tailwind.config.js     # TailwindCSS 配置
 ├── index.html             # 入口 HTML
 ├── tsconfig.json          # TypeScript 配置
 └── src/
@@ -69,7 +68,7 @@ desktop/frontend/
 - **Props**: 无
 - **Emits**: 无
 - **State**: `videoSrc`, `fps`, `isConnected`
-- **Features**: 视频显示、FPS 计算、截图、录制
+- **Features**: 视频显示、FPS 计算、截图
 
 ### ControlPanel
 - **Props**: 无
@@ -120,3 +119,5 @@ bun run preview      # 预览生产构建
 - **智能修正**：通过 WebSocket 发送 `drive_mode` 命令切换
 - **响应式**：全屏100vh布局，右侧面板含控制+测速模块
 - **主题**：深色模式，使用 `dark-` 颜色系列
+- **WebSocket 单管理员模式**：`useWebSocket(owner = false)` — 只有 `owner=true` 的调用者（App.vue）才能执行 `connect()`/`disconnect()`，其他组件只消费状态。防止多组件卸载时意外断开全局连接。
+- **重连保护**：`disconnect()` 设置 `shouldReconnect = false` 后再关闭 socket，阻止 `onclose` handler 自动重连。

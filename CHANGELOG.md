@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 行走距离累计
   - 航向角计算（基于差速推算）
   - 自动校准功能（补偿左右轮速度差异）
-  
+
 - **PID 控制器**（`pid_control.h`）- 直线行走修正系统
   - 位置式PID算法，防积分饱和
   - 直线修正模式：自动补偿左右轮速度差
@@ -45,6 +45,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 右侧面板适配 SpeedDashboard 模块
   - 紧凑控制面板（control-key-sm 样式）
 
+## [1.2.2] - 2026-06-08
+
+### Fixed
+- **serial.rs 阻塞 I/O 修复** — `run_serial_task` 使用 `tokio::task::spawn_blocking()` 包装阻塞串口 I/O，避免阻塞 Tokio 运行时
+- **serial.rs 锁优化** — `serial_manager` 改用 `std::sync::Mutex`，读取数据后立即释放锁，再单独获取 `video_frame`/`odometry` 锁，消除同时持有多把锁的情况
+- **移除 read_line 冗余 clear()** — 删除 `line_buffer.clear()` 重复调用
+- **build.rs 改进** — 添加 `rerun-if-changed` 监控 `index.html` 和 `tsconfig.json`，构建失败时返回非零退出码
+
+## [1.2.1] - 2026-06-08
+
+### Fixed
+- **api.rs 空命令处理** — `handle_command` 空字符串时不再发送 0x00 到串口，改为返回 400 Bad Request
+- **api.rs StatusResponse DRY** — 三段重复构造抽取为单次构造，通过 match 统一设置变化的 serial_status/port_name/baud_rate
+- **api.rs 锁争用优化** — `get_status` 从同时持有 4 把锁改为逐把加锁、复制数据后立即释放
+- **websocket.rs 锁顺序一致** — `handle_message` command 分支改为先 `serial_manager` 后 `current_speed`，与 `get_status` 顺序一致
+- **websocket.rs drive_mode 死锁** — 修复同一 Mutex 重复加锁（`manager2` 改为复用 `manager`）
+- **websocket.rs 错误指令字符** — drive_mode 2 从 'H'（云台左）修正为 'B'（航向锁定模式）
+- **useWebSocket 生命周期重构** — 引入单管理员模式（`owner` 参数），只有 `owner=true` 才能执行 `connect()`/`disconnect()`，防止多组件卸载时意外断开全局连接
+- **useWebSocket 重连竞争** — 添加 `shouldReconnect` flag，`disconnect()` 先设 flag 为 `false` 再关闭 socket，阻止 `onclose` 自动重连
+- **VideoPlayer RAF 泄漏** — 添加 `onUnmounted` 钩子调用 `cancelAnimationFrame`，修复组件卸载后递归动画帧持续运行导致的内存泄漏
+- **VideoPlayer FPS 初始化** — `lastFpsUpdate` 从 `0` 改为 `Date.now()`，避免首次 FPS 计算异常
+- **ControlPanel 云台指令** — 云台左按钮从 'L'（航线修正）修正为 'H'，云台右按钮从 'R'（无效指令）修正为 'K'
+- **ControlPanel smartDriveOn** — 初始值从 `true` 改为 `false`，匹配固件默认无修正模式
+- **ControlPanel 速度滑块防抖** — 添加 200ms 防抖，快速拖动时只发送最终值，减少串口命令流量
+- **StatusBar 连接状态** — `isConnected` 从本地 `ref(false)` 改为从 `useWebSocket()` 导入，确保状态与实际 WebSocket 一致
+- **useWebSocket 类型安全** — odometry 解析从 `as number` 不安全断言改为运行时 `typeof` 校验
+- **useWebSocket 错误处理** — `sendCommand` 和所有 `ws.value.send()` 调用处添加 try-catch，防止连接异常时抛出未捕获错误
+- **移除录制空操作** — 移除 VideoPlayer 录制按钮和 `isRecording` 状态（功能仅为翻转 boolean，无实际录制逻辑）
+- **clippy 警告** — 为 `AppState`、`SerialManager`、`WebSocketManager` 添加 `Default` trait 实现；范围检查改为 `(b'1'..=b'9').contains(&cmd_byte)`
+
+### Changed
+- **版本号统一至 1.2.0** — `Cargo.toml`、`package.json`、`main.rs`、`App.vue` 同步；`api.rs` 硬编码版本改为 `env!("CARGO_PKG_VERSION")` 实现单一来源
+
+## [1.2.0] - 2026-06-07
+
 ### Changed
 - **前端依赖大版本升级** — TailwindCSS v3 → v4（CSS-first 配置 + Oxide 引擎），Vite 5 → 8（Rolldown 统一打包器），Vue 3.4 → 3.5.35
 - 前端构建产物直接输出到后端目录
@@ -52,26 +87,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Web UI 自适应布局，不同屏幕无需滚动
 - 速度控制显示改为百分比（基于 1-9 级别映射到 0-100%）
 - 云台下按钮命令从 'D' 修正为 'J'
-- 版本号升至 1.1.0
 
 ### Fixed
-- **api.rs 空命令处理** — `handle_command` 空字符串时不再发送 0x00 到串口，改为返回 400 Bad Request
-- **api.rs StatusResponse DRY** — 三段重复构造抽取为单次构造，通过 match 统一设置变化的 serial_status/port_name/baud_rate
-- **api.rs 锁争用优化** — `get_status` 从同时持有 4 把锁改为逐把加锁、复制数据后立即释放
-- **websocket.rs 锁顺序一致** — `handle_message` command 分支改为先 `serial_manager` 后 `current_speed`，与 `get_status` 顺序一致；修复 drive_mode 分支重复加锁问题
-- **滑块 thumb 对齐** — WebKit `margin-top` 从 `-6px` 改为 `-4px`，Firefox 移除 `margin-top`
-- **TailwindCSS v4 兼容** — `@apply` 不能引用自定义组件类，改为内联样式；SpeedDashboard scoped 样式改用原生 CSS 变量
-- **移除废弃依赖** — `autoprefixer`、`postcss`（TailwindCSS v4 内置），`tailwind.config.js`、`postcss.config.js`（迁移到 CSS `@theme`）
-- **速度显示异常** — `current_speed` 初始值 128 导致显示 1422%，改为 5（速度等级）
-- **速度命令同步** — WebSocket 收到 '1'-'9' 命令时同步更新后端 `current_speed`
-- **SpeedDashboard 数据** — 改用 WebSocket odometry 数据显示实际轮速（cm/s），移除 `/api/status` 轮询
-- **StatusBar 速度显示** — 添加 clamp 保护（1-9），防止异常值显示
-- **速度滑块对齐** — 滑块轨道与快速按钮统一左右边距（`ml-5 mr-5`），确保视觉对齐
-- **速度滑块无极调节** — step 从 1 改为 0.1，移除下方快速按钮，发送固件时取整
-- **滑块 thumb 对齐** — 添加 `margin-top: -6px` + `box-sizing: border-box`，thumb 中心与轨道中心对齐
-- **serial.rs 阻塞 I/O 修复** — `run_serial_task` 使用 `tokio::task::spawn_blocking()` 包装阻塞串口 I/O，避免阻塞 Tokio 运行时
-- **serial.rs 锁优化** — `serial_manager` 改用 `std::sync::Mutex`，读取数据后立即释放锁，再单独获取 `video_frame`/`odometry` 锁，消除同时持有多把锁的情况
-- **Rust 自动构建前端** — 新增 `build.rs`，`cargo build` 时自动检测并构建前端（支持 bun）
+- 滑块 thumb 对齐 — WebKit `margin-top` 从 `-6px` 改为 `-4px`，Firefox 移除 `margin-top`
+- TailwindCSS v4 兼容 — `@apply` 不能引用自定义组件类，改为内联样式；SpeedDashboard scoped 样式改用原生 CSS 变量
+- 移除废弃依赖 — `autoprefixer`、`postcss`（TailwindCSS v4 内置），`tailwind.config.js`、`postcss.config.js`（迁移到 CSS `@theme`）
+- 速度显示异常 — `current_speed` 初始值 128 导致显示 1422%，改为 5（速度等级）
+- 速度命令同步 — WebSocket 收到 '1'-'9' 命令时同步更新后端 `current_speed`
+- SpeedDashboard 数据 — 改用 WebSocket odometry 数据显示实际轮速（cm/s），移除 `/api/status` 轮询
+- StatusBar 速度显示 — 添加 clamp 保护（1-9），防止异常值显示
+- 速度滑块对齐 — 滑块轨道与快速按钮统一左右边距（`ml-5 mr-5`），确保视觉对齐
+- 速度滑块无极调节 — step 从 1 改为 0.1，移除下方快速按钮，发送固件时取整
+- 滑块 thumb 对齐 — 添加 `margin-top: -6px` + `box-sizing: border-box`，thumb 中心与轨道中心对齐
+- Rust 自动构建前端 — 新增 `build.rs`，`cargo build` 时自动检测并构建前端（支持 bun）
 - 修复前端未使用变量导致的 `vue-tsc` 编译错误
 - 修复 axum 0.8 中 `nest_service` 在根路径不再支持的问题
 

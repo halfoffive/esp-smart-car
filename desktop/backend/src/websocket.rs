@@ -40,6 +40,12 @@ pub struct WebSocketManager {
     next_id: u64,
 }
 
+impl Default for WebSocketManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WebSocketManager {
     pub fn new() -> Self {
         Self {
