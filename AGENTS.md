@@ -202,5 +202,5 @@ Key connections:
 
 在修改代码时，严格遵守：
 
-- **编程风格**: 函数式编程，大量中文注释。
+- **编程风格**: 函数式编程，大量中文注释。Rust 部分，使用`cargo fmt`格式化，合理编写自动化测试，必须`cargo clippy`和自动化测试全过。
 - **当完成修改时**: 更新"AGENTS.md","CHANGELOG.md","README.md"，然后提交并推送git。
