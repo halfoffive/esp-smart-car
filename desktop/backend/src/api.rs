@@ -98,7 +98,7 @@ pub async fn handle_command(
         }
     };
 
-    let mut manager = state.serial_manager.lock().await;
+    let mut manager = state.serial_manager.lock().unwrap();
 
     match manager.send_command(cmd) {
         Ok(()) => {
@@ -128,7 +128,7 @@ pub async fn handle_command(
 pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json<StatusResponse>) {
     // 逐把加锁，复制数据后立即释放，减少锁争用
     let (serial_status, port_name, baud_rate, frame_count, bytes_sent, command_count) = {
-        let manager = state.serial_manager.lock().await;
+        let manager = state.serial_manager.lock().unwrap();
         let (serial_status, port_name, baud_rate) = match &manager.state {
             SerialConnectionState::Disconnected => ("未连接".to_string(), None, None),
             SerialConnectionState::Connecting => ("连接中".to_string(), None, None),
@@ -195,7 +195,7 @@ pub async fn connect_serial(
 ) -> (StatusCode, Json<ApiResponse>) {
     let baud_rate = request.baud_rate.unwrap_or(DEFAULT_BAUD_RATE);
 
-    let mut manager = state.serial_manager.lock().await;
+    let mut manager = state.serial_manager.lock().unwrap();
 
     // 先断开现有连接
     manager.disconnect();
@@ -228,7 +228,7 @@ pub async fn connect_serial(
 pub async fn disconnect_serial(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    let mut manager = state.serial_manager.lock().await;
+    let mut manager = state.serial_manager.lock().unwrap();
     manager.disconnect();
 
     info!("串口已断开");

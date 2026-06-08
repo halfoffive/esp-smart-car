@@ -14,6 +14,7 @@
  * 接收：[0xAA][0x55][帧大小(4字节)][帧数据]
  */
 use std::io::{Read, Write};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -200,7 +201,6 @@ impl SerialManager {
                                 self.line_buffer.clear();
                                 return Some(line);
                             }
-                            self.line_buffer.clear();
                         }
                     }
                     Err(_) => {
@@ -285,6 +285,18 @@ impl SerialManager {
     }
 }
 
+/// 串口任务结果（用于 spawn_blocking 与 async 上下文间传递数据）
+enum SerialTaskResult {
+    /// 读取到视频帧
+    VideoFrame(Vec<u8>),
+    /// 读取到测速数据行
+    OdometryLine(String),
+    /// 无数据
+    NoData,
+    /// 错误
+    Error(String),
+}
+
 /// 串口通信任务（在独立线程中运行）
 pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
     info!("串口通信任务启动");
@@ -294,34 +306,60 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
     loop {
         // 检查串口是否连接
         let is_connected = {
-            let manager = state.serial_manager.lock().await;
+            let manager = state.serial_manager.lock().unwrap();
             matches!(manager.state, SerialConnectionState::Connected { .. })
         };
 
         if is_connected {
-            let mut manager = state.serial_manager.lock().await;
+            let state_clone = Arc::clone(&state);
+            let mut local_buffer = frame_buffer.clone();
 
-            // 读取视频帧
-            match manager.read_video_frame(&mut frame_buffer) {
-                Ok(true) => {
-                    // 成功读取帧，更新共享状态
+            // 在 spawn_blocking 中执行阻塞 I/O，避免阻塞 Tokio 运行时
+            let result = tokio::task::spawn_blocking(move || {
+                let mut manager = state_clone.serial_manager.lock().unwrap();
+
+                // 读取视频帧
+                match manager.read_video_frame(&mut local_buffer) {
+                    Ok(true) => SerialTaskResult::VideoFrame(local_buffer),
+                    Ok(false) => {
+                        // 尝试读取测速数据行
+                        if let Some(line) = manager.read_line() {
+                            SerialTaskResult::OdometryLine(line)
+                        } else {
+                            SerialTaskResult::NoData
+                        }
+                    }
+                    Err(e) => SerialTaskResult::Error(e.to_string()),
+                }
+            }).await;
+
+            match result {
+                Ok(SerialTaskResult::VideoFrame(buffer)) => {
+                    frame_buffer = buffer;
+                    // serial_manager 锁已释放，单独获取 video_frame 锁
                     let mut video = state.video_frame.lock().await;
                     *video = Some(frame_buffer.clone());
                 }
-                Ok(false) => {
-                    // 尝试读取测速数据行
-                    if let Some(line) = manager.read_line() {
-                        if let Some(odom_data) = SerialManager::parse_odometry_line(&line) {
-                            let mut odom = state.odometry.lock().await;
-                            *odom = odom_data;
-                            debug!("测速数据: 左={}mm/s, 右={}mm/s, 航向={}rad",
-                                   odom.left_speed_mmps as f64, odom.right_speed_mmps as f64, odom.heading as f64);
-                        }
+                Ok(SerialTaskResult::OdometryLine(line)) => {
+                    // serial_manager 锁已释放，单独获取 odometry 锁
+                    if let Some(odom_data) = SerialManager::parse_odometry_line(&line) {
+                        let mut odom = state.odometry.lock().await;
+                        *odom = odom_data;
+                        debug!("测速数据: 左={}mm/s, 右={}mm/s, 航向={}rad",
+                               odom.left_speed_mmps as f64, odom.right_speed_mmps as f64, odom.heading as f64);
                     }
                 }
-                Err(e) => {
+                Ok(SerialTaskResult::NoData) => {
+                    // 无数据，短暂等待
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Ok(SerialTaskResult::Error(e)) => {
                     error!("串口读取错误: {}", e);
+                    let mut manager = state.serial_manager.lock().unwrap();
                     manager.disconnect();
+                }
+                Err(e) => {
+                    error!("串口任务执行错误: {}", e);
                 }
             }
         } else {

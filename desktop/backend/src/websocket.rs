@@ -237,13 +237,14 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             // 转发命令到串口
             if let Some(cmd_byte) = data.bytes().next() {
                 // 先获取 serial_manager 锁（与 get_status 锁顺序一致：serial_manager → current_speed）
-                let mut manager = state.serial_manager.lock().await;
-                if let Err(e) = manager.send_command(cmd_byte) {
-                    warn!("发送命令失败: {}", e);
-                } else {
-                    debug!("转发命令: {}", data);
-                }
-                drop(manager); // 显式释放 serial_manager 锁
+                {
+                    let mut manager = state.serial_manager.lock().unwrap();
+                    if let Err(e) = manager.send_command(cmd_byte) {
+                        warn!("发送命令失败: {}", e);
+                    } else {
+                        debug!("转发命令: {}", data);
+                    }
+                } // 显式释放 serial_manager 锁
 
                 // 如果是速度等级命令(1-9)，同步更新 current_speed
                 if (b'1'..=b'9').contains(&cmd_byte) {
@@ -274,9 +275,11 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
                     2 => 'B', // 航向锁定模式
                     _ => 'L',
                 };
-                let mut manager = state.serial_manager.lock().await;
-                let _ = manager.send_command(cmd as u8);
-                let _ = manager.send_command(mode as u8);
+                {
+                    let mut manager = state.serial_manager.lock().unwrap();
+                    let _ = manager.send_command(cmd as u8);
+                    let _ = manager.send_command(mode as u8);
+                }
                 info!("切换行走模式: {}", mode);
             }
         }

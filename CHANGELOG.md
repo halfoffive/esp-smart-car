@@ -69,6 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **速度滑块对齐** — 滑块轨道与快速按钮统一左右边距（`ml-5 mr-5`），确保视觉对齐
 - **速度滑块无极调节** — step 从 1 改为 0.1，移除下方快速按钮，发送固件时取整
 - **滑块 thumb 对齐** — 添加 `margin-top: -6px` + `box-sizing: border-box`，thumb 中心与轨道中心对齐
+- **serial.rs 阻塞 I/O 修复** — `run_serial_task` 使用 `tokio::task::spawn_blocking()` 包装阻塞串口 I/O，避免阻塞 Tokio 运行时
+- **serial.rs 锁优化** — `serial_manager` 改用 `std::sync::Mutex`，读取数据后立即释放锁，再单独获取 `video_frame`/`odometry` 锁，消除同时持有多把锁的情况
 - **Rust 自动构建前端** — 新增 `build.rs`，`cargo build` 时自动检测并构建前端（支持 bun）
 - 修复前端未使用变量导致的 `vue-tsc` 编译错误
 - 修复 axum 0.8 中 `nest_service` 在根路径不再支持的问题

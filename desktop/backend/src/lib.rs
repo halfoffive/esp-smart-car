@@ -9,13 +9,12 @@ pub mod websocket;
 pub use serial::OdometryData;
 
 use std::sync::Arc;
-
 use tokio::sync::Mutex;
 
 /// 应用状态（共享状态）
 pub struct AppState {
-    /// 串口连接管理器
-    pub serial_manager: Arc<Mutex<serial::SerialManager>>,
+    /// 串口连接管理器（使用 std::sync::Mutex，因为串口 I/O 是阻塞的）
+    pub serial_manager: Arc<std::sync::Mutex<serial::SerialManager>>,
     /// WebSocket连接管理器
     pub ws_manager: Arc<Mutex<websocket::WebSocketManager>>,
     /// 视频帧数据
@@ -34,7 +33,7 @@ impl AppState {
     /// 创建新状态
     pub fn new() -> Self {
         Self {
-            serial_manager: Arc::new(Mutex::new(serial::SerialManager::new())),
+            serial_manager: Arc::new(std::sync::Mutex::new(serial::SerialManager::new())),
             ws_manager: Arc::new(Mutex::new(websocket::WebSocketManager::new())),
             video_frame: Arc::new(Mutex::new(None)),
             current_speed: Arc::new(Mutex::new(5)),

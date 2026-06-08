@@ -237,6 +237,11 @@ cargo test         # 运行所有 Rust 测试（无需硬件连接）
 
 ## 版本历史
 
+- v1.2.2 - 2026-06-08
+  - 修复 serial.rs 阻塞 I/O 在 async 上下文问题（`run_serial_task` 改用 `tokio::task::spawn_blocking()`）
+  - 优化 serial.rs 锁持有时间（`serial_manager` 改用 `std::sync::Mutex`，读取数据后立即释放）
+  - 移除 serial.rs `read_line` 冗余 `line_buffer.clear()`
+
 - v1.2.1 - 2026-06-08
   - 修复 api.rs 空命令发送 0x00 问题（改为返回 400 Bad Request）
   - 重构 api.rs StatusResponse 构造（DRY，消除三段重复代码）
