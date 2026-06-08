@@ -185,7 +185,7 @@ impl SerialManager {
             Err(anyhow::anyhow!("串口未连接"))
         }
     }
-    
+
     /// 读取串口行数据（非视频帧，测速JSON行）
     /// 返回完整行（去除换行符）
     pub fn read_line(&mut self) -> Option<String> {
@@ -198,8 +198,9 @@ impl SerialManager {
                         // 检测换行符
                         if byte[0] == b'\n' {
                             // 去除可能的 \r\n
-                            while self.line_buffer.last() == Some(&b'\n') || 
-                                  self.line_buffer.last() == Some(&b'\r') {
+                            while self.line_buffer.last() == Some(&b'\n')
+                                || self.line_buffer.last() == Some(&b'\r')
+                            {
                                 self.line_buffer.pop();
                             }
                             if !self.line_buffer.is_empty() {
@@ -218,21 +219,21 @@ impl SerialManager {
         }
         None
     }
-    
+
     /// 解析测速JSON行
     /// 格式: {"t":"odom","ls":左速度,"rs":右速度,"hd":航向*100,"dist":距离}
     pub fn parse_odometry_line(line: &str) -> Option<OdometryData> {
         if !line.contains("\"t\":\"odom\"") {
             return None;
         }
-        
+
         let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
-        
+
         let left_speed = parsed["ls"].as_f64()? as f32;
         let right_speed = parsed["rs"].as_f64()? as f32;
         let heading_x100 = parsed["hd"].as_f64()? as f32;
         let total_dist = parsed["dist"].as_f64()? as f32;
-        
+
         Some(OdometryData {
             left_speed_mmps: left_speed,
             right_speed_mmps: right_speed,
@@ -318,7 +319,8 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
 
         if is_connected {
             let state_clone = Arc::clone(&state);
-            let mut local_buffer = frame_buffer.clone();
+            // 使用 std::mem::take 获取所有权，避免不必要的 clone
+            let mut local_buffer = std::mem::take(&mut frame_buffer);
 
             // 在 spawn_blocking 中执行阻塞 I/O，避免阻塞 Tokio 运行时
             let result = tokio::task::spawn_blocking(move || {
@@ -337,22 +339,29 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                     }
                     Err(e) => SerialTaskResult::Error(e.to_string()),
                 }
-            }).await;
+            })
+            .await;
 
             match result {
                 Ok(SerialTaskResult::VideoFrame(buffer)) => {
+                    // 帧数据使用 std::mem::take 避免再次 clone
                     frame_buffer = buffer;
+                    let frame_data = frame_buffer.clone();
                     // serial_manager 锁已释放，单独获取 video_frame 锁
                     let mut video = state.video_frame.lock().await;
-                    *video = Some(frame_buffer.clone());
+                    *video = Some(frame_data);
                 }
                 Ok(SerialTaskResult::OdometryLine(line)) => {
                     // serial_manager 锁已释放，单独获取 odometry 锁
                     if let Some(odom_data) = SerialManager::parse_odometry_line(&line) {
                         let mut odom = state.odometry.lock().await;
                         *odom = odom_data;
-                        debug!("测速数据: 左={}mm/s, 右={}mm/s, 航向={}rad",
-                               odom.left_speed_mmps as f64, odom.right_speed_mmps as f64, odom.heading as f64);
+                        debug!(
+                            "测速数据: 左={}mm/s, 右={}mm/s, 航向={}rad",
+                            odom.left_speed_mmps as f64,
+                            odom.right_speed_mmps as f64,
+                            odom.heading as f64
+                        );
                     }
                 }
                 Ok(SerialTaskResult::NoData) => {
@@ -364,8 +373,19 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                     let mut manager = state.serial_manager.lock().unwrap();
                     manager.disconnect();
                 }
+                Err(e) if e.is_panic() => {
+                    // spawn_blocking 任务 panic，记录详细信息
+                    error!("串口任务 panic: {:?}，可能需要重启", e);
+                    let mut manager = state.serial_manager.lock().unwrap();
+                    manager.disconnect();
+                }
+                Err(e) if e.is_cancelled() => {
+                    // 任务被正常取消，静默处理
+                    debug!("串口阻塞任务被取消");
+                }
                 Err(e) => {
-                    error!("串口任务执行错误: {}", e);
+                    // 其他未知 JoinError
+                    warn!("串口任务执行错误: {}", e);
                 }
             }
         } else {
@@ -410,7 +430,7 @@ mod tests {
     #[test]
     fn test_parse_odometry_line_valid() {
         let line = r#"{"t":"odom","ls":100.5,"rs":99.3,"hd":18000,"dist":12345}"#;
-        let odom = SerialManager::parse_odometry_line(line).unwrap();
+        let odom = SerialManager::parse_odometry_line(line).expect("解析有效测速 JSON 失败");
         assert!((odom.left_speed_mmps - 100.5).abs() < 0.1);
         assert!((odom.right_speed_mmps - 99.3).abs() < 0.1);
         assert!((odom.heading - 180.0).abs() < 0.1);

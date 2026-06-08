@@ -132,12 +132,15 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
         let (serial_status, port_name, baud_rate) = match &manager.state {
             SerialConnectionState::Disconnected => ("未连接".to_string(), None, None),
             SerialConnectionState::Connecting => ("连接中".to_string(), None, None),
-            SerialConnectionState::Connected { port_name, baud_rate } => {
-                ("已连接".to_string(), Some(port_name.clone()), Some(*baud_rate))
-            }
-            SerialConnectionState::Error(msg) => {
-                (format!("错误: {}", msg), None, None)
-            }
+            SerialConnectionState::Connected {
+                port_name,
+                baud_rate,
+            } => (
+                "已连接".to_string(),
+                Some(port_name.clone()),
+                Some(*baud_rate),
+            ),
+            SerialConnectionState::Error(msg) => (format!("错误: {}", msg), None, None),
         };
         (
             serial_status,
@@ -245,12 +248,18 @@ pub async fn disconnect_serial(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::extract::State;
+
+    /// 辅助函数：创建测试用 AppState
+    fn create_test_state() -> Arc<AppState> {
+        Arc::new(AppState::new())
+    }
 
     /// 测试 CommandRequest 反序列化（含 speed）
     #[test]
     fn test_command_request_with_speed() {
         let json = r#"{"command":"W","speed":5}"#;
-        let req: CommandRequest = serde_json::from_str(json).unwrap();
+        let req: CommandRequest = serde_json::from_str(json).expect("CommandRequest 反序列化失败");
         assert_eq!(req.command, "W");
         assert_eq!(req.speed, Some(5));
     }
@@ -259,7 +268,7 @@ mod tests {
     #[test]
     fn test_command_request_without_speed() {
         let json = r#"{"command":"S"}"#;
-        let req: CommandRequest = serde_json::from_str(json).unwrap();
+        let req: CommandRequest = serde_json::from_str(json).expect("CommandRequest 反序列化失败");
         assert_eq!(req.command, "S");
         assert_eq!(req.speed, None);
     }
@@ -268,7 +277,7 @@ mod tests {
     #[test]
     fn test_connect_request_with_baud_rate() {
         let json = r#"{"port_name":"COM3","baud_rate":115200}"#;
-        let req: ConnectRequest = serde_json::from_str(json).unwrap();
+        let req: ConnectRequest = serde_json::from_str(json).expect("ConnectRequest 反序列化失败");
         assert_eq!(req.port_name, "COM3");
         assert_eq!(req.baud_rate, Some(115200));
     }
@@ -277,7 +286,7 @@ mod tests {
     #[test]
     fn test_connect_request_without_baud_rate() {
         let json = r#"{"port_name":"/dev/ttyUSB0"}"#;
-        let req: ConnectRequest = serde_json::from_str(json).unwrap();
+        let req: ConnectRequest = serde_json::from_str(json).expect("ConnectRequest 反序列化失败");
         assert_eq!(req.port_name, "/dev/ttyUSB0");
         assert_eq!(req.baud_rate, None);
     }
@@ -289,7 +298,7 @@ mod tests {
             success: true,
             message: "ok".to_string(),
         };
-        let json = serde_json::to_string(&resp).unwrap();
+        let json = serde_json::to_string(&resp).expect("ApiResponse 序列化失败");
         assert!(json.contains("\"success\":true"));
         assert!(json.contains("\"message\":\"ok\""));
     }
@@ -313,9 +322,92 @@ mod tests {
             total_distance: 0.0,
             command_count: 0,
         };
-        let json = serde_json::to_string(&resp).unwrap();
+        let json = serde_json::to_string(&resp).expect("StatusResponse 序列化失败");
         assert!(json.contains("\"serial_status\":\"未连接\""));
         assert!(json.contains("\"current_speed\":5"));
         assert!(json.contains("\"version\":\"1.2.0\""));
+    }
+
+    /// 测试超长命令处理：handle_command 应只取第一个字节，不 panic
+    #[tokio::test]
+    async fn test_handle_command_too_long() {
+        let state = create_test_state();
+
+        // 构造一个超长命令字符串（256 字节）
+        let long_command = "W".repeat(256);
+        let request = CommandRequest {
+            command: long_command,
+            speed: None,
+        };
+
+        // 调用 handle_command（无串口连接时应返回 503）
+        let (status, Json(resp)) = handle_command(State(state), Json(request)).await;
+
+        // 无串口连接时发送失败，但不应 panic
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "无串口连接时应返回 503 状态码"
+        );
+        assert!(!resp.success, "发送失败时 success 应为 false");
+    }
+
+    /// 测试特殊字符命令处理：包括空格、换行符、Unicode 等
+    #[tokio::test]
+    async fn test_handle_command_special_chars() {
+        let state = create_test_state();
+
+        // 测试空格命令（空格是有效的停车命令）
+        let request = CommandRequest {
+            command: " ".to_string(),
+            speed: None,
+        };
+        let (status, _) = handle_command(State(state.clone()), Json(request)).await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "空格命令无串口时应返回 503"
+        );
+
+        // 测试换行符命令
+        let request = CommandRequest {
+            command: "\n".to_string(),
+            speed: None,
+        };
+        let (status, _) = handle_command(State(state.clone()), Json(request)).await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "换行符命令无串口时应返回 503"
+        );
+
+        // 测试 Unicode 字符命令
+        let request = CommandRequest {
+            command: "你".to_string(),
+            speed: None,
+        };
+        let (status, _) = handle_command(State(state.clone()), Json(request)).await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Unicode 命令无串口时应返回 503"
+        );
+
+        // 测试空命令（应返回 400 Bad Request）
+        let request = CommandRequest {
+            command: "".to_string(),
+            speed: None,
+        };
+        let (status, Json(resp)) = handle_command(State(state), Json(request)).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "空命令应返回 400 Bad Request"
+        );
+        assert!(!resp.success, "空命令应返回 success=false");
+        assert!(
+            resp.message.contains("不能为空"),
+            "空命令错误消息应包含'不能为空'"
+        );
     }
 }

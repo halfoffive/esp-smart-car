@@ -213,12 +213,19 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
     // 检查帧序号
     if (packet->frameId != g_videoBuffer.frameId) return;
     
-    // 追加数据
-    if (g_videoBuffer.size + packet->dataLen <= g_videoBuffer.capacity) {
-        memcpy(g_videoBuffer.data + g_videoBuffer.size, packet->data, packet->dataLen);
-        g_videoBuffer.size += packet->dataLen;
-        g_videoBuffer.packetsReceived++;
+    // 追加数据（帧缓冲区溢出保护）
+    // 安全检查：如果当前数据写入会超出缓冲区边界，
+    // 丢弃当前帧并重置缓冲区，防止内存越界写入
+    if (g_videoBuffer.size + packet->dataLen > g_videoBuffer.capacity) {
+        // 缓冲区溢出，丢弃当前帧，重置状态
+        g_videoBuffer.size = 0;
+        g_videoBuffer.packetsReceived = 0;
+        g_videoBuffer.isComplete = false;
+        return;
     }
+    memcpy(g_videoBuffer.data + g_videoBuffer.size, packet->data, packet->dataLen);
+    g_videoBuffer.size += packet->dataLen;
+    g_videoBuffer.packetsReceived++;
     
     // 检查帧是否完整
     if (g_videoBuffer.packetsReceived >= g_videoBuffer.totalPackets) {
@@ -226,10 +233,16 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
         
         // 通过USB串口发送完整帧
         // 格式: [0xAA][0x55][帧大小(4字节)][帧数据]
-        const uint8_t header[] = {0xAA, 0x55};
-        Serial.write(header, 2);
-        Serial.write(reinterpret_cast<const uint8_t*>(&g_videoBuffer.size), 4);
-        Serial.write(g_videoBuffer.data, g_videoBuffer.size);
+        // Serial缓冲区溢出检查：确保发送空间足够，
+        // 否则丢弃当前帧避免阻塞或数据截断
+        const size_t totalWriteLen = 2 + 4 + g_videoBuffer.size;  // header + size + data
+        if (static_cast<size_t>(Serial.availableForWrite()) >= totalWriteLen) {
+            const uint8_t header[] = {0xAA, 0x55};
+            Serial.write(header, 2);
+            Serial.write(reinterpret_cast<const uint8_t*>(&g_videoBuffer.size), 4);
+            Serial.write(g_videoBuffer.data, g_videoBuffer.size);
+        }
+        // else: Serial缓冲区不足，丢弃当前帧（视频允许丢帧）
         
         g_videoBuffer.isComplete = false;
         g_videoBuffer.size = 0;

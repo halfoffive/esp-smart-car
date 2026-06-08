@@ -1,5 +1,5 @@
 <template>
-  <div class="panel flex-1 flex flex-col min-h-0">
+  <div class="panel flex-1 flex flex-col min-h-0" role="region" aria-label="实时视频区域">
     <div class="panel-header flex items-center justify-between py-2">
       <span class="text-sm">实时视频</span>
       <div class="flex items-center gap-2">
@@ -9,11 +9,11 @@
       </div>
     </div>
     
-    <div class="video-container flex-1 min-h-0 relative">
+    <div class="video-container flex-1 min-h-0 relative" aria-label="视频画面">
       <img 
         v-if="videoSrc"
         :src="videoSrc"
-        alt="实时视频"
+        alt="智能车实时摄像头画面"
         class="w-full h-full object-contain"
       />
       
@@ -29,7 +29,7 @@
       </div>
       
       
-      <div class="absolute top-2 right-2">
+      <div class="absolute top-2 right-2" role="status" aria-live="polite">
         <span v-if="isConnected" class="status-online text-xs">
           <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></span>
           已连接
@@ -45,6 +45,7 @@
       <button 
         @click="takeSnapshot"
         class="btn-secondary flex-1 text-xs py-1.5"
+        aria-label="截取当前视频画面"
       >
         拍照
       </button>

@@ -22,6 +22,7 @@ use axum::{
 use base64::Engine;
 use futures::{sink::SinkExt, stream::StreamExt};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::AppState;
@@ -122,7 +123,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     if let Err(e) = tx.send(Message::Text(welcome.to_string().into())).await {
         error!("发送欢迎消息失败: {}", e);
-        forward_task.abort();
+        // 关闭转发通道，优雅停止 forward_task
+        drop(tx);
+        let _ = forward_task.await;
         {
             let mut manager = state.ws_manager.lock().await;
             manager.remove_client(client_id);
@@ -130,11 +133,21 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         return;
     }
 
+    // 创建取消令牌，用于优雅关闭视频广播任务
+    let cancel_token = CancellationToken::new();
+
     // 视频任务：通过 mpsc tx 发送视频帧
     let video_tx = tx.clone();
     let video_state = state.clone();
+    let video_cancel = cancel_token.clone();
     let video_task = tokio::spawn(async move {
         loop {
+            // 检查取消信号
+            if video_cancel.is_cancelled() {
+                debug!("视频广播任务收到取消信号，优雅退出");
+                break;
+            }
+
             // 获取视频帧
             let frame = {
                 let video = video_state.video_frame.lock().await;
@@ -181,8 +194,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
 
-            // 控制帧率
-            tokio::time::sleep(std::time::Duration::from_millis(33)).await; // ~30 FPS
+            // 使用 select! 等待帧率间隔或取消信号
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(33)) => {} // ~30 FPS
+                _ = video_cancel.cancelled() => {
+                    debug!("视频广播任务收到取消信号，优雅退出");
+                    break;
+                }
+            }
         }
     });
 
@@ -219,10 +238,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         }
     }
 
-    // 取消视频任务
-    video_task.abort();
-    // 取消转发任务
-    forward_task.abort();
+    // 通过 CancellationToken 通知视频任务优雅退出
+    cancel_token.cancel();
+    // 等待视频任务结束（已收到取消信号，会很快退出）
+    let _ = video_task.await;
+    // 关闭转发通道（drop tx 触发 rx 结束）
+    drop(tx);
+    let _ = forward_task.await;
 
     // 注销客户端
     {
@@ -306,6 +328,11 @@ fn base64_encode(data: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    /// 辅助函数：创建测试用 AppState
+    fn create_test_state() -> Arc<AppState> {
+        Arc::new(AppState::new())
+    }
+
     /// 测试 WebSocketManager 初始状态
     #[test]
     fn test_ws_manager_new() {
@@ -348,5 +375,190 @@ mod tests {
     fn test_base64_encode() {
         let encoded = base64_encode(&[0x00, 0x01, 0x02]);
         assert_eq!(encoded, "AAEC");
+    }
+
+    /// 测试 handle_message 处理命令消息（无串口连接时不 panic，函数正常返回）
+    #[tokio::test]
+    async fn test_handle_message_command() {
+        let state = create_test_state();
+        let msg = r#"{"type":"command","data":"W"}"#;
+
+        // 无串口连接时，send_command 会失败但 handle_message 本身应正常返回 Ok
+        let result = handle_message(msg, &state).await;
+        assert!(
+            result.is_ok(),
+            "handle_message 处理命令消息时不应返回错误: {:?}",
+            result
+        );
+    }
+
+    /// 测试 handle_message 处理速度等级命令（'1'-'9'），验证 current_speed 被更新
+    #[tokio::test]
+    async fn test_handle_message_speed_command_updates_state() {
+        let state = create_test_state();
+        let msg = r#"{"type":"command","data":"7"}"#;
+
+        let result = handle_message(msg, &state).await;
+        assert!(
+            result.is_ok(),
+            "处理速度命令不应返回错误: {:?}",
+            result
+        );
+
+        // 验证速度已更新为 7
+        let speed = *state.current_speed.lock().await;
+        assert_eq!(speed, 7, "速度等级应更新为 7");
+    }
+
+    /// 测试 handle_message 处理行走模式切换消息（无串口连接时不 panic）
+    #[tokio::test]
+    async fn test_handle_message_drive_mode() {
+        let state = create_test_state();
+
+        // 测试普通模式
+        let msg = r#"{"type":"drive_mode","mode":0}"#;
+        let result = handle_message(msg, &state).await;
+        assert!(
+            result.is_ok(),
+            "handle_message 处理行走模式消息时不应返回错误: {:?}",
+            result
+        );
+
+        // 测试直线修正模式
+        let msg = r#"{"type":"drive_mode","mode":1}"#;
+        let result = handle_message(msg, &state).await;
+        assert!(
+            result.is_ok(),
+            "handle_message 处理直线修正模式时不应返回错误: {:?}",
+            result
+        );
+
+        // 测试航向锁定模式
+        let msg = r#"{"type":"drive_mode","mode":2}"#;
+        let result = handle_message(msg, &state).await;
+        assert!(
+            result.is_ok(),
+            "handle_message 处理航向锁定模式时不应返回错误: {:?}",
+            result
+        );
+    }
+
+    /// 测试 handle_message 处理无效 JSON（应返回解析错误）
+    #[tokio::test]
+    async fn test_handle_message_invalid_json() {
+        let state = create_test_state();
+        let msg = "这不是有效的JSON";
+
+        let result = handle_message(msg, &state).await;
+        assert!(
+            result.is_err(),
+            "handle_message 处理无效 JSON 时应返回错误"
+        );
+    }
+
+    /// 测试 handle_message 处理未知消息类型（不 panic，正常返回 Ok）
+    #[tokio::test]
+    async fn test_handle_message_unknown_type() {
+        let state = create_test_state();
+        let msg = r#"{"type":"unknown_type","data":"test"}"#;
+
+        let result = handle_message(msg, &state).await;
+        assert!(
+            result.is_ok(),
+            "handle_message 处理未知消息类型时应正常返回: {:?}",
+            result
+        );
+    }
+
+    /// 测试 handle_message 处理心跳消息（验证 last_heartbeat 被更新）
+    #[tokio::test]
+    async fn test_handle_message_heartbeat() {
+        let state = create_test_state();
+
+        // 记录初始心跳时间
+        let initial = *state.last_heartbeat.lock().await;
+
+        // 短暂等待确保时间差
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let msg = r#"{"type":"heartbeat"}"#;
+        let result = handle_message(msg, &state).await;
+        assert!(
+            result.is_ok(),
+            "handle_message 处理心跳消息时不应返回错误: {:?}",
+            result
+        );
+
+        // 验证心跳时间已更新
+        let updated = *state.last_heartbeat.lock().await;
+        assert!(
+            updated > initial,
+            "心跳时间应在处理后更新"
+        );
+    }
+
+    /// 测试多客户端并发添加到 WebSocketManager，验证广播逻辑的基础：客户端管理正确性
+    #[tokio::test]
+    async fn test_multiple_clients_concurrent() {
+        let manager = Arc::new(tokio::sync::Mutex::new(WebSocketManager::new()));
+        let mut handles = Vec::new();
+
+        // 并发添加 10 个客户端
+        for _ in 0..10 {
+            let mgr = manager.clone();
+            let handle = tokio::spawn(async move {
+                let mut m = mgr.lock().await;
+                m.add_client()
+            });
+            handles.push(handle);
+        }
+
+        // 等待所有任务完成，收集客户端 ID
+        let mut ids = Vec::new();
+        for handle in handles {
+            let id = handle.await.expect("并发添加客户端任务不应 panic");
+            ids.push(id);
+        }
+
+        // 验证所有 ID 唯一
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), 10, "10 个并发客户端应分配到 10 个唯一 ID");
+
+        // 验证客户端总数正确
+        let m = manager.lock().await;
+        assert_eq!(m.client_count(), 10, "并发添加后客户端总数应为 10");
+    }
+
+    /// 测试并发添加和移除客户端的正确性
+    #[tokio::test]
+    async fn test_concurrent_add_and_remove() {
+        let manager = Arc::new(tokio::sync::Mutex::new(WebSocketManager::new()));
+
+        // 先添加 5 个客户端
+        let mut ids = Vec::new();
+        for _ in 0..5 {
+            let mut m = manager.lock().await;
+            ids.push(m.add_client());
+        }
+
+        // 并发移除前 3 个客户端
+        let mut handles = Vec::new();
+        for &id in &ids[..3] {
+            let mgr = manager.clone();
+            let handle = tokio::spawn(async move {
+                let mut m = mgr.lock().await;
+                m.remove_client(id);
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            handle.await.expect("并发移除客户端任务不应 panic");
+        }
+
+        // 验证剩余客户端数
+        let m = manager.lock().await;
+        assert_eq!(m.client_count(), 2, "移除 3 个后应剩余 2 个客户端");
     }
 }

@@ -160,8 +160,13 @@ inline PIDState computePID(
     uint32_t currentTime
 ) {
     // 计算时间间隔（秒）
-    const float dt = (currentTime - lastState.lastTime > 0) 
-        ? static_cast<float>(currentTime - lastState.lastTime) / 1000.0f 
+    // 溢出安全性说明：millis() 返回 uint32_t，约 49 天溢出回绕。
+    // 无符号减法 (currentTime - lastState.lastTime) 在 C++ 中
+    // 对 uint32_t 类型是安全的：即使溢出，差值仍然正确（模 2^32 算术）。
+    // 此处先计算无符号差值，再转换为 float，确保溢出安全。
+    const uint32_t dtMs = currentTime - lastState.lastTime;
+    const float dt = (dtMs > 0) 
+        ? static_cast<float>(dtMs) / 1000.0f 
         : 0.01f;
     
     // 当前误差

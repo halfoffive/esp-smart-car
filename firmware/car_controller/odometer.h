@@ -319,21 +319,30 @@ inline void updateOdometer() {
 /**
  * 获取当前测速数据
  * 返回不可变的测速数据结构
+ * 
+ * 注意：读取 volatile 脉冲计数器时必须关中断，
+ * 防止ISR在读取过程中修改数据导致撕裂读取
  */
 inline OdometryData getCurrentOdometry() {
+    // 关中断读取所有ISR共享的volatile变量（脉冲计数器）
+    noInterrupts();
+    const uint32_t leftPulses = OdometerState::g_leftPulses;
+    const uint32_t rightPulses = OdometerState::g_rightPulses;
+    interrupts();
+    
     return OdometryData(
         WheelSpeed(
             OdometerState::g_leftRpm,
             OdometerState::g_leftSpeedMmps,
             OdometerState::g_leftDistanceMm,
-            OdometerState::g_leftPulses,
+            leftPulses,
             OdometerState::g_lastSampleTime
         ),
         WheelSpeed(
             OdometerState::g_rightRpm,
             OdometerState::g_rightSpeedMmps,
             OdometerState::g_rightDistanceMm,
-            OdometerState::g_rightPulses,
+            rightPulses,
             OdometerState::g_lastSampleTime
         ),
         (OdometerState::g_leftSpeedMmps + OdometerState::g_rightSpeedMmps) / 2.0f,

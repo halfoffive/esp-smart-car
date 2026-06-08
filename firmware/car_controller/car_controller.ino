@@ -29,6 +29,17 @@
 #include "pid_control.h"
 
 // ============================================
+// 调试配置（条件编译开关）
+// 设为 1 启用对应模块的调试日志，0 关闭
+// 生产环境应全部设为 0 以减少串口占用和CPU开销
+// ============================================
+#define DEBUG_MOTOR 0      // 电机调试日志
+#define DEBUG_SERVO 0      // 舵机调试日志
+#define DEBUG_WIRELESS 0   // 无线调试日志
+#define DEBUG_ODOMETRY 0   // 测速调试日志
+#define DEBUG_PID 0        // PID调试日志
+
+// ============================================
 // 全局状态（可变状态，在主循环中更新）
 // ============================================
 
@@ -114,9 +125,11 @@ void handleMoveCommand(const char cmd) {
     // 更新时间戳
     g_lastCmdTime = millis();
     
+#if DEBUG_MOTOR
     Serial.printf("[运动命令] 执行: %c, 速度: %d, 智能修正: %s\n", 
                   cmd, g_currentSpeed, 
                   g_smartDriveEnabled ? "ON" : "OFF");
+#endif
 }
 
 /**
@@ -126,10 +139,12 @@ void handleMoveCommand(const char cmd) {
  */
 void handleServoCommand(const char cmd) {
     g_currentGimbal = parseGimbalCommand(g_currentGimbal, cmd);
+#if DEBUG_SERVO
     Serial.printf("[舵机命令] 执行: %c, 目标角度 H:%d V:%d\n", 
                   cmd, 
                   g_currentGimbal.horizontal.targetAngle,
                   g_currentGimbal.vertical.targetAngle);
+#endif
 }
 
 /**
@@ -138,7 +153,9 @@ void handleServoCommand(const char cmd) {
  */
 void handleSpeedCommand(const uint8_t speed) {
     g_currentSpeed = speed;
+#if DEBUG_MOTOR
     Serial.printf("[速度设置] 新速度: %d\n", g_currentSpeed);
+#endif
 }
 
 /**
@@ -148,7 +165,9 @@ void handleStopCommand() {
     g_currentMotion = createStopState();
     applyVehicleMotion(g_currentMotion);
     g_emergencyStop = true;
+#if DEBUG_MOTOR
     Serial.println("[紧急停止] 车辆已停止");
+#endif
 }
 
 /**
@@ -158,7 +177,9 @@ void handleStopCommand() {
 void handleCalibrateCommand() {
     SpeedCalibration calib = autoCalibrate();
     setSpeedCalibration(calib.leftCorrection, calib.rightCorrection);
+#if DEBUG_PID
     Serial.println("[校准完成] 左右轮修正系数已更新");
+#endif
 }
 
 /**
@@ -183,7 +204,9 @@ void handleDriveModeCommand(const uint8_t mode) {
             g_smartDriveEnabled = true;
             break;
         default:
+#if DEBUG_MOTOR
             Serial.printf("[行走模式] 未知模式: %d\n", mode);
+#endif
             break;
     }
 }
@@ -247,7 +270,9 @@ void onDataRecv(const uint8_t* mac, const uint8_t* incomingData, int len) {
         const WirelessPacket* packet = reinterpret_cast<const WirelessPacket*>(incomingData);
         
         if (!validatePacket(*packet)) {
+#if DEBUG_WIRELESS
             Serial.println("[无线通信] 收到无效数据包");
+#endif
             return;
         }
         
@@ -362,7 +387,9 @@ void loop() {
         if (g_currentMotion.frontLeft.direction != MotorDirection::STOP) {
             g_currentMotion = createStopState();
             applyVehicleMotion(g_currentMotion);
+#if DEBUG_MOTOR
             Serial.println("[超时] 自动停止");
+#endif
         }
     }
     

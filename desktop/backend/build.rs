@@ -1,6 +1,12 @@
 use std::process::Command;
 
 fn main() {
+    // 检查是否跳过前端构建（CI 或仅修改后端时使用）
+    if std::env::var("SKIP_FRONTEND_BUILD").is_ok() {
+        println!("cargo:warning=跳过前端构建（SKIP_FRONTEND_BUILD 已设置）");
+        return;
+    }
+
     // 前端目录（相对于 backend 的父目录）
     let frontend_dir = "../frontend";
     let dist_dir = "./frontend/dist";
@@ -19,9 +25,7 @@ fn main() {
         println!("cargo:warning=前端构建产物不存在或已过期，正在自动构建前端...");
 
         // 检查 bun 是否可用
-        let bun_check = Command::new("bun")
-            .arg("--version")
-            .output();
+        let bun_check = Command::new("bun").arg("--version").output();
 
         if bun_check.is_err() {
             panic!("未找到 bun，无法自动构建前端。请手动运行: cd ../frontend && bun install && bun run build");
@@ -39,7 +43,9 @@ fn main() {
 
         // 检查 node_modules 是否存在，确保依赖已安装
         if !std::path::Path::new(&format!("{}/node_modules", frontend_dir)).exists() {
-            panic!("前端依赖安装后 node_modules 目录不存在，请手动运行: cd ../frontend && bun install");
+            panic!(
+                "前端依赖安装后 node_modules 目录不存在，请手动运行: cd ../frontend && bun install"
+            );
         }
 
         // 构建前端
@@ -73,8 +79,7 @@ fn main() {
 
 /// 检查前端源码是否比 dist 目录新
 fn check_src_newer_than_dist(src_dir: &str, dist_dir: &str) -> bool {
-    let dist_mtime = match std::fs::metadata(dist_dir)
-        .and_then(|m| m.modified()) {
+    let dist_mtime = match std::fs::metadata(dist_dir).and_then(|m| m.modified()) {
         Ok(t) => t,
         Err(_) => return true,
     };

@@ -1,12 +1,13 @@
 <template>
-  <div class="flex items-center gap-3 text-xs">
+  <div class="flex items-center gap-3 text-xs" role="status" aria-live="polite" aria-label="系统状态栏">
     <!-- WebSocket状态 -->
-    <div class="flex items-center gap-1.5">
+    <div class="flex items-center gap-1.5" aria-label="WebSocket连接状态">
       <span 
         :class="[
           'w-1.5 h-1.5 rounded-full',
           isConnected ? 'bg-green-500 animate-pulse' : 'bg-red-500'
         ]"
+        aria-hidden="true"
       ></span>
       <span class="text-dark-400">
         WS {{ isConnected ? 'ON' : 'OFF' }}
@@ -14,12 +15,13 @@
     </div>
     
     <!-- 串口状态 -->
-    <div class="flex items-center gap-1.5">
+    <div class="flex items-center gap-1.5" aria-label="串口连接状态">
       <span 
         :class="[
           'w-1.5 h-1.5 rounded-full',
           serialConnected ? 'bg-green-500' : 'bg-red-500'
         ]"
+        aria-hidden="true"
       ></span>
       <span class="text-dark-400">
         串口 {{ serialConnected ? 'ON' : 'OFF' }}
@@ -62,7 +64,7 @@ const fps = ref(0)
 const currentSpeed = ref(5)
 const frameCount = ref(0)
 
-let interval: number
+let interval: ReturnType<typeof setInterval> | null = null
 
 const updateStatus = async () => {
   try {
@@ -74,17 +76,20 @@ const updateStatus = async () => {
     // 将速度等级限制在 1-9 范围内，防止后端返回异常值
     currentSpeed.value = Math.min(9, Math.max(1, status.current_speed || 5))
     frameCount.value = status.frame_count || 0
-  } catch {
-    // 忽略错误
+  } catch (error) {
+    console.error('[StatusBar] 状态查询失败:', error)
   }
 }
 
 onMounted(() => {
   updateStatus()
-  interval = setInterval(updateStatus, 1000) as unknown as number
+  interval = setInterval(updateStatus, 1000)
 })
 
 onUnmounted(() => {
-  clearInterval(interval)
+  if (interval !== null) {
+    clearInterval(interval)
+    interval = null
+  }
 })
 </script>

@@ -45,8 +45,9 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/disconnect", post(api::disconnect_serial))
         // 静态文件（前端构建产物），支持SPA fallback到index.html
         .fallback_service(
-            tower_http::services::ServeDir::new("./frontend/dist")
-                .fallback(tower_http::services::ServeFile::new("./frontend/dist/index.html"))
+            tower_http::services::ServeDir::new("./frontend/dist").fallback(
+                tower_http::services::ServeFile::new("./frontend/dist/index.html"),
+            ),
         )
         // 注入状态
         .with_state(state);

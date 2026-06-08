@@ -132,6 +132,27 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-08 - 全面代码排查与优化
+- **范围**: 后端 Rust + 前端 Vue + 嵌入式固件三部分全面审查优化
+- **前端修复**:
+  - `useWebSocket.ts` — 闭包+单例重构消除模块级全局变量，HMR 安全；空 catch 块添加日志；定时器类型修正
+  - `useKeyboard.ts` — 重构为标准 composable，内部自动 onMounted/onUnmounted 管理生命周期
+  - `ControlPanel.vue` — 键盘监听器清理函数保存并调用；速度防抖定时器 onUnmounted 清理；连接按钮 loading 状态；useApi 替代重复 fetch；ARIA 标签
+  - `SpeedDashboard.vue` / `StatusBar.vue` — setInterval 类型修复；空 catch 块添加日志；ARIA 标签
+  - 新增 `useApi.ts` — 公共 API 调用封装（request/post/get）
+- **后端修复**:
+  - `websocket.rs` — CancellationToken 替代 .abort() 实现视频任务优雅关闭
+  - `serial.rs` — spawn_blocking JoinError 区分 panic/cancel 处理；std::mem::take 避免帧缓冲 clone
+  - `build.rs` — 添加 SKIP_FRONTEND_BUILD 环境变量跳过前端构建
+  - 测试代码 unwrap() 全部替换为 expect()
+  - 新增 9 个测试（总计 35 个），覆盖 handle_message、并发客户端、超长/特殊字符命令
+- **固件修复**:
+  - `odometer.h` — 扩大中断临界区 noInterrupts()/interrupts() 保护范围
+  - `pid_control.h` — millis() 时间差确保 uint32_t 溢出安全
+  - `receiver_dongle.ino` — 帧缓冲区边界检查防溢出；Serial 写入前空间检查
+  - `car_controller.ino` — 添加 DEBUG_MOTOR/SERVO/WIRELESS/ODOMETRY/PID 条件编译开关
+- **验证**: `bun run build` 成功；`cargo test` 35 测试全过；`cargo clippy` 0 errors
+
 ### 2026-06-08 - 前端关键 bug 修复
 - **问题**: useWebSocket.ts 存在重连竞争、多组件卸载时意外断开全局 WebSocket、双重连接；VideoPlayer.vue 组件卸载后 RAF 递归调用导致内存泄漏；ControlPanel.vue 云台指令错误（'L'/'R'）、smartDriveOn 初始值与固件不匹配、速度滑块无防抖频繁发送命令；StatusBar.vue 连接状态使用独立 ref 导致永远显示 OFF
 - **修复文件**:

@@ -1,7 +1,7 @@
 <template>
-  <div class="grid grid-cols-2 gap-2">
+  <div class="grid grid-cols-2 gap-2" role="region" aria-label="速度仪表盘">
     <!-- 当前速度（左右轮实际速度） -->
-    <div class="speed-module">
+    <div class="speed-module" aria-label="当前车轮速度">
       <div class="flex items-center gap-1 mb-0.5">
         <svg class="w-3 h-3 text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
@@ -19,7 +19,7 @@
     </div>
 
     <!-- 最高速度 -->
-    <div class="speed-module">
+    <div class="speed-module" aria-label="最高速度">
       <div class="flex items-center gap-1 mb-0.5">
         <svg class="w-3 h-3 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.293 9.293a1 1 0 011.414 0l5 5a1 1 0 01-1.414 1.414l-5-5a1 1 0 010-1.414zM14 7.586l-2 2V4h2v3.586z"/>
@@ -37,7 +37,7 @@
     </div>
 
     <!-- 平均速度 -->
-    <div class="speed-module">
+    <div class="speed-module" aria-label="平均速度">
       <div class="flex items-center gap-1 mb-0.5">
         <svg class="w-3 h-3 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
@@ -54,7 +54,7 @@
     </div>
 
     <!-- 运行时长 -->
-    <div class="speed-module">
+    <div class="speed-module" aria-label="运行时长与命令数">
       <div class="flex items-center gap-1 mb-0.5">
         <svg class="w-3 h-3 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
@@ -148,8 +148,8 @@ const runTimeUnit = computed(() => {
 })
 
 // 定期更新运行时长和命令数
-let timeInterval: number
-let statusInterval: number
+let timeInterval: ReturnType<typeof setInterval> | null = null
+let statusInterval: ReturnType<typeof setInterval> | null = null
 
 const updateRunTime = () => {
   runTimeSeconds.value = Math.floor((Date.now() - runStartTime.value) / 1000)
@@ -163,8 +163,8 @@ const updateCommandCount = async () => {
     if (status.command_count !== undefined) {
       commandCount.value = status.command_count
     }
-  } catch {
-    // 忽略错误
+  } catch (error) {
+    console.error('[SpeedDashboard] 获取命令数失败:', error)
   }
 }
 
@@ -177,13 +177,19 @@ const resetMaxSpeed = () => {
 onMounted(() => {
   runStartTime.value = Date.now()
   updateCommandCount()
-  statusInterval = setInterval(updateCommandCount, 2000) as unknown as number
-  timeInterval = setInterval(updateRunTime, 1000) as unknown as number
+  statusInterval = setInterval(updateCommandCount, 2000)
+  timeInterval = setInterval(updateRunTime, 1000)
 })
 
 onUnmounted(() => {
-  clearInterval(statusInterval)
-  clearInterval(timeInterval)
+  if (statusInterval !== null) {
+    clearInterval(statusInterval)
+    statusInterval = null
+  }
+  if (timeInterval !== null) {
+    clearInterval(timeInterval)
+    timeInterval = null
+  }
 })
 
 defineExpose({ resetMaxSpeed })

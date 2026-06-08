@@ -42,7 +42,8 @@ esp-smart-car/
 │           │   └── SpeedDashboard.vue
 │           └── composables/
 │               ├── useWebSocket.ts
-│               └── useKeyboard.ts
+│               ├── useKeyboard.ts
+│               └── useApi.ts
 └── docs/                        # 文档
     └── hardware.md              # 硬件接线说明
 ```
@@ -147,7 +148,7 @@ esp-smart-car/
 ```bash
 cd desktop/backend
 
-# 编译后端
+# 编译后端（自动构建前端，设置 SKIP_FRONTEND_BUILD=1 可跳过）
 cargo build
 
 # 运行（自动提供前端页面，访问 http://localhost:8080）
@@ -215,7 +216,8 @@ void applyVehicleMotion(const VehicleMotion& motion) {
 
 ```bash
 cd desktop/backend
-cargo test         # 运行所有 Rust 测试（无需硬件连接）
+cargo test         # 运行所有 35 个 Rust 测试（无需硬件连接）
+cargo clippy       # 静态分析检查
 ```
 
 ## 故障排除
@@ -236,6 +238,14 @@ cargo test         # 运行所有 Rust 测试（无需硬件连接）
 - 检查 PWM 信号
 
 ## 版本历史
+
+- v1.3.0 - 2026-06-08
+  - 全面代码排查与优化（前端+后端+固件）
+  - 新增 useApi.ts composable、ARIA 无障碍标签、固件调试开关
+  - useWebSocket/useKeyboard 重构，websocket.rs CancellationToken 优雅关闭
+  - 修复内存泄漏、中断安全、类型安全等问题
+  - 新增 SKIP_FRONTEND_BUILD 环境变量
+  - 自动化测试增至 35 个
 
 - v1.2.2 - 2026-06-08
   - 修复 serial.rs 阻塞 I/O 在 async 上下文问题（`run_serial_task` 改用 `tokio::task::spawn_blocking()`）

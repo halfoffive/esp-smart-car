@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Rust 自动化测试** — 25 个测试覆盖 serial/websocket/api 模块（8+5+6+1 单元 + 5 集成），无需硬件即可运行
 - **测速模块**（`odometer.h`）- 完整的编码器测速系统
   - 霍尔/红外编码器中断读取（GPIO 0/1）
   - 左右轮实时速度计算（RPM + mm/s）
@@ -44,6 +43,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 100vh 全视口布局，无滚动
   - 右侧面板适配 SpeedDashboard 模块
   - 紧凑控制面板（control-key-sm 样式）
+
+## [1.3.0] - 2026-06-08
+
+### Added
+- **新增 `useApi.ts` composable** — 公共 API 调用封装（request/post/get），替代组件内重复 fetch 调用
+- **新增 9 个后端测试** — 总计 35 个测试，覆盖 handle_message、并发客户端、超长/特殊字符命令
+- **ARIA 无障碍标签** — ControlPanel、VideoPlayer、SpeedDashboard、StatusBar 添加 role/aria-label/aria-live 属性
+- **固件调试开关** — car_controller.ino 添加 DEBUG_MOTOR/SERVO/WIRELESS/ODOMETRY/PID 条件编译宏
+- **SKIP_FRONTEND_BUILD 环境变量** — build.rs 支持跳过前端构建（加速 CI/纯后端开发）
+
+### Changed
+- **useWebSocket.ts 重构** — 闭包+单例模式消除模块级全局变量，HMR 安全
+- **useKeyboard.ts 重构** — 标准 composable，内部自动 onMounted/onUnmounted 管理生命周期
+- **websocket.rs 视频任务** — CancellationToken 替代 .abort() 实现优雅关闭
+- **serial.rs 帧缓冲** — std::mem::take 替代 clone，减少内存分配
+- **测试代码质量** — 所有 unwrap() 替换为 expect() 提供错误上下文
+
+### Fixed
+- **ControlPanel.vue** — 键盘监听器 onUnmounted 未清理；速度防抖定时器泄漏；连接按钮无 loading 反馈
+- **SpeedDashboard.vue / StatusBar.vue** — setInterval 类型不安全；空 catch 块吞掉错误
+- **useWebSocket.ts** — 空 catch 块无日志；定时器类型不匹配
+- **serial.rs** — spawn_blocking JoinError 未区分 panic 和 cancel 场景
+- **odometer.h** — 中断临界区范围不足，可能读到不一致的编码器数据
+- **pid_control.h** — millis() 时间差计算在 uint32_t 溢出时得到错误结果
+- **receiver_dongle.ino** — 帧缓冲区无边界检查可能溢出；Serial 写入无空间检查可能阻塞
 
 ## [1.2.2] - 2026-06-08
 
@@ -269,6 +293,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/halfoffive/esp-smart-car/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/halfoffive/esp-smart-car/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/halfoffive/esp-smart-car/compare/v1.2.2...v1.3.0
+[1.2.2]: https://github.com/halfoffive/esp-smart-car/compare/v1.2.1...v1.2.2
+[1.2.1]: https://github.com/halfoffive/esp-smart-car/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/halfoffive/esp-smart-car/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/halfoffive/esp-smart-car/releases/tag/v1.1.0
 [1.0.0]: https://github.com/halfoffive/esp-smart-car/releases/tag/v1.0.0

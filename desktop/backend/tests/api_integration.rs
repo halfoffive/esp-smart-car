@@ -42,16 +42,17 @@ async fn test_get_status() {
             Request::builder()
                 .uri("/api/status")
                 .body(Body::empty())
-                .unwrap(),
+                .expect("构建 status 请求失败"),
         )
         .await
-        .unwrap();
+        .expect("请求 /api/status 失败");
 
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body();
-    let bytes = body.collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let bytes = body.collect().await.expect("读取响应体失败").to_bytes();
+    let json: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("解析 status 响应 JSON 失败");
 
     assert!(json["serial_status"].is_string());
     assert!(json["current_speed"].is_number());
@@ -71,10 +72,10 @@ async fn test_command_no_serial() {
                 .uri("/api/command")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"command":"W"}"#))
-                .unwrap(),
+                .expect("构建 command 请求失败"),
         )
         .await
-        .unwrap();
+        .expect("请求 /api/command 失败");
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
@@ -91,16 +92,17 @@ async fn test_disconnect() {
                 .method("POST")
                 .uri("/api/disconnect")
                 .body(Body::empty())
-                .unwrap(),
+                .expect("构建 disconnect 请求失败"),
         )
         .await
-        .unwrap();
+        .expect("请求 /api/disconnect 失败");
 
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = response.into_body();
-    let bytes = body.collect().await.unwrap().to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let bytes = body.collect().await.expect("读取响应体失败").to_bytes();
+    let json: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("解析 disconnect 响应 JSON 失败");
 
     assert_eq!(json["success"], true);
 }
@@ -118,10 +120,10 @@ async fn test_connect_invalid_port() {
                 .uri("/api/connect")
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"port_name":"NONEXISTENT"}"#))
-                .unwrap(),
+                .expect("构建 connect 请求失败"),
         )
         .await
-        .unwrap();
+        .expect("请求 /api/connect 失败");
 
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
@@ -144,10 +146,10 @@ async fn test_ws_upgrade() {
                 .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
                 .header("sec-websocket-version", "13")
                 .body(Body::empty())
-                .unwrap(),
+                .expect("构建 WebSocket 升级请求失败"),
         )
         .await
-        .unwrap();
+        .expect("请求 /ws 升级失败");
 
     // oneshot 模式下，WebSocket 升级请求被识别但无法完成握手，
     // 返回 426 (Upgrade Required) 而非 101 (Switching Protocols)

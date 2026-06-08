@@ -7,6 +7,7 @@
  * 2. 映射键盘按键到控制命令
  * 3. 防止重复触发
  * 4. 支持按键组合
+ * 5. 自动生命周期管理（onMounted/onUnmounted）
  * 
  * 按键映射：
  * - W: 前进
@@ -24,52 +25,50 @@
  * - C: 云台居中
  */
 
-import { ref, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 
-// 当前激活的按键
-export const activeKeys = ref<Set<string>>(new Set())
-
-// 当前按下的方向键
-let currentDirectionKey: string | null = null
-
-/**
- * 有效的控制键
- */
+/** 有效的控制键集合 */
 const VALID_KEYS = new Set([
   'W', 'A', 'S', 'D', 'Q', 'E', ' ',
   'U', 'J', 'H', 'K', 'C',
   '1', '2', '3', '4', '5', '6', '7', '8', '9'
 ])
 
-/**
- * 方向键映射
- */
+/** 方向键集合（互斥控制） */
 const DIRECTION_KEYS = new Set(['W', 'A', 'S', 'D', 'Q', 'E'])
 
 /**
- * 设置键盘事件监听
+ * 键盘控制组合式函数
+ * 
+ * 标准 composable 风格：内部自动使用 onMounted/onUnmounted 管理事件监听器生命周期
+ * 调用者只需 `useKeyboard(sendCommand)` 即可，无需手动清理
+ * 
  * @param sendCommand - 发送命令的回调函数
  */
-export const setupKeyboardListeners = (sendCommand: (cmd: string) => void) => {
-  /**
-   * 处理按键按下
-   */
+export const useKeyboard = (sendCommand: (cmd: string) => void) => {
+  // 当前激活的按键（响应式，供 UI 高亮显示）
+  const activeKeys = ref<Set<string>>(new Set())
+
+  // 当前按下的方向键（闭包内部状态，确保互斥）
+  let currentDirectionKey: string | null = null
+
+  /** 处理按键按下 */
   const handleKeyDown = (event: KeyboardEvent) => {
     const key = event.key.toUpperCase()
-    
+
     // 检查是否为有效的控制键
     if (!VALID_KEYS.has(key)) {
       return
     }
-    
+
     // 阻止默认行为（防止页面滚动等）
     if ([' ', 'ARROWUP', 'ARROWDOWN', 'ARROWLEFT', 'ARROWRIGHT'].includes(key)) {
       event.preventDefault()
     }
-    
+
     // 添加到激活集合
     activeKeys.value.add(key)
-    
+
     // 处理方向键（互斥）
     if (DIRECTION_KEYS.has(key)) {
       // 如果已有方向键按下，先停止
@@ -93,26 +92,22 @@ export const setupKeyboardListeners = (sendCommand: (cmd: string) => void) => {
       sendCommand(key)
     }
   }
-  
-  /**
-   * 处理按键释放
-   */
+
+  /** 处理按键释放 */
   const handleKeyUp = (event: KeyboardEvent) => {
     const key = event.key.toUpperCase()
-    
+
     // 从激活集合移除
     activeKeys.value.delete(key)
-    
+
     // 如果释放的是当前方向键，停止
     if (DIRECTION_KEYS.has(key) && currentDirectionKey === key) {
       currentDirectionKey = null
       sendCommand(' ')
     }
   }
-  
-  /**
-   * 处理窗口失去焦点（自动停止）
-   */
+
+  /** 处理窗口失去焦点（自动停止所有运动） */
   const handleBlur = () => {
     activeKeys.value.clear()
     if (currentDirectionKey) {
@@ -120,38 +115,21 @@ export const setupKeyboardListeners = (sendCommand: (cmd: string) => void) => {
       sendCommand(' ')
     }
   }
-  
-  // 添加事件监听
-  window.addEventListener('keydown', handleKeyDown)
-  window.addEventListener('keyup', handleKeyUp)
-  window.addEventListener('blur', handleBlur)
-  
-  // 返回清理函数
-  return () => {
+
+  // 自动生命周期管理：组件挂载时添加监听器，卸载时自动清理
+  onMounted(() => {
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', handleBlur)
+  })
+
+  onUnmounted(() => {
     window.removeEventListener('keydown', handleKeyDown)
     window.removeEventListener('keyup', handleKeyUp)
     window.removeEventListener('blur', handleBlur)
-  }
-}
-
-/**
- * 组合式函数
- */
-export const useKeyboard = () => {
-  let cleanup: (() => void) | null = null
-  
-  const setup = (sendCommand: (cmd: string) => void) => {
-    cleanup = setupKeyboardListeners(sendCommand)
-  }
-  
-  onUnmounted(() => {
-    if (cleanup) {
-      cleanup()
-    }
   })
-  
+
   return {
-    activeKeys,
-    setupKeyboardListeners: setup
+    activeKeys
   }
 }
