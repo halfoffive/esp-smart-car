@@ -17,6 +17,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **receiver_dongle.ino 'D' 键冲突** — `getCommandType` 中 'D'/'d' 同时出现在 MOVE 和 SERVO 分支，云台下命令永远匹配 MOVE。从 MOVE 分支移除 'D'/'d'
 - **receiver_dongle.ino Serial.read 类型** — `Serial.read()` 返回 `int` 存入 `char` 导致符号扩展，改为 `int` 类型
 - **car_controller.ino 超时误触发** — `handleSpeedCommand` 和 `handleServoCommand` 未更新 `g_lastCmdTime`，仅发送速度/云台命令时 1 秒超时触发自动停止。添加 `g_lastCmdTime = millis()`
+- **ControlPanel.vue 连接状态混淆** — 串口连接/断开时不再修改 WebSocket `isConnected`，消除状态混淆
+- **ControlPanel.vue 运动网格底行重复** — 底行 Q/E 改为 A（左转）/D（右转），消除与顶行重复
+- **useKeyboard.ts activeKeys 不可响应** — `ref<Set>` 改为每次修改创建新 Set 触发 Vue 响应式，修复按键高亮不工作
+- **ControlPanel.vue 鼠标离开不停止** — 所有控制按钮添加 `@mouseleave` 事件发送停止命令
+- **VideoPlayer.vue 定时器类型混淆** — 分离 `rafId` 和 `timeoutId` 为两个独立变量
+- **websocket.rs 帧哈希碰撞** — 改用多点采样哈希（首4+中4+尾4字节+长度），修复同尺寸帧碰撞丢帧
+- **serial.rs frame_buffer 未恢复** — `SerialTaskResult` 所有变体携带 buffer，非视频路径恢复 frame_buffer
+- **api.rs REST API 速度不同步** — 速度命令 '1'-'9' 通过 REST API 发送时同步更新 `current_speed`
+- **serial.rs connect() 失败状态残留** — 连接失败时状态恢复为 `Disconnected`
+- **useWebSocket.ts 旧连接泄漏** — `connect()` 先关闭旧连接再创建新的
+- **useApi.ts 不检查 HTTP 状态** — 添加 `response.ok` 检查，非 2xx 抛出错误；GET 请求不设置 Content-Type
+- **car_controller.ino g_currentSpeed 默认过高** — 默认值从 128 改为 28（匹配 map 最小值）
+
+### Changed
+- **useWebSocket.ts 重连策略** — 固定 5 秒重试改为指数退避（1s→30s）+ 最大 10 次重试
+- **useWebSocket.ts WS_URL** — 从硬编码 `ws://localhost:8080/ws` 改为基于 `window.location` 动态构建
+- **lib.rs Mutex 类型统一** — `ws_manager` 改为 `std::sync::Mutex`；`current_speed` 改为 `AtomicU8`；`last_heartbeat` 改为 `std::sync::Mutex`；`video_frame` 简化为单层 Arc
+- **websocket.rs odometry 广播节流** — 添加 200ms 间隔限制，减少不必要的网络流量
+
+### Added
+- **useStatus.ts composable** — 合并 StatusBar/SpeedDashboard 重复 `/api/status` 轮询为共享数据源
+
+### Fixed (firmware misc)
+- **odometer.h / pid_control.h** — 版本号 1.1.0 → 1.2.0（遗漏更新）
+- **wireless.h** — 魔术字注释 0xAA → 0xA5
+- **video_stream.h** — `captureFrame()` 注释从"纯函数"修正为"有副作用"
 
 ### Added
 - **测速模块**（`odometer.h`）- 完整的编码器测速系统

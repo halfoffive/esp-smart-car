@@ -12,7 +12,9 @@
  * 发送：{"type": "video", "data": "base64..."}
  * 接收：{"type": "command", "data": "W"}
  */
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Instant;
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
@@ -95,7 +97,7 @@ pub async fn ws_handler(
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // 注册客户端
     let client_id = {
-        let mut manager = state.ws_manager.lock().await;
+        let mut manager = state.ws_manager.lock().unwrap();
         manager.add_client()
     };
 
@@ -127,7 +129,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         drop(tx);
         let _ = forward_task.await;
         {
-            let mut manager = state.ws_manager.lock().await;
+            let mut manager = state.ws_manager.lock().unwrap();
             manager.remove_client(client_id);
         }
         return;
@@ -141,6 +143,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     let video_state = state.clone();
     let video_cancel = cancel_token.clone();
     let video_task = tokio::spawn(async move {
+        let mut last_frame_hash: Option<u64> = None;
+        let mut last_odometry_send = Instant::now();
+
         loop {
             // 检查取消信号
             if video_cancel.is_cancelled() {
@@ -150,41 +155,74 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
             // 获取视频帧
             let frame = {
-                let video = video_state.video_frame.lock().await;
+                let video = video_state.video_frame.lock().unwrap();
                 video.clone()
             };
 
-            if let Some(frame_data) = frame {
-                // 编码为Base64
-                let base64 = base64_encode(&frame_data);
+            if let Some(ref frame_data) = frame {
+                // 使用多点采样哈希（帧长度 + 前4字节 + 中4字节 + 末4字节）判断帧是否更新
+                // 避免仅用首字节（JPEG 固定 0xFF）导致同尺寸帧哈希碰撞
+                let hash = {
+                    let len = frame_data.len() as u64;
+                    let first4 = frame_data
+                        .get(0..4)
+                        .map(|s| u32::from_be_bytes(s.try_into().unwrap_or([0; 4])) as u64)
+                        .unwrap_or(0);
+                    let mid4 = {
+                        let mid = frame_data.len() / 2;
+                        frame_data
+                            .get(mid..mid + 4)
+                            .map(|s| u32::from_be_bytes(s.try_into().unwrap_or([0; 4])) as u64)
+                            .unwrap_or(0)
+                    };
+                    let last4 = if frame_data.len() >= 8 {
+                        frame_data
+                            .get(frame_data.len() - 4..)
+                            .map(|s| u32::from_be_bytes(s.try_into().unwrap_or([0; 4])) as u64)
+                            .unwrap_or(0)
+                    } else {
+                        0u64
+                    };
+                    len ^ (first4 << 32) ^ (mid4 << 16) ^ last4
+                };
 
-                let message = serde_json::json!({
-                    "type": "video",
-                    "format": "jpeg",
-                    "data": base64,
-                    "timestamp": chrono::Utc::now().timestamp_millis()
-                });
+                if last_frame_hash != Some(hash) {
+                    last_frame_hash = Some(hash);
 
-                if let Err(e) = video_tx
-                    .send(Message::Text(message.to_string().into()))
-                    .await
-                {
-                    debug!("视频发送失败: {}", e);
-                    break;
+                    // 编码为Base64
+                    let base64 = base64_encode(frame_data);
+
+                    let message = serde_json::json!({
+                        "type": "video",
+                        "format": "jpeg",
+                        "data": base64,
+                        "timestamp": chrono::Utc::now().timestamp_millis()
+                    });
+
+                    if let Err(e) = video_tx
+                        .send(Message::Text(message.to_string().into()))
+                        .await
+                    {
+                        debug!("视频发送失败: {}", e);
+                        break;
+                    }
                 }
             }
 
-            // 发送测速数据
-            {
-                let odom = video_state.odometry.lock().await;
-                let message = serde_json::json!({
-                    "type": "odometry",
-                    "leftSpeed": odom.left_speed_mmps,
-                    "rightSpeed": odom.right_speed_mmps,
-                    "heading": odom.heading,
-                    "distance": odom.total_distance_mm,
-                    "timestamp": chrono::Utc::now().timestamp_millis()
-                });
+            // 发送测速数据（固件 200ms 上报一次，此处限流避免冗余发送）
+            if last_odometry_send.elapsed() >= std::time::Duration::from_millis(200) {
+                last_odometry_send = Instant::now();
+                let message = {
+                    let odom = video_state.odometry.lock().await;
+                    serde_json::json!({
+                        "type": "odometry",
+                        "leftSpeed": odom.left_speed_mmps,
+                        "rightSpeed": odom.right_speed_mmps,
+                        "heading": odom.heading,
+                        "distance": odom.total_distance_mm,
+                        "timestamp": chrono::Utc::now().timestamp_millis()
+                    })
+                }; // odom 锁在此处释放
 
                 if let Err(e) = video_tx
                     .send(Message::Text(message.to_string().into()))
@@ -248,7 +286,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     // 注销客户端
     {
-        let mut manager = state.ws_manager.lock().await;
+        let mut manager = state.ws_manager.lock().unwrap();
         manager.remove_client(client_id);
     }
 }
@@ -276,22 +314,22 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
 
                 // 如果是速度等级命令(1-9)，同步更新 current_speed
                 if (b'1'..=b'9').contains(&cmd_byte) {
-                    let mut current_speed = state.current_speed.lock().await;
-                    *current_speed = cmd_byte - b'0';
+                    state
+                        .current_speed
+                        .store(cmd_byte - b'0', Ordering::Relaxed);
                 }
             }
         }
         "speed" => {
             // 设置速度
             if let Ok(speed) = data.parse::<u8>() {
-                let mut current_speed = state.current_speed.lock().await;
-                *current_speed = speed;
+                state.current_speed.store(speed, Ordering::Relaxed);
                 info!("设置速度: {}", speed);
             }
         }
         "heartbeat" => {
             // 心跳
-            let mut last = state.last_heartbeat.lock().await;
+            let mut last = state.last_heartbeat.lock().unwrap();
             *last = std::time::Instant::now();
         }
         "drive_mode" => {
@@ -399,14 +437,10 @@ mod tests {
         let msg = r#"{"type":"command","data":"7"}"#;
 
         let result = handle_message(msg, &state).await;
-        assert!(
-            result.is_ok(),
-            "处理速度命令不应返回错误: {:?}",
-            result
-        );
+        assert!(result.is_ok(), "处理速度命令不应返回错误: {:?}", result);
 
         // 验证速度已更新为 7
-        let speed = *state.current_speed.lock().await;
+        let speed = state.current_speed.load(Ordering::Relaxed);
         assert_eq!(speed, 7, "速度等级应更新为 7");
     }
 
@@ -450,10 +484,7 @@ mod tests {
         let msg = "这不是有效的JSON";
 
         let result = handle_message(msg, &state).await;
-        assert!(
-            result.is_err(),
-            "handle_message 处理无效 JSON 时应返回错误"
-        );
+        assert!(result.is_err(), "handle_message 处理无效 JSON 时应返回错误");
     }
 
     /// 测试 handle_message 处理未知消息类型（不 panic，正常返回 Ok）
@@ -476,7 +507,7 @@ mod tests {
         let state = create_test_state();
 
         // 记录初始心跳时间
-        let initial = *state.last_heartbeat.lock().await;
+        let initial = *state.last_heartbeat.lock().unwrap();
 
         // 短暂等待确保时间差
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -490,11 +521,8 @@ mod tests {
         );
 
         // 验证心跳时间已更新
-        let updated = *state.last_heartbeat.lock().await;
-        assert!(
-            updated > initial,
-            "心跳时间应在处理后更新"
-        );
+        let updated = *state.last_heartbeat.lock().unwrap();
+        assert!(updated > initial, "心跳时间应在处理后更新");
     }
 
     /// 测试多客户端并发添加到 WebSocketManager，验证广播逻辑的基础：客户端管理正确性

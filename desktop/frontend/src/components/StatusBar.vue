@@ -55,41 +55,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { computed } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
+import { useStatus } from '../composables/useStatus'
 
 const { isConnected } = useWebSocket()
-const serialConnected = ref(false)
-const fps = ref(0)
-const currentSpeed = ref(5)
-const frameCount = ref(0)
+const { status } = useStatus()
 
-let interval: ReturnType<typeof setInterval> | null = null
-
-const updateStatus = async () => {
-  try {
-    const response = await fetch('/api/status')
-    const status = await response.json()
-    
-    serialConnected.value = status.serial_status === '已连接'
-    fps.value = status.fps || 0
-    // 将速度等级限制在 1-9 范围内，防止后端返回异常值
-    currentSpeed.value = Math.min(9, Math.max(1, status.current_speed || 5))
-    frameCount.value = status.frame_count || 0
-  } catch (error) {
-    console.error('[StatusBar] 状态查询失败:', error)
-  }
-}
-
-onMounted(() => {
-  updateStatus()
-  interval = setInterval(updateStatus, 1000)
-})
-
-onUnmounted(() => {
-  if (interval !== null) {
-    clearInterval(interval)
-    interval = null
-  }
-})
+const serialConnected = computed(() => status.value.serial_status === '已连接')
+const fps = computed(() => status.value.fps || 0)
+const currentSpeed = computed(() => Math.min(9, Math.max(1, status.value.current_speed || 5)))
+const frameCount = computed(() => status.value.frame_count || 0)
 </script>

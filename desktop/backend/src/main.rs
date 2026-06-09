@@ -35,21 +35,24 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // 构建路由
-    let app = Router::new()
-        // WebSocket端点
-        .route("/ws", get(websocket::ws_handler))
-        // REST API
+    // API 路由（不 fallback，确保 API 404 返回 JSON 而非 HTML）
+    let api_routes = Router::new()
         .route("/api/command", post(api::handle_command))
         .route("/api/status", get(api::get_status))
         .route("/api/connect", post(api::connect_serial))
-        .route("/api/disconnect", post(api::disconnect_serial))
-        // 静态文件（前端构建产物），支持SPA fallback到index.html
-        .fallback_service(
-            tower_http::services::ServeDir::new("./frontend/dist").fallback(
-                tower_http::services::ServeFile::new("./frontend/dist/index.html"),
-            ),
-        )
-        // 注入状态
+        .route("/api/disconnect", post(api::disconnect_serial));
+
+    // 静态文件路由（SPA fallback）
+    let static_routes = Router::new().fallback_service(
+        tower_http::services::ServeDir::new("./frontend/dist").fallback(
+            tower_http::services::ServeFile::new("./frontend/dist/index.html"),
+        ),
+    );
+
+    let app = Router::new()
+        .route("/ws", get(websocket::ws_handler))
+        .merge(api_routes)
+        .merge(static_routes)
         .with_state(state);
 
     // 监听地址
@@ -72,9 +75,11 @@ mod tests {
     #[tokio::test]
     async fn test_app_state_new() {
         let state = AppState::new();
-        let current_speed = state.current_speed.lock().await;
-        assert_eq!(*current_speed, 5);
-        let video_frame = state.video_frame.lock().await;
+        let current_speed = state
+            .current_speed
+            .load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(current_speed, 5);
+        let video_frame = state.video_frame.lock().unwrap();
         assert!(video_frame.is_none());
     }
 }

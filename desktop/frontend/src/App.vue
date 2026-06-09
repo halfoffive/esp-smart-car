@@ -39,16 +39,13 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
 import VideoPlayer from './components/VideoPlayer.vue'
 import ControlPanel from './components/ControlPanel.vue'
 import StatusBar from './components/StatusBar.vue'
 import SpeedDashboard from './components/SpeedDashboard.vue'
 import { useWebSocket } from './composables/useWebSocket'
 
-const { connect } = useWebSocket(true)
-
-onMounted(() => {
-  connect()
-})
+// 注册为 WebSocket 管理员（owner=true），但不自动连接
+// 连接由用户手动点击 ControlPanel 中的连接按钮触发
+useWebSocket(true)
 </script>

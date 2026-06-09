@@ -3,7 +3,7 @@
  * 基于 ESP32-S3 CAM，通过 ESP-NOW 传输 JPEG 帧
  * 支持动态质量调整和帧率控制
  * 作者：智能车项目团队
- * 版本：1.0.0
+ * 版本：1.2.0
  */
 
 #ifndef VIDEO_STREAM_H
@@ -55,14 +55,14 @@ struct StreamState {
  * 用于分包传输大帧
  */
 struct __attribute__((packed)) VideoPacket {
-    const uint8_t magic;        // 魔术字 0xA6
-    const uint8_t version;      // 版本
-    const uint16_t frameId;     // 帧序号
-    const uint16_t packetId;    // 包序号
-    const uint16_t totalPackets; // 总包数
-    const uint16_t dataLen;     // 数据长度
-    const uint8_t data[128];    // 数据（最大128字节）
-    const uint8_t checksum;     // 校验和
+    uint8_t magic;        // 魔术字 0xA6
+    uint8_t version;      // 版本
+    uint16_t frameId;     // 帧序号
+    uint16_t packetId;    // 包序号
+    uint16_t totalPackets; // 总包数
+    uint16_t dataLen;     // 数据长度
+    uint8_t data[128];    // 数据（最大128字节）
+    uint8_t checksum;     // 校验和
 };
 
 // ============================================
@@ -89,7 +89,7 @@ static uint16_t g_frameId = 0;
 // ============================================
 
 /**
- * 纯函数：捕获帧
+ * 捕获帧（有副作用：硬件采集 + 递增全局帧序号）
  * 输出：帧状态
  */
 inline FrameState captureFrame() {

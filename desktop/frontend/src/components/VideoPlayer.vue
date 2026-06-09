@@ -65,19 +65,24 @@ const fps = ref(0)
 let frameCount = 0
 let lastFpsUpdate = Date.now()
 let rafId: number | null = null
+let timeoutId: number | null = null
 
 const updateVideo = () => {
-  if (videoFrame.value) {
-    videoSrc.value = videoFrame.value
-    
-    const now = Date.now()
-    frameCount++
-    
-    if (now - lastFpsUpdate >= 1000) {
-      fps.value = frameCount
-      frameCount = 0
-      lastFpsUpdate = now
-    }
+  if (!videoFrame.value) {
+    // 无视频帧时，延迟 500ms 后重试而非持续 RAF 循环
+    timeoutId = window.setTimeout(updateVideo, 500)
+    return
+  }
+  
+  videoSrc.value = videoFrame.value
+  
+  const now = Date.now()
+  frameCount++
+  
+  if (now - lastFpsUpdate >= 1000) {
+    fps.value = frameCount
+    frameCount = 0
+    lastFpsUpdate = now
   }
   
   rafId = requestAnimationFrame(updateVideo)
@@ -91,6 +96,10 @@ onUnmounted(() => {
   if (rafId !== null) {
     cancelAnimationFrame(rafId)
     rafId = null
+  }
+  if (timeoutId !== null) {
+    clearTimeout(timeoutId)
+    timeoutId = null
   }
 })
 

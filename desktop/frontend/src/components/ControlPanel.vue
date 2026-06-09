@@ -65,55 +65,61 @@
     <div>
       <h3 class="text-xs font-medium text-dark-300 mb-1.5">运动控制</h3>
       <div class="grid grid-cols-3 gap-1.5 max-w-[140px] mx-auto">
-        <button 
-          @mousedown="sendCommand('U')"
+        <button
+          @mousedown="sendCommand('Q')"
           @mouseup="sendCommand(' ')"
-          class="control-key-sm"
-          title="云台上"
-          aria-label="云台上"
+          @mouseleave="sendCommand(' ')"
+          :class="['control-key-sm', { 'control-key-active': activeKeys.has('Q') }]"
+          title="原地左转"
+          aria-label="原地左转"
         >
-          ↑
+          Q
         </button>
-        <button 
+        <button
           @mousedown="sendCommand('W')"
           @mouseup="sendCommand(' ')"
+          @mouseleave="sendCommand(' ')"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('W') }]"
           title="前进"
           aria-label="前进"
         >
           W
         </button>
-        <button 
-          @mousedown="sendCommand('U')"
+        <button
+          @mousedown="sendCommand('E')"
           @mouseup="sendCommand(' ')"
-          class="control-key-sm"
-          title="云台上"
-          aria-label="云台上"
+          @mouseleave="sendCommand(' ')"
+          :class="['control-key-sm', { 'control-key-active': activeKeys.has('E') }]"
+          title="原地右转"
+          aria-label="原地右转"
         >
-          ↑
+          E
         </button>
-        
-        <button 
+
+        <button
           @mousedown="sendCommand('A')"
           @mouseup="sendCommand(' ')"
+          @mouseleave="sendCommand(' ')"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('A') }]"
           title="左转"
           aria-label="左转"
         >
           A
         </button>
-        <button 
+        <button
           @mousedown="sendCommand('S')"
           @mouseup="sendCommand(' ')"
+          @mouseleave="sendCommand(' ')"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('S') }]"
           title="后退"
           aria-label="后退"
         >
           S
         </button>
-        <button 
+        <button
           @mousedown="sendCommand('D')"
           @mouseup="sendCommand(' ')"
+          @mouseleave="sendCommand(' ')"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('D') }]"
           title="右转"
           aria-label="右转"
@@ -121,16 +127,17 @@
           D
         </button>
         
-        <button 
-          @mousedown="sendCommand('Q')"
+        <button
+          @mousedown="sendCommand('A')"
           @mouseup="sendCommand(' ')"
-          :class="['control-key-sm', { 'control-key-active': activeKeys.has('Q') }]"
-          title="原地左转"
-          aria-label="原地左转"
+          @mouseleave="sendCommand(' ')"
+          :class="['control-key-sm', { 'control-key-active': activeKeys.has('A') }]"
+          title="左转"
+          aria-label="左转"
         >
-          Q
+          A
         </button>
-        <button 
+        <button
           @mousedown="sendCommand(' ')"
           @mouseup="sendCommand(' ')"
           class="control-key-sm text-red-400"
@@ -139,14 +146,15 @@
         >
           ■
         </button>
-        <button 
-          @mousedown="sendCommand('E')"
+        <button
+          @mousedown="sendCommand('D')"
           @mouseup="sendCommand(' ')"
-          :class="['control-key-sm', { 'control-key-active': activeKeys.has('E') }]"
-          title="原地右转"
-          aria-label="原地右转"
+          @mouseleave="sendCommand(' ')"
+          :class="['control-key-sm', { 'control-key-active': activeKeys.has('D') }]"
+          title="右转"
+          aria-label="右转"
         >
-          E
+          D
         </button>
       </div>
     </div>
@@ -156,9 +164,10 @@
       <h3 class="text-xs font-medium text-dark-300 mb-1.5">云台控制</h3>
       <div class="grid grid-cols-3 gap-1.5 max-w-[140px] mx-auto">
         <div></div>
-        <button 
+        <button
           @mousedown="sendCommand('U')"
           @mouseup="sendCommand(' ')"
+          @mouseleave="sendCommand(' ')"
           class="control-key-sm"
           title="上"
           aria-label="云台向上"
@@ -166,17 +175,18 @@
           ↑
         </button>
         <div></div>
-        
-        <button 
+
+        <button
           @mousedown="sendCommand('H')"
           @mouseup="sendCommand(' ')"
+          @mouseleave="sendCommand(' ')"
           class="control-key-sm"
           title="左"
           aria-label="云台向左"
         >
           ←
         </button>
-        <button 
+        <button
           @mousedown="sendCommand('C')"
           @mouseup="sendCommand(' ')"
           class="control-key-sm text-xs"
@@ -185,20 +195,22 @@
         >
           C
         </button>
-        <button 
+        <button
           @mousedown="sendCommand('K')"
           @mouseup="sendCommand(' ')"
+          @mouseleave="sendCommand(' ')"
           class="control-key-sm"
           title="右"
           aria-label="云台向右"
         >
           →
         </button>
-        
+
         <div></div>
-        <button 
+        <button
           @mousedown="sendCommand('J')"
           @mouseup="sendCommand(' ')"
+          @mouseleave="sendCommand(' ')"
           class="control-key-sm"
           title="下"
           aria-label="云台向下"
@@ -269,13 +281,12 @@ import { useWebSocket } from '../composables/useWebSocket'
 import { useKeyboard } from '../composables/useKeyboard'
 import { useApi } from '../composables/useApi'
 
-const { sendCommand: wsSendCommand, connect: wsConnect, disconnect: wsDisconnect, sendDriveMode } = useWebSocket()
+const { sendCommand: wsSendCommand, isConnected, sendDriveMode } = useWebSocket()
 const { post, get } = useApi()
 
 const selectedPort = ref('')
 const availablePorts = ref<string[]>([])
 const currentSpeed = ref(5)
-const isConnected = ref(false)
 /** 连接进行中状态标志 */
 const isConnecting = ref(false)
 
@@ -322,7 +333,7 @@ const sendCommand = (cmd: string) => {
   }
   
   wsSendCommand(cmd)
-  addLog(`发送命令: ${cmd}`)
+  // 注：高频命令发送不记录日志，避免日志洪流
 }
 
 // 使用重构后的 useKeyboard：自动管理生命周期，无需手动清理
@@ -342,9 +353,8 @@ const handleSpeedInput = (event: Event) => {
 }
 
 const setSpeed = () => {
-  // 无极滑块值取整后发送给固件（固件只接受整数速度 1-9）
   const speed = Math.round(currentSpeed.value).toString()
-  sendCommand(speed)
+  wsSendCommand(speed)
 }
 
 const connect = async () => {
@@ -362,8 +372,6 @@ const connect = async () => {
     })
     
     if (result.success) {
-      isConnected.value = true
-      wsConnect()
       addLog('串口连接成功', 'info')
     } else {
       addLog(`连接失败: ${result.message}`, 'error')
@@ -380,8 +388,6 @@ const disconnect = async () => {
     const result = await post('/api/disconnect')
     
     if (result.success) {
-      isConnected.value = false
-      wsDisconnect()
       addLog('串口已断开')
     }
   } catch (e) {

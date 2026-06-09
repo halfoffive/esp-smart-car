@@ -145,13 +145,21 @@ impl SerialManager {
 
         self.state = SerialConnectionState::Connecting;
 
-        let port = serialport::new(port_name, baud_rate)
+        let port = match serialport::new(port_name, baud_rate)
             .timeout(READ_TIMEOUT)
             .data_bits(serialport::DataBits::Eight)
             .parity(serialport::Parity::None)
             .stop_bits(serialport::StopBits::One)
             .flow_control(serialport::FlowControl::None)
-            .open()?;
+            .open()
+        {
+            Ok(p) => p,
+            Err(e) => {
+                // 连接失败时恢复状态为 Disconnected，避免永远卡在 Connecting
+                self.state = SerialConnectionState::Disconnected;
+                return Err(e.into());
+            }
+        };
 
         self.port = Some(port);
         self.state = SerialConnectionState::Connected {
@@ -293,15 +301,16 @@ impl SerialManager {
 }
 
 /// 串口任务结果（用于 spawn_blocking 与 async 上下文间传递数据）
+/// 所有变体都携带 buffer，确保帧缓冲区在非视频路径上也能恢复复用
 enum SerialTaskResult {
     /// 读取到视频帧
     VideoFrame(Vec<u8>),
-    /// 读取到测速数据行
-    OdometryLine(String),
-    /// 无数据
-    NoData,
-    /// 错误
-    Error(String),
+    /// 读取到测速数据行（buffer 未被消费，需恢复）
+    OdometryLine { line: String, buffer: Vec<u8> },
+    /// 无数据（buffer 未被消费，需恢复）
+    NoData(Vec<u8>),
+    /// 错误（buffer 未被消费，需恢复）
+    Error { msg: String, buffer: Vec<u8> },
 }
 
 /// 串口通信任务（在独立线程中运行）
@@ -332,26 +341,36 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                     Ok(false) => {
                         // 尝试读取测速数据行
                         if let Some(line) = manager.read_line() {
-                            SerialTaskResult::OdometryLine(line)
+                            SerialTaskResult::OdometryLine {
+                                line,
+                                buffer: local_buffer,
+                            }
                         } else {
-                            SerialTaskResult::NoData
+                            SerialTaskResult::NoData(local_buffer)
                         }
                     }
-                    Err(e) => SerialTaskResult::Error(e.to_string()),
+                    Err(e) => SerialTaskResult::Error {
+                        msg: e.to_string(),
+                        buffer: local_buffer,
+                    },
                 }
             })
             .await;
 
             match result {
                 Ok(SerialTaskResult::VideoFrame(buffer)) => {
-                    // 帧数据使用 std::mem::take 避免再次 clone
-                    frame_buffer = buffer;
-                    let frame_data = frame_buffer.clone();
-                    // serial_manager 锁已释放，单独获取 video_frame 锁
-                    let mut video = state.video_frame.lock().await;
-                    *video = Some(frame_data);
+                    // 交换缓冲区：新帧存入 video_frame，旧帧复用为下次读取缓冲
+                    let old = {
+                        let mut video = state.video_frame.lock().unwrap();
+                        let old = video.take();
+                        *video = Some(buffer);
+                        old
+                    };
+                    frame_buffer = old.unwrap_or_default();
                 }
-                Ok(SerialTaskResult::OdometryLine(line)) => {
+                Ok(SerialTaskResult::OdometryLine { line, buffer }) => {
+                    // 恢复帧缓冲区以复用（避免每次重新分配）
+                    frame_buffer = buffer;
                     // serial_manager 锁已释放，单独获取 odometry 锁
                     if let Some(odom_data) = SerialManager::parse_odometry_line(&line) {
                         let mut odom = state.odometry.lock().await;
@@ -364,12 +383,16 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                         );
                     }
                 }
-                Ok(SerialTaskResult::NoData) => {
+                Ok(SerialTaskResult::NoData(buffer)) => {
+                    // 恢复帧缓冲区以复用
+                    frame_buffer = buffer;
                     // 无数据，短暂等待
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                Ok(SerialTaskResult::Error(e)) => {
-                    error!("串口读取错误: {}", e);
+                Ok(SerialTaskResult::Error { msg, buffer }) => {
+                    // 恢复帧缓冲区以复用
+                    frame_buffer = buffer;
+                    error!("串口读取错误: {}", msg);
                     let mut manager = state.serial_manager.lock().unwrap();
                     manager.disconnect();
                 }

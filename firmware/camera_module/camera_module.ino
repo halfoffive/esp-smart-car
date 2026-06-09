@@ -11,7 +11,7 @@
  * 硬件：ESP32-S3 CAM + OV2640
  * 
  * 作者：智能车项目团队
- * 版本：1.0.0
+ * 版本：1.2.0
  */
 
 #include "camera_config.h"
@@ -62,7 +62,7 @@ void setup() {
     
     Serial.println("\n================================");
     Serial.println("ESP32-S3 CAM 视频传输模块");
-    Serial.println("版本: 1.0.0");
+    Serial.println("版本: 1.2.0");
     Serial.println("================================\n");
     
     // 初始化摄像头

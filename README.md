@@ -43,7 +43,8 @@ esp-smart-car/
 │           └── composables/
 │               ├── useWebSocket.ts
 │               ├── useKeyboard.ts
-│               └── useApi.ts
+│               ├── useApi.ts
+│               └── useStatus.ts
 └── docs/                        # 文档
     └── hardware.md              # 硬件接线说明
 ```
@@ -238,6 +239,14 @@ cargo clippy       # 静态分析检查
 - 检查 PWM 信号
 
 ## 版本历史
+
+- v1.3.2 - 2026-06-09
+  - 全面代码排查与优化 v2（23项修复）
+  - 固件：修复电机引脚错误（GPIO 10-13→4-8）、云台角度下溢、摄像头引脚类型、JPEG质量枚举反转、智能修正初始值、'D'键冲突、超时计时器遗漏
+  - 前端：修复串口/WS状态混淆、运动网格底行重复、按键高亮不工作、鼠标离开不停车、定时器类型混淆、WebSocket旧连接泄漏、useApi状态码检查
+  - 后端：修复帧哈希碰撞丢帧、frame_buffer泄漏、REST API速度不同步、connect失败状态残留、Mutex类型统一、odometry广播节流
+  - 新增 useStatus.ts composable 合并重复轮询
+  - WebSocket重连改为指数退避、WS_URL动态构建
 
 - v1.3.1 - 2026-06-09
   - 修复 motor_control.h GPIO 引脚错误（GPIO 10-13 在 ESP32-C6 上连接 SPI Flash，改为 GPIO 4-8）

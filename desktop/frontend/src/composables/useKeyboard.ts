@@ -54,6 +54,9 @@ export const useKeyboard = (sendCommand: (cmd: string) => void) => {
 
   /** 处理按键按下 */
   const handleKeyDown = (event: KeyboardEvent) => {
+    // 忽略 OS 按键重复事件，防止命令风暴
+    if (event.repeat) return;
+
     const key = event.key.toUpperCase()
 
     // 检查是否为有效的控制键
@@ -66,8 +69,8 @@ export const useKeyboard = (sendCommand: (cmd: string) => void) => {
       event.preventDefault()
     }
 
-    // 添加到激活集合
-    activeKeys.value.add(key)
+    // 添加到激活集合（替换整个 Set 以触发 Vue 响应式）
+    activeKeys.value = new Set(activeKeys.value).add(key)
 
     // 处理方向键（互斥）
     if (DIRECTION_KEYS.has(key)) {
@@ -109,7 +112,7 @@ export const useKeyboard = (sendCommand: (cmd: string) => void) => {
 
   /** 处理窗口失去焦点（自动停止所有运动） */
   const handleBlur = () => {
-    activeKeys.value.clear()
+    activeKeys.value = new Set()
     if (currentDirectionKey) {
       currentDirectionKey = null
       sendCommand(' ')

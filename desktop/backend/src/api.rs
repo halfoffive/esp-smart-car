@@ -10,6 +10,7 @@
  *
  * 数据格式：JSON
  */
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use axum::{extract::State, http::StatusCode, Json};
@@ -98,11 +99,19 @@ pub async fn handle_command(
         }
     };
 
-    let mut manager = state.serial_manager.lock().unwrap();
+    // 在独立作用域中发送命令，确保 std::sync::MutexGuard 在 .await 前释放
+    let send_result = {
+        let mut manager = state.serial_manager.lock().unwrap();
+        manager.send_command(cmd)
+    }; // manager 锁在此处释放
 
-    match manager.send_command(cmd) {
+    match send_result {
         Ok(()) => {
             info!("发送命令: {}", request.command);
+            // 如果是速度等级命令(1-9)，同步更新 current_speed
+            if (b'1'..=b'9').contains(&cmd) {
+                state.current_speed.store(cmd - b'0', Ordering::Relaxed);
+            }
             (
                 StatusCode::OK,
                 Json(ApiResponse {
@@ -153,11 +162,11 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
     };
 
     let ws_clients = {
-        let ws_manager = state.ws_manager.lock().await;
+        let ws_manager = state.ws_manager.lock().unwrap();
         ws_manager.client_count()
     };
 
-    let current_speed = *state.current_speed.lock().await;
+    let current_speed = state.current_speed.load(Ordering::Relaxed);
 
     let (left_speed, right_speed, heading, total_distance) = {
         let odom = state.odometry.lock().await;

@@ -3,7 +3,7 @@
  * 基于 ESP32-C6，使用 ESP-NOW 协议进行低延迟通信
  * 支持命令传输和状态反馈
  * 作者：智能车项目团队
- * 版本：1.0.0
+ * 版本：1.2.0
  */
 
 #ifndef WIRELESS_H
@@ -61,7 +61,7 @@ struct __attribute__((packed)) WirelessPacket {
  * 方向：车载端 -> 接收器 -> PC
  */
 struct __attribute__((packed)) OdometryPacket {
-    const uint8_t magic;            // 魔术字(0xAA)
+    const uint8_t magic;            // 魔术字(0xA5)
     const uint8_t version;          // 协议版本
     const CommandType type;         // ODOMETRY
     const int16_t leftSpeedMmps;    // 左轮速度(mm/s)，有符号

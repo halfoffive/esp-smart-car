@@ -229,6 +229,42 @@ Key connections:
   - `receiver_dongle.ino` — `getCommandType` 中 'D'/'d' 同时出现在 MOVE 和 SERVO 分支，switch fall-through 导致云台下命令永远匹配 MOVE。从 MOVE 分支移除 'D'/'d'；`Serial.read()` 返回 `int` 存入 `char` 导致符号扩展，改为 `int` 类型
   - `car_controller.ino` — `handleSpeedCommand` 和 `handleServoCommand` 未更新 `g_lastCmdTime`，仅发送速度/云台命令时 1 秒超时触发自动停止。添加 `g_lastCmdTime = millis()`
 
+### 2026-06-09 - 全面代码排查与优化 v2（23项修复）
+- **范围**: 前端 Vue + 后端 Rust + 嵌入式固件三部分全面审查，修复 9 项严重问题、7 项高优先级问题、7 项一般问题
+- **严重修复（固件）**:
+  - `motor_control.h` — 运动创建函数引用 MOTOR_FL_IN1/IN2 (GPIO 10-11) 和 MOTOR_FR_IN1/IN2 (GPIO 12-13)，这些引脚在 ESP32-C6 上连接内部 SPI Flash 不可用。替换为 MOTOR_LEFT_IN1/IN2 (GPIO 4/5) 和 MOTOR_RIGHT_IN1/IN2 (GPIO 7/8)，删除不可用的 GPIO 10-13 常量
+  - `servo_control.h` — `parseGimbalCommand` 中 `uint8_t` 角度减法下溢（0 - 5 = 251），导致舵机跳到 180°。改为安全算术：减法前检查 `>= step`，加法前检查 `+ step <= maxAngle`
+  - `camera_config.h` — PWDN/RESET 引脚类型为 `uint8_t = -1`（存储 255 而非 -1），ESP 驱动检查 -1 跳过未用引脚。改为 `int8_t`；ImageQuality 枚举值反转（驱动中数值越小质量越高）：LOW=50, MEDIUM=30, HIGH=15, BEST=5
+  - `car_controller.ino` — `setup()` 中 `g_smartDriveEnabled = true` 覆盖全局初始值 false，改为保持 false；`handleDriveModeCommand` 添加 `setStraightLineEnabled()` 调用同步双标志
+  - `receiver_dongle.ino` — `getCommandType` 中 'D'/'d' 同时出现在 MOVE 和 SERVO 分支，switch fall-through 导致云台下命令永远匹配 MOVE。从 MOVE 分支移除 'D'/'d'；`Serial.read()` 返回 `int` 存入 `char` 导致符号扩展，改为 `int` 类型
+  - `car_controller.ino` — `handleSpeedCommand` 和 `handleServoCommand` 未更新 `g_lastCmdTime`，仅发送速度/云台命令时 1 秒超时触发自动停止。添加 `g_lastCmdTime = millis()`
+- **严重修复（前端）**:
+  - `ControlPanel.vue` — 串口连接/断开时不再修改 WebSocket `isConnected`，消除状态混淆；运动网格底行 Q/E 改为 A/D（消除与顶行重复）
+  - `useKeyboard.ts` — `activeKeys` 从 `ref<Set>` 改为每次修改创建新 Set 触发 Vue 响应式，修复按键高亮不工作
+  - `ControlPanel.vue` — 所有控制按钮添加 `@mouseleave` 事件发送停止命令，修复鼠标移出按钮后车辆持续运动
+  - `VideoPlayer.vue` — 分离 `rafId` 和 `timeoutId` 为两个独立变量，修复定时器类型混淆
+- **高优先级修复（后端）**:
+  - `websocket.rs` — 帧哈希改用多点采样（首4+中4+尾4字节+长度），修复同尺寸帧碰撞丢帧
+  - `serial.rs` — `SerialTaskResult` 所有变体携带 buffer，非视频路径恢复 `frame_buffer`，避免重复分配
+  - `api.rs` — REST API 速度命令 '1'-'9' 同步更新 `current_speed`，与 WebSocket 行为一致
+  - `serial.rs` — `connect()` 失败时状态恢复为 `Disconnected`，不再残留 `Connecting`
+- **高优先级修复（前端）**:
+  - `useWebSocket.ts` — `connect()` 先关闭旧连接再创建新的，防止状态腐败
+  - `useApi.ts` — 添加 `response.ok` 检查，非 2xx 抛出错误；GET 请求不设置 Content-Type
+- **一般修复（前端）**:
+  - `useWebSocket.ts` — 重连策略改为指数退避（1s→30s）+ 最大 10 次重试
+  - `useWebSocket.ts` — WS_URL 从硬编码 `ws://localhost:8080/ws` 改为基于 `window.location` 动态构建
+  - 新增 `useStatus.ts` — 合并 StatusBar/SpeedDashboard 重复 `/api/status` 轮询为共享 composable
+- **一般修复（后端）**:
+  - `lib.rs` — `ws_manager` 改为 `std::sync::Mutex`；`current_speed` 改为 `AtomicU8`；`last_heartbeat` 改为 `std::sync::Mutex`；`video_frame` 简化为单层 `Arc<Mutex<Option<Vec<u8>>>>`
+  - `websocket.rs` — odometry 广播添加 200ms 节流，减少不必要的网络流量
+- **一般修复（固件）**:
+  - `odometer.h` / `pid_control.h` — 版本号 1.1.0 → 1.2.0（遗漏更新）
+  - `wireless.h` — 魔术字注释 0xAA → 0xA5
+  - `video_stream.h` — `captureFrame()` 注释从"纯函数"修正为"有副作用"
+  - `car_controller.ino` — `g_currentSpeed` 默认值 128 → 28（匹配 map 最小值，更安全）
+- **验证**: `vue-tsc --noEmit` 通过；`bun run build` 成功；`cargo test` 35 测试全过；`cargo clippy` 0 errors
+
 ### 2026-06-09 - 全面代码排查与优化（14项修复）
 - **范围**: 前端 Vue + 后端 Rust + 嵌入式固件三部分全面审查，修复 6 项严重问题、7 项一般问题、4 项优化建议
 - **严重修复**:

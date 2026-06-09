@@ -29,10 +29,22 @@ export function useApi() {
    * @throws 网络错误或 JSON 解析错误时抛出异常
    */
   const request = async <T = ApiResponse>(url: string, options?: RequestInit): Promise<T> => {
+    // 仅在有请求体时设置 Content-Type（GET 请求无需此头部）
+    const headers: Record<string, string> = {}
+    if (options?.body) {
+      headers['Content-Type'] = 'application/json'
+    }
+
     const response = await fetch(url, {
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       ...options,
     })
+
+    // 检查 HTTP 状态码，避免对非 JSON 响应体调用 json() 导致 SyntaxError
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+    }
+
     return response.json() as Promise<T>
   }
 

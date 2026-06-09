@@ -76,9 +76,12 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
+import { useStatus } from '../composables/useStatus'
 
 // WebSocket 测速数据
 const { odometry } = useWebSocket()
+// 共享状态轮询（命令数）
+const { status } = useStatus()
 
 // 速度条最大参考值：50 cm/s（对应 500 mm/s）
 const MAX_SPEED_MMS = 500
@@ -129,7 +132,7 @@ watch(odometry, (newOdom) => {
 })
 
 // 运行时长
-const commandCount = ref(0)
+const commandCount = computed(() => status.value.command_count || 0)
 const runStartTime = ref<number>(Date.now())
 const runTimeSeconds = ref(0)
 
@@ -147,25 +150,11 @@ const runTimeUnit = computed(() => {
   return '小时'
 })
 
-// 定期更新运行时长和命令数
+// 定期更新运行时长
 let timeInterval: ReturnType<typeof setInterval> | null = null
-let statusInterval: ReturnType<typeof setInterval> | null = null
 
 const updateRunTime = () => {
   runTimeSeconds.value = Math.floor((Date.now() - runStartTime.value) / 1000)
-}
-
-// 仅轮询命令数（速度数据已从 WebSocket 获取）
-const updateCommandCount = async () => {
-  try {
-    const response = await fetch('/api/status')
-    const status = await response.json()
-    if (status.command_count !== undefined) {
-      commandCount.value = status.command_count
-    }
-  } catch (error) {
-    console.error('[SpeedDashboard] 获取命令数失败:', error)
-  }
 }
 
 const resetMaxSpeed = () => {
@@ -176,16 +165,10 @@ const resetMaxSpeed = () => {
 
 onMounted(() => {
   runStartTime.value = Date.now()
-  updateCommandCount()
-  statusInterval = setInterval(updateCommandCount, 2000)
   timeInterval = setInterval(updateRunTime, 1000)
 })
 
 onUnmounted(() => {
-  if (statusInterval !== null) {
-    clearInterval(statusInterval)
-    statusInterval = null
-  }
   if (timeInterval !== null) {
     clearInterval(timeInterval)
     timeInterval = null

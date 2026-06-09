@@ -19,8 +19,12 @@
 import { ref } from 'vue'
 import type { Ref } from 'vue'
 
-const WS_URL = 'ws://localhost:8080/ws'
+/** 根据当前页面协议动态构建 WebSocket URL（开发/生产通用） */
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
 const HEARTBEAT_INTERVAL = 30000 // 30秒
+const MAX_RETRY_COUNT = 10       // 最大重连次数
+const INITIAL_RETRY_DELAY = 1000 // 初始重连延迟（毫秒）
+const MAX_RETRY_DELAY = 30000    // 最大重连延迟（毫秒）
 
 /** 测速数据接口 */
 export interface OdometryData {
@@ -64,6 +68,7 @@ function createWebSocket() {
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let shouldReconnect = true
+  let retryCount = 0
 
   /** 启动心跳 */
   const startHeartbeat = () => {
@@ -93,8 +98,13 @@ function createWebSocket() {
 
   /** 连接 WebSocket */
   const connect = () => {
-    if (ws.value?.readyState === WebSocket.OPEN) {
-      return
+    // 关闭已有连接（包括 CONNECTING/OPEN/CLOSING 状态），防止旧连接的回调干扰
+    if (ws.value && ws.value.readyState !== WebSocket.CLOSED) {
+      ws.value.onopen = null
+      ws.value.onclose = null
+      ws.value.onerror = null
+      ws.value.onmessage = null
+      ws.value.close()
     }
 
     // 重置重连标志，允许自动重连
@@ -105,6 +115,8 @@ function createWebSocket() {
 
       socket.onopen = () => {
         isConnected.value = true
+        // 连接成功，重置重连计数
+        retryCount = 0
         startHeartbeat()
       }
 
@@ -156,13 +168,16 @@ function createWebSocket() {
         isConnected.value = false
         stopHeartbeat()
 
-        // 自动重连（仅在非主动断开时）
-        if (shouldReconnect) {
+        // 自动重连（仅在非主动断开且未超过最大重试次数时）
+        if (shouldReconnect && retryCount < MAX_RETRY_COUNT) {
+          // 指数退避：1s, 2s, 4s, 8s, 16s, 30s, 30s, ...
+          const delay = Math.min(INITIAL_RETRY_DELAY * Math.pow(2, retryCount), MAX_RETRY_DELAY)
+          retryCount++
           reconnectTimer = setTimeout(() => {
             if (shouldReconnect) {
               connect()
             }
-          }, 5000)
+          }, delay)
         }
       }
 

@@ -57,7 +57,7 @@ GimbalState g_currentGimbal = createInitialGimbalState();
 /**
  * 当前速度值（0-255）
  */
-uint8_t g_currentSpeed = 128;
+uint8_t g_currentSpeed = 28;
 
 /**
  * 最后命令接收时间
@@ -353,7 +353,7 @@ void setup() {
     // 初始化状态
     g_currentMotion = createStopState();
     g_currentGimbal = createInitialGimbalState();
-    g_currentSpeed = 128;
+    g_currentSpeed = 28;
     g_emergencyStop = false;
     // g_smartDriveEnabled 保持全局声明时的初始值 false，匹配前端默认 OFF
     
