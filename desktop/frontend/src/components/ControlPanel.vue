@@ -127,35 +127,6 @@
           D
         </button>
         
-        <button
-          @mousedown="sendCommand('A')"
-          @mouseup="sendCommand(' ')"
-          @mouseleave="sendCommand(' ')"
-          :class="['control-key-sm', { 'control-key-active': activeKeys.has('A') }]"
-          title="左转"
-          aria-label="左转"
-        >
-          A
-        </button>
-        <button
-          @mousedown="sendCommand(' ')"
-          @mouseup="sendCommand(' ')"
-          class="control-key-sm text-red-400"
-          title="停止"
-          aria-label="紧急停止"
-        >
-          ■
-        </button>
-        <button
-          @mousedown="sendCommand('D')"
-          @mouseup="sendCommand(' ')"
-          @mouseleave="sendCommand(' ')"
-          :class="['control-key-sm', { 'control-key-active': activeKeys.has('D') }]"
-          title="右转"
-          aria-label="右转"
-        >
-          D
-        </button>
       </div>
     </div>
     
