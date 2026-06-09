@@ -2,7 +2,7 @@
  * 智能车控制系统 - 函数式编程风格
  * 基于 ESP32-C6，使用 L298N 驱动 4 个电机，SG90 舵机控制转向
  * 作者：智能车项目团队
- * 版本：1.0.0
+ * 版本：1.2.0
  */
 
 #ifndef MOTOR_CONTROL_H
@@ -73,12 +73,13 @@ namespace PinConfig {
     constexpr uint8_t L298N_2_IN1 = 7;   // 右侧输入1
     constexpr uint8_t L298N_2_IN2 = 8;   // 右侧输入2
     constexpr uint8_t L298N_2_EN = 9;    // 右侧使能(PWM)
-    
-    // 辅助电机（如果需要独立控制）
-    constexpr uint8_t MOTOR_FL_IN1 = 10;  // 左前输入1
-    constexpr uint8_t MOTOR_FL_IN2 = 11;  // 左前输入2
-    constexpr uint8_t MOTOR_FR_IN1 = 12;  // 右前输入1
-    constexpr uint8_t MOTOR_FR_IN2 = 13;  // 右前输入2
+
+    // 别名：左侧电机使用 L298N 模块1
+    constexpr uint8_t MOTOR_LEFT_IN1 = L298N_1_IN1;   // 左侧输入1 (GPIO 4)
+    constexpr uint8_t MOTOR_LEFT_IN2 = L298N_1_IN2;   // 左侧输入2 (GPIO 5)
+    // 别名：右侧电机使用 L298N 模块2
+    constexpr uint8_t MOTOR_RIGHT_IN1 = L298N_2_IN1;  // 右侧输入1 (GPIO 7)
+    constexpr uint8_t MOTOR_RIGHT_IN2 = L298N_2_IN2;  // 右侧输入2 (GPIO 8)
 }
 
 // ============================================
@@ -180,13 +181,13 @@ inline MotorState changeMotorState(
  */
 inline VehicleMotion createStopState() {
     return VehicleMotion(
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN, 
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN, 
                    MotorDirection::STOP, 0),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN, 
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN, 
                    MotorDirection::STOP, 0),
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN, 
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN, 
                    MotorDirection::STOP, 0),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN, 
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN, 
                    MotorDirection::STOP, 0)
     );
 }
@@ -198,13 +199,13 @@ inline VehicleMotion createStopState() {
  */
 inline VehicleMotion createForwardState(const uint8_t speed) {
     return VehicleMotion(
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::FORWARD, speed)
     );
 }
@@ -214,13 +215,13 @@ inline VehicleMotion createForwardState(const uint8_t speed) {
  */
 inline VehicleMotion createBackwardState(const uint8_t speed) {
     return VehicleMotion(
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::BACKWARD, speed),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::BACKWARD, speed),
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::BACKWARD, speed),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::BACKWARD, speed)
     );
 }
@@ -231,13 +232,13 @@ inline VehicleMotion createBackwardState(const uint8_t speed) {
  */
 inline VehicleMotion createLeftTurnState(const uint8_t speed) {
     return VehicleMotion(
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::BACKWARD, speed / 2),  // 左侧慢速后退
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::FORWARD, speed),         // 右侧正常前进
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::BACKWARD, speed / 2),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::FORWARD, speed)
     );
 }
@@ -247,13 +248,13 @@ inline VehicleMotion createLeftTurnState(const uint8_t speed) {
  */
 inline VehicleMotion createRightTurnState(const uint8_t speed) {
     return VehicleMotion(
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::FORWARD, speed),         // 左侧正常前进
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::BACKWARD, speed / 2),  // 右侧慢速后退
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::BACKWARD, speed / 2)
     );
 }
@@ -263,13 +264,13 @@ inline VehicleMotion createRightTurnState(const uint8_t speed) {
  */
 inline VehicleMotion createInPlaceLeftState(const uint8_t speed) {
     return VehicleMotion(
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::BACKWARD, speed),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::BACKWARD, speed),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::FORWARD, speed)
     );
 }
@@ -279,13 +280,13 @@ inline VehicleMotion createInPlaceLeftState(const uint8_t speed) {
  */
 inline VehicleMotion createInPlaceRightState(const uint8_t speed) {
     return VehicleMotion(
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::BACKWARD, speed),
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::BACKWARD, speed)
     );
 }
@@ -313,13 +314,13 @@ inline VehicleMotion createDifferentialState(
     MotorDirection rightDir, uint8_t rightSpeed
 ) {
     return VehicleMotion(
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    leftDir, leftSpeed),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    rightDir, rightSpeed),
-        MotorState(PinConfig::MOTOR_FL_IN1, PinConfig::MOTOR_FL_IN2, PinConfig::L298N_1_EN,
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    leftDir, leftSpeed),
-        MotorState(PinConfig::MOTOR_FR_IN1, PinConfig::MOTOR_FR_IN2, PinConfig::L298N_2_EN,
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    rightDir, rightSpeed)
     );
 }

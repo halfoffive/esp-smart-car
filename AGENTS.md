@@ -219,6 +219,37 @@ Key connections:
   - `desktop/backend/build.rs` — 新增构建脚本，自动检测并构建前端
   - `desktop/backend/Cargo.toml` — 添加 `build = "build.rs"`
 
+### 2026-06-09 - 固件关键 bug 修复（6项）
+- **范围**: 嵌入式固件 4 个文件，修复 6 项严重 bug
+- **严重修复**:
+  - `motor_control.h` — 运动创建函数引用 MOTOR_FL_IN1/IN2 (GPIO 10-11) 和 MOTOR_FR_IN1/IN2 (GPIO 12-13)，这些引脚在 ESP32-C6 上连接内部 SPI Flash 不可用。`initializeMotorPins()` 只配置了 GPIO 4-9。替换为 MOTOR_LEFT_IN1/IN2 (GPIO 4/5) 和 MOTOR_RIGHT_IN1/IN2 (GPIO 7/8)，删除不可用的 GPIO 10-13 常量
+  - `servo_control.h` — `parseGimbalCommand` 中 `uint8_t` 角度减法下溢（0 - 5 = 251），导致舵机跳到 180°。改为安全算术：减法前检查 `>= step`，加法前检查 `+ step <= maxAngle`
+  - `camera_config.h` — PWDN/RESET 引脚类型为 `uint8_t = -1`（存储 255 而非 -1），ESP 驱动检查 -1 跳过未用引脚。改为 `int8_t`；ImageQuality 枚举值反转（驱动中数值越小质量越高）：LOW=50, MEDIUM=30, HIGH=15, BEST=5
+  - `car_controller.ino` — `setup()` 中 `g_smartDriveEnabled = true` 覆盖全局初始值 false，改为保持 false；`handleDriveModeCommand` 添加 `setStraightLineEnabled()` 调用同步双标志
+  - `receiver_dongle.ino` — `getCommandType` 中 'D'/'d' 同时出现在 MOVE 和 SERVO 分支，switch fall-through 导致云台下命令永远匹配 MOVE。从 MOVE 分支移除 'D'/'d'；`Serial.read()` 返回 `int` 存入 `char` 导致符号扩展，改为 `int` 类型
+  - `car_controller.ino` — `handleSpeedCommand` 和 `handleServoCommand` 未更新 `g_lastCmdTime`，仅发送速度/云台命令时 1 秒超时触发自动停止。添加 `g_lastCmdTime = millis()`
+
+### 2026-06-09 - 全面代码排查与优化（14项修复）
+- **范围**: 前端 Vue + 后端 Rust + 嵌入式固件三部分全面审查，修复 6 项严重问题、7 项一般问题、4 项优化建议
+- **严重修复**:
+  - `ControlPanel.vue` — 运动控制网格第一行从两个"云台上"按钮修正为 Q/W/E（原地左转/前进/原地右转）布局
+  - `ControlPanel.vue` — 删除本地 `isConnected` ref，改为从 `useWebSocket()` 导入，统一连接状态源
+  - `car_controller.ino` — `g_smartDriveEnabled` 初始值从 `true` 改为 `false`（匹配前端默认 OFF）
+  - `useKeyboard.ts` — `handleKeyDown` 添加 `if (event.repeat) return;` 防止 OS 按键重复导致命令风暴
+  - `receiver_dongle.ino` — 移除 `onReceiverDataRecv` 中 ODOMETRY 数据的 WirelessPacket 分支透传，避免重复发送
+  - `video_stream.h` — `VideoPacket` 结构体所有成员移除 `const` 修饰（修复不可编译的赋值操作）
+- **一般修复**:
+  - `VideoPlayer.vue` — `updateVideo()` 无视频帧时用 `setTimeout` 延迟轮询替代持续 RAF 循环
+  - `SpeedDashboard.vue` / `StatusBar.vue` — 使用 `useApi().get()` 替换裸 `fetch`
+  - `websocket.rs` — `video_task` 添加 `last_frame_hash` 帧去重，仅新帧时 base64 编码发送
+  - `serial.rs` — 视频帧用 `Arc<Vec<u8>>` 共享引用替代 `clone()`
+  - `lib.rs` — `video_frame` 字段类型改为 `Arc<Mutex<Option<Arc<Vec<u8>>>>>`
+  - `ControlPanel.vue` — `sendCommand()` 移除普通命令日志记录，避免高频操作日志洪流
+  - `App.vue` — 移除 `onMounted` 自动连接 WebSocket，改为用户手动触发
+  - `main.rs` — API 路由与 SPA fallback 分离为独立 Router，避免 API 404 返回 index.html
+- **版本统一**: 所有固件文件版本号统一为 1.2.0（8 文件 11 处）
+- **验证**: `vue-tsc --noEmit` 通过；`bun run build` 成功；`cargo test` 35 测试全过；`cargo clippy` 0 errors
+
 ## 额外要求
 
 在修改代码时，严格遵守：

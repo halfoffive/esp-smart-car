@@ -239,6 +239,17 @@ cargo clippy       # 静态分析检查
 
 ## 版本历史
 
+- v1.3.1 - 2026-06-09
+  - 修复 motor_control.h GPIO 引脚错误（GPIO 10-13 在 ESP32-C6 上连接 SPI Flash，改为 GPIO 4-8）
+  - 修复 servo_control.h 云台角度 uint8_t 下溢（0° - 5 = 251°）
+  - 修复 camera_config.h PWDN/RESET 引脚类型（uint8_t → int8_t，确保 -1 正确存储）
+  - 修复 camera_config.h JPEG 质量枚举反转（ESP32 驱动中数值越小质量越高）
+  - 修复 car_controller.ino 智能修正初始值（setup() 不再覆盖为 true）
+  - 修复 car_controller.ino 行走模式切换时双标志不同步
+  - 修复 receiver_dongle.ino 'D' 键冲突（云台下命令被 MOVE 分支截获）
+  - 修复 receiver_dongle.ino Serial.read() 类型（char → int，避免符号扩展）
+  - 修复 car_controller.ino 速度/云台命令未更新超时时间戳
+
 - v1.3.0 - 2026-06-08
   - 全面代码排查与优化（前端+后端+固件）
   - 新增 useApi.ts composable、ARIA 无障碍标签、固件调试开关

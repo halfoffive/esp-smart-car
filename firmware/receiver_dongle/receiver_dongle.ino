@@ -20,7 +20,7 @@
  * 接收器 -> 电脑: USB 串口 (视频帧)
  * 
  * 作者：智能车项目团队
- * 版本：1.0.0
+ * 版本：1.2.0
  */
 
 #include "wireless.h"
@@ -121,7 +121,6 @@ inline CommandType getCommandType(const char cmd) {
         case 'W': case 'w':
         case 'A': case 'a':
         case 'S': case 's':
-        case 'D': case 'd':
         case 'Q': case 'q':
         case 'E': case 'e':
         case ' ':
@@ -267,18 +266,13 @@ void onReceiverDataRecv(const uint8_t* mac, const uint8_t* data, int len) {
     if (len >= sizeof(WirelessPacket)) {
         const WirelessPacket* packet = reinterpret_cast<const WirelessPacket*>(data);
         if (validatePacket(*packet)) {
-            // 处理状态反馈和测速数据
+            // 处理状态反馈
             if (packet->type == CommandType::STATUS) {
                 // 转发状态到电脑
                 Serial.write(data, len);
             }
-            // 测速数据：转发到PC端（JSON格式便于后端解析）
-            else if (packet->type == CommandType::ODOMETRY) {
-                // 从 WirelessPacket 解析测速数据
-                // 测速数据存放在 data 字段的扩展中
-                // 直接透传原始数据
-                Serial.write(data, len);
-            }
+            // 注意：ODOMETRY 类型由下方 OdometryPacket 分支处理（JSON格式化），
+            // 不在此处透传原始二进制数据
         }
     }
     
@@ -311,7 +305,7 @@ void setup() {
     
     Serial.println("\n================================");
     Serial.println("智能车接收器 - ESP32-C6");
-    Serial.println("版本: 1.0.0");
+    Serial.println("版本: 1.2.0");
     Serial.println("================================\n");
     
     // 初始化无线通信
@@ -338,8 +332,9 @@ void setup() {
 void loop() {
     // 1. 处理串口输入
     if (Serial.available()) {
-        const char input = Serial.read();
-        const SerialCommand cmd = parseSerialCommand(input);
+        const int input = Serial.read();
+        if (input < 0) return;  // 无数据或读取错误
+        const SerialCommand cmd = parseSerialCommand(static_cast<char>(input));
         
         if (cmd.isValid) {
             // 转发到车载控制器

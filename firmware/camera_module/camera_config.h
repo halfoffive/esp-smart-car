@@ -3,7 +3,7 @@
  * 基于函数式编程思想
  * 支持 OV2640 摄像头模块
  * 作者：智能车项目团队
- * 版本：1.0.0
+ * 版本：1.2.0
  */
 
 #ifndef CAMERA_CONFIG_H
@@ -16,8 +16,8 @@
 // 摄像头引脚配置（ESP32-S3 CAM 标准引脚）
 // ============================================
 namespace CameraPins {
-    constexpr uint8_t PWDN = -1;     // 电源控制（-1表示无）
-    constexpr uint8_t RESET = -1;    // 复位（-1表示无）
+    constexpr int8_t PWDN = -1;     // 电源控制（-1表示无，int8_t确保-1正确存储）
+    constexpr int8_t RESET = -1;    // 复位（-1表示无，int8_t确保-1正确存储）
     constexpr uint8_t XCLK = 15;     // 外部时钟
     constexpr uint8_t SIOD = 4;      // SDA（I2C数据）
     constexpr uint8_t SIOC = 5;      // SCL（I2C时钟）
@@ -56,12 +56,14 @@ enum class Resolution : uint8_t {
 
 /**
  * 图像质量枚举
+ * ESP32 摄像头驱动中，数值越小 = 质量越高（压缩越低）
+ * 因此 LOW 对应最大压缩值，BEST 对应最小压缩值
  */
 enum class ImageQuality : uint8_t {
-    LOW = 10,      // 低质量（高压缩）
-    MEDIUM = 20,   // 中等质量
-    HIGH = 30,     // 高质量（低压缩）
-    BEST = 40      // 最佳质量
+    LOW = 50,      // 低质量（高压缩，数值大=质量低）
+    MEDIUM = 30,   // 中等质量
+    HIGH = 15,     // 高质量（低压缩）
+    BEST = 5       // 最佳质量（最低压缩值）
 };
 
 /**

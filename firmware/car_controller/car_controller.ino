@@ -19,7 +19,7 @@
  * - 右编码器: GPIO1
  * 
  * 作者：智能车项目团队
- * 版本：1.1.0
+ * 版本：1.2.0
  */
 
 #include "motor_control.h"
@@ -78,7 +78,7 @@ uint32_t g_lastOdomReportTime = 0;
 /**
  * 直线修正使能标志
  */
-bool g_smartDriveEnabled = true;
+bool g_smartDriveEnabled = false;
 
 // ============================================
 // 命令处理函数
@@ -139,6 +139,7 @@ void handleMoveCommand(const char cmd) {
  */
 void handleServoCommand(const char cmd) {
     g_currentGimbal = parseGimbalCommand(g_currentGimbal, cmd);
+    g_lastCmdTime = millis();  // 更新时间戳，防止超时自动停止
 #if DEBUG_SERVO
     Serial.printf("[舵机命令] 执行: %c, 目标角度 H:%d V:%d\n", 
                   cmd, 
@@ -153,6 +154,7 @@ void handleServoCommand(const char cmd) {
  */
 void handleSpeedCommand(const uint8_t speed) {
     g_currentSpeed = speed;
+    g_lastCmdTime = millis();  // 更新时间戳，防止超时自动停止
 #if DEBUG_MOTOR
     Serial.printf("[速度设置] 新速度: %d\n", g_currentSpeed);
 #endif
@@ -194,14 +196,17 @@ void handleDriveModeCommand(const uint8_t mode) {
         case 0:
             setDriveMode(DriveMode::NORMAL);
             g_smartDriveEnabled = false;
+            setStraightLineEnabled(false);
             break;
         case 1:
             setDriveMode(DriveMode::STRAIGHT_LINE);
             g_smartDriveEnabled = true;
+            setStraightLineEnabled(true);
             break;
         case 2:
             setDriveMode(DriveMode::HEADING_LOCK);
             g_smartDriveEnabled = true;
+            setStraightLineEnabled(true);
             break;
         default:
 #if DEBUG_MOTOR
@@ -316,7 +321,7 @@ void setup() {
     
     Serial.println("\n================================");
     Serial.println("智能车控制系统 - ESP32-C6");
-    Serial.println("版本: 1.1.0 (含测速+PID)");
+    Serial.println("版本: 1.2.0 (含测速+PID)");
     Serial.println("================================\n");
     
     // 初始化电机引脚
@@ -350,7 +355,7 @@ void setup() {
     g_currentGimbal = createInitialGimbalState();
     g_currentSpeed = 128;
     g_emergencyStop = false;
-    g_smartDriveEnabled = true;
+    // g_smartDriveEnabled 保持全局声明时的初始值 false，匹配前端默认 OFF
     
     Serial.println("[初始化] 系统启动完成，等待命令...");
     Serial.println("[命令说明]");
@@ -359,7 +364,7 @@ void setup() {
     Serial.println("  U/D/L/R/C: 云台控制");
     Serial.println("  空格: 停止");
     Serial.println("  1-9: 速度设置");
-    Serial.println("  智能修正: 默认启用");
+    Serial.println("  智能修正: 默认关闭");
 }
 
 // ============================================

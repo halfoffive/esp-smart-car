@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **motor_control.h GPIO 引脚错误** — 运动创建函数引用 MOTOR_FL_IN1/IN2 (GPIO 10-11) 和 MOTOR_FR_IN1/IN2 (GPIO 12-13)，这些引脚在 ESP32-C6 上连接内部 SPI Flash 不可用。替换为 MOTOR_LEFT_IN1/IN2 (GPIO 4/5) 和 MOTOR_RIGHT_IN1/IN2 (GPIO 7/8)，删除不可用的 GPIO 10-13 常量
+- **servo_control.h 角度下溢** — `parseGimbalCommand` 中 `uint8_t` 角度减法下溢（0 - 5 = 251），导致舵机跳到 180°。改为安全算术：减法前检查 `>= step`，加法前检查 `+ step <= maxAngle`
+- **camera_config.h 引脚类型错误** — PWDN/RESET 引脚类型为 `uint8_t = -1`（存储 255 而非 -1），ESP 驱动检查 -1 跳过未用引脚。改为 `int8_t`
+- **camera_config.h JPEG 质量枚举反转** — ESP32 驱动中数值越小质量越高，原 LOW=10/BEST=40 含义反转。修正为 LOW=50, MEDIUM=30, HIGH=15, BEST=5
+- **car_controller.ino 智能修正初始值** — `setup()` 中 `g_smartDriveEnabled = true` 覆盖全局初始值 false，改为保持 false 匹配前端默认 OFF
+- **car_controller.ino 双标志不同步** — `handleDriveModeCommand` 更新 `g_smartDriveEnabled` 后未同步 `PIDController::setStraightLineEnabled()`，添加同步调用
+- **receiver_dongle.ino 'D' 键冲突** — `getCommandType` 中 'D'/'d' 同时出现在 MOVE 和 SERVO 分支，云台下命令永远匹配 MOVE。从 MOVE 分支移除 'D'/'d'
+- **receiver_dongle.ino Serial.read 类型** — `Serial.read()` 返回 `int` 存入 `char` 导致符号扩展，改为 `int` 类型
+- **car_controller.ino 超时误触发** — `handleSpeedCommand` 和 `handleServoCommand` 未更新 `g_lastCmdTime`，仅发送速度/云台命令时 1 秒超时触发自动停止。添加 `g_lastCmdTime = millis()`
+
 ### Added
 - **测速模块**（`odometer.h`）- 完整的编码器测速系统
   - 霍尔/红外编码器中断读取（GPIO 0/1）

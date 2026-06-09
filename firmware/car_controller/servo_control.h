@@ -3,7 +3,7 @@
  * 基于 ESP32-C6，使用 SG90 舵机
  * 用于控制摄像头云台或机械臂
  * 作者：智能车项目团队
- * 版本：1.0.0
+ * 版本：1.2.0
  */
 
 #ifndef SERVO_CONTROL_H
@@ -281,16 +281,22 @@ inline GimbalState parseGimbalCommand(const GimbalState& current, const char cmd
     
     switch (cmd) {
         case 'U': case 'u':
-            newVAngle += step;
+            // 安全加法：防止超出最大角度
+            newVAngle = (newVAngle + step <= SG90Config::MAX_ANGLE)
+                        ? newVAngle + step : SG90Config::MAX_ANGLE;
             break;
         case 'D': case 'd':
-            newVAngle -= step;
+            // 安全减法：防止 uint8_t 下溢（0 - 5 = 251）
+            newVAngle = (newVAngle >= step) ? newVAngle - step : 0;
             break;
         case 'L': case 'l':
-            newHAngle -= step;
+            // 安全减法：防止 uint8_t 下溢
+            newHAngle = (newHAngle >= step) ? newHAngle - step : 0;
             break;
         case 'R': case 'r':
-            newHAngle += step;
+            // 安全加法：防止超出最大角度
+            newHAngle = (newHAngle + step <= SG90Config::MAX_ANGLE)
+                        ? newHAngle + step : SG90Config::MAX_ANGLE;
             break;
         case 'C': case 'c':
             newHAngle = SG90Config::DEFAULT_ANGLE;
