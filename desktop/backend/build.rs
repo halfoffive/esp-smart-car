@@ -31,21 +31,49 @@ fn main() {
             panic!("未找到 bun，无法自动构建前端。请手动运行: cd ../frontend && bun install && bun run build");
         }
 
-        // 安装依赖
-        let install_result = Command::new("bun")
-            .args(["install"])
-            .current_dir(frontend_dir)
-            .status();
+        // 条件判断：检查 node_modules 是否存在且 package.json 未变更
+        let node_modules_exists =
+            std::path::Path::new(&format!("{}/node_modules", frontend_dir)).exists();
+        let package_json_mtime = std::path::Path::new(frontend_dir)
+            .join("package.json")
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok();
+        let node_modules_mtime =
+            std::path::Path::new(&format!("{}/node_modules/.package-lock.json", frontend_dir))
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok();
 
-        if let Err(e) = install_result {
-            panic!("前端依赖安装失败: {}", e);
-        }
+        let need_install = if node_modules_exists {
+            // node_modules 存在，但 package.json 比 node_modules/.package-lock.json 新，说明依赖有变化
+            match (package_json_mtime, node_modules_mtime) {
+                (Some(pkg_time), Some(nm_time)) => pkg_time > nm_time,
+                _ => true, // 无法比较时，认为需要安装
+            }
+        } else {
+            true // node_modules 不存在，需要安装
+        };
 
-        // 检查 node_modules 是否存在，确保依赖已安装
-        if !std::path::Path::new(&format!("{}/node_modules", frontend_dir)).exists() {
-            panic!(
-                "前端依赖安装后 node_modules 目录不存在，请手动运行: cd ../frontend && bun install"
-            );
+        if need_install {
+            // 安装依赖
+            let install_result = Command::new("bun")
+                .args(["install"])
+                .current_dir(frontend_dir)
+                .status();
+
+            if let Err(e) = install_result {
+                panic!("前端依赖安装失败: {}", e);
+            }
+
+            // 检查 node_modules 是否存在，确保依赖已安装
+            if !std::path::Path::new(&format!("{}/node_modules", frontend_dir)).exists() {
+                panic!(
+                    "前端依赖安装后 node_modules 目录不存在，请手动运行: cd ../frontend && bun install"
+                );
+            }
+        } else {
+            println!("cargo:warning=前端依赖已安装，跳过 bun install");
         }
 
         // 构建前端

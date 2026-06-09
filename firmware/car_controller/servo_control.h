@@ -289,12 +289,12 @@ inline GimbalState parseGimbalCommand(const GimbalState& current, const char cmd
             // 安全减法：防止 uint8_t 下溢（0 - 5 = 251）
             newVAngle = (newVAngle >= step) ? newVAngle - step : 0;
             break;
-        case 'L': case 'l':
-            // 安全减法：防止 uint8_t 下溢
+        case 'H': case 'h':
+            // 安全减法：防止 uint8_t 下溢（云台左转）
             newHAngle = (newHAngle >= step) ? newHAngle - step : 0;
             break;
-        case 'R': case 'r':
-            // 安全加法：防止超出最大角度
+        case 'K': case 'k':
+            // 安全加法：防止超出最大角度（云台右转）
             newHAngle = (newHAngle + step <= SG90Config::MAX_ANGLE)
                         ? newHAngle + step : SG90Config::MAX_ANGLE;
             break;

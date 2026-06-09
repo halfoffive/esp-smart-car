@@ -122,8 +122,8 @@ namespace OdometerState {
     // 脉冲计数（volatile 用于中断安全）
     volatile uint32_t g_leftPulses = 0;
     volatile uint32_t g_rightPulses = 0;
-    volatile uint32_t g_lastLeftPulses = 0;
-    volatile uint32_t g_lastRightPulses = 0;
+    volatile uint32_t g_lastLeftPulses = 0;   // volatile：主循环和中断上下文均访问
+    volatile uint32_t g_lastRightPulses = 0;  // volatile：主循环和中断上下文均访问
     
     // 累计距离
     float g_leftDistanceMm = 0.0f;

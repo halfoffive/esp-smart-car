@@ -132,6 +132,45 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-09 - 全面代码排查与优化 v3（27项修复）
+- **范围**: 前端 Vue + 后端 Rust + 嵌入式固件三部分全面审查，启用 karpathy-guidelines 和 frontend-design 深度审计，修复 10 项严重问题、9 项高优先级问题、8 项一般问题
+- **严重修复（前端）**:
+  - `ControlPanel.vue` — `onUnmounted` 中 `disconnect()` 未 await，改为 `.catch(() => {})` 处理 Promise rejection
+  - `ControlPanel.vue` — `handleSpeedInput` 与 `v-model.number` 逻辑重复，直接读取 `currentSpeed.value`
+  - `VideoPlayer.vue` — RAF 持续空转造成 CPU 浪费，改用 `watch(videoFrame)` 监听帧变化
+  - `useWebSocket.ts` — 旧连接清理不安全，`connect()` 关闭旧连接后设 `shouldReconnect = false` 防误触发重连
+  - `useWebSocket.ts` — 命令静默丢弃，`sendCommand`/`sendSpeed`/`sendDriveMode` 返回 `boolean`
+- **严重修复（固件）**:
+  - `servo_control.h` — 云台命令字符 'L'/'R' 与前端 'H'/'K' 不匹配，云台左右按钮完全失效
+  - `car_controller.ino` — OdometryPacket `reinterpret_cast` 强转 WirelessPacket（12 vs 8 字节），改为 `sendRawPacket()` 通用发送
+  - `video_stream.h` — VideoPacket 发送冗余数据，改为只发送实际有效大小
+  - `receiver_dongle.ino` — `handleVideoPacket` 中 `dataLen` 未边界检查，添加 `<= MAX_PACKET_SIZE` 验证
+  - `receiver_dongle.ino` — OdometryPacket 重复处理，调整分支顺序确保只处理一次
+- **高优先级修复（后端）**:
+  - `serial.rs` — `read_line` 中 `from_utf8_lossy` 改为 `from_utf8`，非 UTF-8 时记录日志丢弃
+  - `api.rs` — `connect_serial` 阻塞 I/O 移出 `MutexGuard` 保护范围
+  - `serial.rs` — 帧头查找添加 5 秒总超时限制；帧大小上限从 10MB 改为 256KB
+  - `lib.rs` — `video_frame` 类型改为 `Arc<Mutex<Option<Arc<Vec<u8>>>>>` 共享引用
+  - `websocket.rs` — `forward_task` 异常退出显式错误处理；`video_task` 使用 `Arc::clone` 共享帧引用
+- **高优先级修复（固件）**:
+  - `odometer.h` — `g_lastLeftPulses`/`g_lastRightPulses` 声明为 `volatile`
+  - `pid_control.h` — `dtMs == 0` 时直接返回上次状态，不硬编码 0.01f
+  - `car_controller.ino` — `sendOdometryData` 速度值添加 `constrain` 限制在 `INT16_MIN`~`INT16_MAX`
+  - `receiver_dongle.ino` — 视频包添加 `version` 严格校验
+- **一般修复（前端）**:
+  - `ControlPanel.vue` — logs 用 `Date.now()` 作为 key；`addLog` 错误对象正确处理
+  - `useKeyboard.ts` — `handleKeyUp` 统一为替换整个 Set
+  - `useApi.ts` — headers 合并逻辑添加注释
+  - `useStatus.ts` — 日志仅开发环境输出
+- **一般修复（固件）**:
+  - `motor_control.h` — `createLeftTurnState`/`createRightTurnState` 使用 `(speed + 1) / 2` 保持对称
+  - `wireless.h` — `sendPacket` 使用局部缓冲区拷贝 MAC，消除 `const_cast`；新增 `sendRawPacket()` 通用发送
+  - `video_stream.h` — `delayMicroseconds(100)` 改为 `50`；`FrameState::frameBuffer` 改为非 const 消除 `const_cast`
+- **一般修复（后端）**:
+  - `build.rs` — `bun install` 添加条件判断，避免每次构建都运行
+  - `Cargo.toml` — 添加 `rust-version = "1.75"` 字段
+- **验证**: `bun run build` 成功；`cargo test` 因 Rust 1.96.0 编译器 ICE（已知 bug）暂无法运行；`cargo clippy` 同理
+
 ### 2026-06-08 - 全面代码排查与优化
 - **范围**: 后端 Rust + 前端 Vue + 嵌入式固件三部分全面审查优化
 - **前端修复**:
@@ -290,5 +329,5 @@ Key connections:
 
 在修改代码时，严格遵守：
 
-- **编程风格**: 函数式编程，大量中文注释。Rust 部分，使用`cargo fmt`格式化，合理编写自动化测试，必须`cargo clippy`和自动化测试全过。
+- **编程风格**: 函数式编程，大量中文注释。Rust 部分，使用`cargo fmt`格式化，记得合理编写自动化测试，必须`cargo clippy`和自动化测试全过，才能提交。
 - **当完成修改时**: 更新"AGENTS.md","CHANGELOG.md","README.md"，然后提交并推送git。

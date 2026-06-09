@@ -21,7 +21,7 @@
  * 视频帧状态
  */
 struct FrameState {
-    const camera_fb_t* frameBuffer;  // 帧缓冲指针
+    camera_fb_t* frameBuffer;        // 帧缓冲指针（非 const：需要传递给 esp_camera_fb_return 释放）
     const size_t frameSize;          // 帧大小
     const uint32_t timestamp;        // 时间戳
     const uint16_t frameId;          // 帧序号
@@ -108,7 +108,7 @@ inline FrameState captureFrame() {
  */
 inline void releaseFrame(const FrameState& frame) {
     if (frame.frameBuffer != nullptr) {
-        esp_camera_fb_return(const_cast<camera_fb_t*>(frame.frameBuffer));
+        esp_camera_fb_return(frame.frameBuffer);
     }
 }
 
@@ -180,13 +180,14 @@ inline void sendVideoFrame(const FrameState& frame) {
         }
         packet.checksum = sum;
         
-        // 发送（使用ESP-NOW广播）
+        // 发送（使用ESP-NOW广播），只发送实际有效大小
+        const size_t sendSize = sizeof(VideoPacket) - StreamConfig::MAX_PACKET_SIZE + packetLen;
         esp_now_send(nullptr, 
                      reinterpret_cast<const uint8_t*>(&packet),
-                     sizeof(packet));
+                     sendSize);
         
         // 短暂延迟避免拥塞
-        delayMicroseconds(100);
+        delayMicroseconds(50);
     }
 }
 

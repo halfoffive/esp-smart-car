@@ -165,9 +165,13 @@ inline PIDState computePID(
     // 对 uint32_t 类型是安全的：即使溢出，差值仍然正确（模 2^32 算术）。
     // 此处先计算无符号差值，再转换为 float，确保溢出安全。
     const uint32_t dtMs = currentTime - lastState.lastTime;
-    const float dt = (dtMs > 0) 
-        ? static_cast<float>(dtMs) / 1000.0f 
-        : 0.01f;
+    
+    // dtMs 为 0 表示时间未推进，直接返回上次状态，避免除零
+    if (dtMs == 0) {
+        return lastState;
+    }
+    
+    const float dt = static_cast<float>(dtMs) / 1000.0f;
     
     // 当前误差
     const float error = setpoint - newInput;

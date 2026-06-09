@@ -237,7 +237,7 @@
     <div class="flex-1 min-h-0 flex flex-col">
       <h3 class="text-xs font-medium text-dark-300 mb-1">系统日志</h3>
       <div class="flex-1 bg-dark-950 rounded-lg p-2 overflow-y-auto font-mono text-[10px] space-y-0.5 min-h-[60px]" role="log" aria-label="系统日志" aria-live="polite">
-        <div v-for="(log, index) in logs" :key="index" :class="log.color">
+        <div v-for="(log, index) in logs" :key="log.id ?? index" :class="log.color">
           <span class="text-dark-600">[{{ log.time }}]</span>
           {{ log.message }}
         </div>
@@ -264,7 +264,7 @@ const isConnecting = ref(false)
 /** 速度滑块防抖定时器：快速拖动时只发送最终值，不发送中间值 */
 let speedDebounceTimer: number | null = null
 const smartDriveOn = ref(false)
-const logs = ref<{ time: string, message: string, color: string }[]>([])
+const logs = ref<{ id: number, time: string, message: string, color: string }[]>([])
 
 const speedPercent = computed(() => Math.round((currentSpeed.value / 9) * 100))
 
@@ -287,6 +287,7 @@ const addLog = (message: string, type: 'info' | 'warning' | 'error' = 'info') =>
   }
   
   logs.value.unshift({
+    id: Date.now(),
     time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
     message,
     color: colors[type]
@@ -311,9 +312,7 @@ const sendCommand = (cmd: string) => {
 const { activeKeys } = useKeyboard(sendCommand)
 
 /** 速度滑块输入处理（带 200ms 防抖）：只发送最终值，不发送中间值 */
-const handleSpeedInput = (event: Event) => {
-  const target = event.target as HTMLInputElement
-  currentSpeed.value = parseFloat(target.value)
+const handleSpeedInput = () => {
   if (speedDebounceTimer !== null) {
     clearTimeout(speedDebounceTimer)
   }
@@ -348,7 +347,7 @@ const connect = async () => {
       addLog(`连接失败: ${result.message}`, 'error')
     }
   } catch (e) {
-    addLog(`连接错误: ${e}`, 'error')
+    addLog(`连接错误: ${e instanceof Error ? e.message : String(e)}`, 'error')
   } finally {
     isConnecting.value = false
   }
@@ -362,7 +361,7 @@ const disconnect = async () => {
       addLog('串口已断开')
     }
   } catch (e) {
-    addLog(`断开错误: ${e}`, 'error')
+    addLog(`断开错误: ${e instanceof Error ? e.message : String(e)}`, 'error')
   }
 }
 
@@ -395,7 +394,7 @@ onUnmounted(() => {
   }
   // 断开连接
   if (isConnected.value) {
-    disconnect()
+    disconnect().catch(() => {})
   }
 })
 </script>

@@ -240,6 +240,14 @@ cargo clippy       # 静态分析检查
 
 ## 版本历史
 
+- v1.4.0 - 2026-06-09
+  - 全面代码排查与优化 v3（27项修复，启用 karpathy-guidelines + frontend-design）
+  - 前端：修复 onUnmounted 未 await、RAF 空转、命令静默丢弃、WebSocket 旧连接清理不安全、handleSpeedInput 重复
+  - 固件：修复云台命令字符不匹配（'L'/'R'→'H'/'K'）、OdometryPacket 强转、VideoPacket 冗余数据、dataLen 边界检查、OdometryPacket 重复处理
+  - 后端：修复 from_utf8_lossy 数据丢失、connect_serial 锁持有过长、帧头查找无超时、帧大小上限过高、video_frame Arc 共享
+  - 固件：odometer.h volatile、pid_control.h dt==0、sendOdometryData 溢出、motor_control.h speed/2 对称、wireless.h const_cast
+  - 后端：build.rs bun install 条件判断、Cargo.toml rust-version
+
 - v1.3.2 - 2026-06-09
   - 全面代码排查与优化 v2（23项修复）
   - 固件：修复电机引脚错误（GPIO 10-13→4-8）、云台角度下溢、摄像头引脚类型、JPEG质量枚举反转、智能修正初始值、'D'键冲突、超时计时器遗漏

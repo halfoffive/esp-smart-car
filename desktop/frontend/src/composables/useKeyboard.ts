@@ -100,8 +100,8 @@ export const useKeyboard = (sendCommand: (cmd: string) => void) => {
   const handleKeyUp = (event: KeyboardEvent) => {
     const key = event.key.toUpperCase()
 
-    // 从激活集合移除
-    activeKeys.value.delete(key)
+    // 从激活集合移除（替换整个 Set 以触发 Vue 响应式）
+    activeKeys.value = new Set([...activeKeys.value].filter(k => k !== key))
 
     // 如果释放的是当前方向键，停止
     if (DIRECTION_KEYS.has(key) && currentDirectionKey === key) {

@@ -35,6 +35,7 @@ export function useApi() {
       headers['Content-Type'] = 'application/json'
     }
 
+    // 合并 headers：如果调用方传入了 options.headers，则会覆盖默认的 headers
     const response = await fetch(url, {
       headers,
       ...options,

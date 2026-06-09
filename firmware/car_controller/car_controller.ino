@@ -223,14 +223,19 @@ void handleDriveModeCommand(const uint8_t mode) {
 void sendOdometryData() {
     const OdometryData odom = getCurrentOdometry();
     
-    // 将浮点数据压缩为整数（有符号16位）
-    const int16_t leftSpeed = static_cast<int16_t>(
-        odom.leftWheel.mmps * OdometerState::g_calibration.leftCorrection
-    );
-    const int16_t rightSpeed = static_cast<int16_t>(
-        odom.rightWheel.mmps * OdometerState::g_calibration.rightCorrection
-    );
-    const int16_t headingX100 = static_cast<int16_t>(odom.heading * 100.0f);
+    // 将浮点数据压缩为整数（有符号16位），使用 constrain 防止溢出
+    const int16_t leftSpeed = static_cast<int16_t>(constrain(
+        static_cast<long>(odom.leftWheel.mmps * OdometerState::g_calibration.leftCorrection),
+        INT16_MIN, INT16_MAX
+    ));
+    const int16_t rightSpeed = static_cast<int16_t>(constrain(
+        static_cast<long>(odom.rightWheel.mmps * OdometerState::g_calibration.rightCorrection),
+        INT16_MIN, INT16_MAX
+    ));
+    const int16_t headingX100 = static_cast<int16_t>(constrain(
+        static_cast<long>(odom.heading * 100.0f),
+        INT16_MIN, INT16_MAX
+    ));
     const uint16_t totalDist = static_cast<uint16_t>(
         fmin(odom.distanceMm, 65535.0f)
     );
@@ -262,7 +267,10 @@ void sendOdometryData() {
     );
     
     // 发送到接收器
-    sendToReceiver(*reinterpret_cast<const WirelessPacket*>(&finalPacket));
+    // 注意：直接发送 OdometryPacket（12字节），通过通用发送函数避免 reinterpret_cast UB
+    sendRawPacket(WirelessConfig::RECEIVER_MAC, 
+                  reinterpret_cast<const uint8_t*>(&finalPacket), 
+                  sizeof(finalPacket));
 }
 
 // ============================================

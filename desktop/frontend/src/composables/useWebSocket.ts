@@ -42,9 +42,9 @@ interface WebSocketInstance {
   odometry: Ref<OdometryData>
   connect: () => void
   disconnect: () => void
-  sendCommand: (command: string) => void
-  sendSpeed: (speed: number) => void
-  sendDriveMode: (mode: number) => void
+  sendCommand: (command: string) => boolean
+  sendSpeed: (speed: number) => boolean
+  sendDriveMode: (mode: number) => boolean
 }
 
 /**
@@ -100,11 +100,14 @@ function createWebSocket() {
   const connect = () => {
     // 关闭已有连接（包括 CONNECTING/OPEN/CLOSING 状态），防止旧连接的回调干扰
     if (ws.value && ws.value.readyState !== WebSocket.CLOSED) {
+      shouldReconnect = false
       ws.value.onopen = null
       ws.value.onclose = null
       ws.value.onerror = null
       ws.value.onmessage = null
       ws.value.close()
+      // 等待一小段时间确保旧连接的 onclose 不会触发重连
+      ws.value = null
     }
 
     // 重置重连标志，允许自动重连
@@ -210,9 +213,9 @@ function createWebSocket() {
   }
 
   /** 发送命令 */
-  const sendCommand = (command: string) => {
+  const sendCommand = (command: string): boolean => {
     if (ws.value?.readyState !== WebSocket.OPEN) {
-      return
+      return false
     }
 
     const message = {
@@ -223,15 +226,17 @@ function createWebSocket() {
 
     try {
       ws.value.send(JSON.stringify(message))
+      return true
     } catch (error) {
       console.error('[WebSocket] 发送命令失败:', error)
+      return false
     }
   }
 
   /** 发送速度设置 */
-  const sendSpeed = (speed: number) => {
+  const sendSpeed = (speed: number): boolean => {
     if (ws.value?.readyState !== WebSocket.OPEN) {
-      return
+      return false
     }
 
     const message = {
@@ -242,15 +247,17 @@ function createWebSocket() {
 
     try {
       ws.value.send(JSON.stringify(message))
+      return true
     } catch (error) {
       console.error('[WebSocket] 发送速度设置失败:', error)
+      return false
     }
   }
 
   /** 发送行走模式切换命令 */
-  const sendDriveMode = (mode: number) => {
+  const sendDriveMode = (mode: number): boolean => {
     if (ws.value?.readyState !== WebSocket.OPEN) {
-      return
+      return false
     }
 
     const message = {
@@ -261,8 +268,10 @@ function createWebSocket() {
 
     try {
       ws.value.send(JSON.stringify(message))
+      return true
     } catch (error) {
       console.error('[WebSocket] 发送行走模式失败:', error)
+      return false
     }
   }
 

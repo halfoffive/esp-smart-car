@@ -329,12 +329,28 @@ inline bool initializeWireless(DeviceRole role) {
  * 输出：是否发送成功
  */
 inline bool sendPacket(const uint8_t* peerMac, const WirelessPacket& packet) {
+    // 使用局部缓冲区拷贝 MAC，避免 const_cast 修改只读数据
+    uint8_t macBuffer[6];
+    memcpy(macBuffer, peerMac, 6);
+    
     const esp_err_t result = esp_now_send(
-        const_cast<uint8_t*>(peerMac),
+        macBuffer,
         reinterpret_cast<const uint8_t*>(&packet),
         sizeof(packet)
     );
     
+    return result == ESP_OK;
+}
+
+/**
+ * 通用原始数据发送函数
+ * 用于发送非 WirelessPacket 类型的数据（如 OdometryPacket）
+ */
+inline bool sendRawPacket(const uint8_t* peerMac, const uint8_t* data, size_t len) {
+    uint8_t macBuffer[6];
+    memcpy(macBuffer, peerMac, 6);
+    
+    const esp_err_t result = esp_now_send(macBuffer, data, len);
     return result == ESP_OK;
 }
 

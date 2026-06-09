@@ -110,10 +110,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // 转发任务：从 mpsc 通道接收消息并发送到 WebSocket
     let forward_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
-            if ws_sender.send(msg).await.is_err() {
+            if let Err(e) = ws_sender.send(msg).await {
+                error!("WebSocket 转发失败: {}", e);
                 break;
             }
         }
+        debug!("WebSocket 转发任务正常退出");
     });
 
     // 发送欢迎消息
@@ -153,10 +155,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 break;
             }
 
-            // 获取视频帧
+            // 获取视频帧（使用 Arc::clone 共享引用，避免 clone 整帧数据）
             let frame = {
                 let video = video_state.video_frame.lock().unwrap();
-                video.clone()
+                video.as_ref().map(Arc::clone)
             };
 
             if let Some(ref frame_data) = frame {

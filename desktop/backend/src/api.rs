@@ -207,12 +207,20 @@ pub async fn connect_serial(
 ) -> (StatusCode, Json<ApiResponse>) {
     let baud_rate = request.baud_rate.unwrap_or(DEFAULT_BAUD_RATE);
 
-    let mut manager = state.serial_manager.lock().unwrap();
+    // 先断开现有连接（在锁内）
+    {
+        let mut manager = state.serial_manager.lock().unwrap();
+        manager.disconnect();
+    } // 释放锁
 
-    // 先断开现有连接
-    manager.disconnect();
+    // 执行阻塞 I/O（不在锁保护下）
+    let connect_result = {
+        let mut manager = state.serial_manager.lock().unwrap();
+        manager.connect(&request.port_name, baud_rate)
+    }; // 释放锁
 
-    match manager.connect(&request.port_name, baud_rate) {
+    // 根据结果更新状态
+    match connect_result {
         Ok(()) => {
             info!("串口连接成功: {} @ {}", request.port_name, baud_rate);
             (

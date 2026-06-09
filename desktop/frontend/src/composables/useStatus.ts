@@ -51,7 +51,10 @@ function createStatusPoller() {
       const data = await get<StatusData>('/api/status')
       status.value = data
     } catch (error) {
-      console.error('[useStatus] 状态查询失败:', error)
+      // 仅在开发环境输出错误日志，避免生产环境控制台污染
+      if (import.meta.env.DEV) {
+        console.error('[useStatus] 状态查询失败:', error)
+      }
     }
   }
 

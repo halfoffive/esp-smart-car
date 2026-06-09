@@ -8,26 +8,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **motor_control.h GPIO 引脚错误** — 运动创建函数引用 MOTOR_FL_IN1/IN2 (GPIO 10-11) 和 MOTOR_FR_IN1/IN2 (GPIO 12-13)，这些引脚在 ESP32-C6 上连接内部 SPI Flash 不可用。替换为 MOTOR_LEFT_IN1/IN2 (GPIO 4/5) 和 MOTOR_RIGHT_IN1/IN2 (GPIO 7/8)，删除不可用的 GPIO 10-13 常量
-- **servo_control.h 角度下溢** — `parseGimbalCommand` 中 `uint8_t` 角度减法下溢（0 - 5 = 251），导致舵机跳到 180°。改为安全算术：减法前检查 `>= step`，加法前检查 `+ step <= maxAngle`
-- **camera_config.h 引脚类型错误** — PWDN/RESET 引脚类型为 `uint8_t = -1`（存储 255 而非 -1），ESP 驱动检查 -1 跳过未用引脚。改为 `int8_t`
-- **camera_config.h JPEG 质量枚举反转** — ESP32 驱动中数值越小质量越高，原 LOW=10/BEST=40 含义反转。修正为 LOW=50, MEDIUM=30, HIGH=15, BEST=5
-- **car_controller.ino 智能修正初始值** — `setup()` 中 `g_smartDriveEnabled = true` 覆盖全局初始值 false，改为保持 false 匹配前端默认 OFF
-- **car_controller.ino 双标志不同步** — `handleDriveModeCommand` 更新 `g_smartDriveEnabled` 后未同步 `PIDController::setStraightLineEnabled()`，添加同步调用
-- **receiver_dongle.ino 'D' 键冲突** — `getCommandType` 中 'D'/'d' 同时出现在 MOVE 和 SERVO 分支，云台下命令永远匹配 MOVE。从 MOVE 分支移除 'D'/'d'
-- **receiver_dongle.ino Serial.read 类型** — `Serial.read()` 返回 `int` 存入 `char` 导致符号扩展，改为 `int` 类型
-- **car_controller.ino 超时误触发** — `handleSpeedCommand` 和 `handleServoCommand` 未更新 `g_lastCmdTime`，仅发送速度/云台命令时 1 秒超时触发自动停止。添加 `g_lastCmdTime = millis()`
-- **ControlPanel.vue 连接状态混淆** — 串口连接/断开时不再修改 WebSocket `isConnected`，消除状态混淆
-- **ControlPanel.vue 运动网格底行重复** — 底行 Q/E 改为 A（左转）/D（右转），消除与顶行重复
-- **useKeyboard.ts activeKeys 不可响应** — `ref<Set>` 改为每次修改创建新 Set 触发 Vue 响应式，修复按键高亮不工作
-- **ControlPanel.vue 鼠标离开不停止** — 所有控制按钮添加 `@mouseleave` 事件发送停止命令
-- **VideoPlayer.vue 定时器类型混淆** — 分离 `rafId` 和 `timeoutId` 为两个独立变量
-- **websocket.rs 帧哈希碰撞** — 改用多点采样哈希（首4+中4+尾4字节+长度），修复同尺寸帧碰撞丢帧
-- **serial.rs frame_buffer 未恢复** — `SerialTaskResult` 所有变体携带 buffer，非视频路径恢复 frame_buffer
-- **api.rs REST API 速度不同步** — 速度命令 '1'-'9' 通过 REST API 发送时同步更新 `current_speed`
-- **serial.rs connect() 失败状态残留** — 连接失败时状态恢复为 `Disconnected`
-- **useWebSocket.ts 旧连接泄漏** — `connect()` 先关闭旧连接再创建新的
-- **useApi.ts 不检查 HTTP 状态** — 添加 `response.ok` 检查，非 2xx 抛出错误；GET 请求不设置 Content-Type
+- **ControlPanel.vue onUnmounted 未 await** — `disconnect()` 改为 `.catch(() => {})` 处理 Promise rejection
+- **ControlPanel.vue handleSpeedInput 重复** — 直接读取 `currentSpeed.value`，移除 `event.target`/`parseFloat`
+- **VideoPlayer.vue RAF 空转** — 移除 `requestAnimationFrame` 循环，改用 `watch(videoFrame)` 监听帧变化
+- **useWebSocket.ts 旧连接清理** — 关闭旧连接后设 `shouldReconnect = false` 防误触发重连
+- **useWebSocket.ts 命令静默丢弃** — `sendCommand`/`sendSpeed`/`sendDriveMode` 返回 `boolean`
+- **servo_control.h 云台命令不匹配** — 'L'/'R' 改为 'H'/'K'，与前端一致
+- **car_controller.ino OdometryPacket 强转** — 移除 `reinterpret_cast`，改用 `sendRawPacket()` 通用发送
+- **video_stream.h VideoPacket 冗余数据** — 只发送实际有效大小，不发送整个 128 字节
+- **receiver_dongle.ino dataLen 未边界检查** — 添加 `packet->dataLen <= MAX_PACKET_SIZE` 验证
+- **receiver_dongle.ino OdometryPacket 重复处理** — 调整分支顺序，确保只处理一次
+- **serial.rs from_utf8_lossy 数据丢失** — 改为 `String::from_utf8`，非 UTF-8 时记录日志丢弃
+- **api.rs connect_serial 锁持有过长** — 阻塞 I/O 移出 `MutexGuard` 保护范围
+- **serial.rs 帧头查找无超时** — 添加 5 秒总超时限制；帧大小上限从 10MB 改为 256KB
+- **lib.rs video_frame 未用 Arc 共享** — 类型改为 `Arc<Mutex<Option<Arc<Vec<u8>>>>>`
+- **websocket.rs forward_task 错误忽略** — 显式错误处理，记录日志
+- **websocket.rs video_task clone 整帧** — 使用 `Arc::clone` 共享引用
+- **odometer.h g_lastLeftPulses 非 volatile** — 声明为 `volatile`
+- **pid_control.h dt==0 硬编码** — 直接返回上次状态，不硬编码 0.01f
+- **car_controller.ino sendOdometryData 溢出** — 速度值添加 `constrain` 限制
+- **receiver_dongle.ino 视频包误判** — 添加 `version` 严格校验
+- **ControlPanel.vue logs key** — 用 `Date.now()` 作为 key 替代 index
+- **ControlPanel.vue addLog 错误对象** — `e instanceof Error ? e.message : String(e)`
+- **useKeyboard.ts activeKeys 不统一** — `handleKeyUp` 统一替换整个 Set
+- **useStatus.ts 日志暴露** — 仅开发环境输出
+- **motor_control.h speed/2 精度** — 改为 `(speed + 1) / 2` 保持对称
+- **wireless.h const_cast** — 使用局部缓冲区拷贝 MAC；新增 `sendRawPacket()`
+- **video_stream.h const_cast** — `FrameState::frameBuffer` 改为非 const
+- **video_stream.h 延迟** — `delayMicroseconds(100)` 改为 `50`
+- **build.rs bun install** — 添加条件判断，避免每次构建都运行
+- **Cargo.toml** — 添加 `rust-version = "1.75"`
 - **car_controller.ino g_currentSpeed 默认过高** — 默认值从 128 改为 28（匹配 map 最小值）
 
 ### Changed

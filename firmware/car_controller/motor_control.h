@@ -233,11 +233,11 @@ inline VehicleMotion createBackwardState(const uint8_t speed) {
 inline VehicleMotion createLeftTurnState(const uint8_t speed) {
     return VehicleMotion(
         MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::BACKWARD, speed / 2),  // 左侧慢速后退
+                   MotorDirection::BACKWARD, (speed + 1) / 2),  // 左侧慢速后退（奇数保持对称）
         MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::FORWARD, speed),         // 右侧正常前进
         MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::BACKWARD, speed / 2),
+                   MotorDirection::BACKWARD, (speed + 1) / 2),
         MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::FORWARD, speed)
     );
@@ -251,11 +251,11 @@ inline VehicleMotion createRightTurnState(const uint8_t speed) {
         MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::FORWARD, speed),         // 左侧正常前进
         MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::BACKWARD, speed / 2),  // 右侧慢速后退
+                   MotorDirection::BACKWARD, (speed + 1) / 2),  // 右侧慢速后退（奇数保持对称）
         MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::FORWARD, speed),
         MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::BACKWARD, speed / 2)
+                   MotorDirection::BACKWARD, (speed + 1) / 2)
     );
 }
 

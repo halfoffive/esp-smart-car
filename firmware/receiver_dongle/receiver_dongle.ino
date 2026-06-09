@@ -198,7 +198,11 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
     if (len < sizeof(VideoPacket)) return;
     
     const VideoPacket* packet = reinterpret_cast<const VideoPacket*>(data);
-    if (packet->magic != StreamConfig::VIDEO_MAGIC) return;
+    // 严格校验视频包魔术字和版本，防止误判
+    if (packet->magic != StreamConfig::VIDEO_MAGIC ||
+        packet->version != StreamConfig::PROTOCOL_VERSION) return;
+    // 校验 dataLen 边界，防止缓冲区溢出
+    if (packet->dataLen > StreamConfig::MAX_PACKET_SIZE) return;
     
     // 新帧开始
     if (packet->packetId == 0) {
@@ -253,30 +257,17 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
 // ============================================
 
 void onReceiverDataRecv(const uint8_t* mac, const uint8_t* data, int len) {
-    // 检查是否是视频数据
+    // 检查是否是视频数据（优先且严格校验）
     if (len >= sizeof(VideoPacket)) {
         const VideoPacket* packet = reinterpret_cast<const VideoPacket*>(data);
-        if (packet->magic == StreamConfig::VIDEO_MAGIC) {
+        if (packet->magic == StreamConfig::VIDEO_MAGIC &&
+            packet->version == StreamConfig::PROTOCOL_VERSION) {
             handleVideoPacket(data, len);
             return;
         }
     }
     
-    // 处理普通命令
-    if (len >= sizeof(WirelessPacket)) {
-        const WirelessPacket* packet = reinterpret_cast<const WirelessPacket*>(data);
-        if (validatePacket(*packet)) {
-            // 处理状态反馈
-            if (packet->type == CommandType::STATUS) {
-                // 转发状态到电脑
-                Serial.write(data, len);
-            }
-            // 注意：ODOMETRY 类型由下方 OdometryPacket 分支处理（JSON格式化），
-            // 不在此处透传原始二进制数据
-        }
-    }
-    
-    // 处理测速数据包（OdometryPacket 格式）
+    // 处理测速数据包（OdometryPacket 格式，优先于 WirelessPacket）
     // OdometryPacket 包含左右轮速度、航向角等信息
     if (len >= sizeof(OdometryPacket)) {
         const OdometryPacket* odomPacket = reinterpret_cast<const OdometryPacket*>(data);
@@ -290,6 +281,21 @@ void onReceiverDataRecv(const uint8_t* mac, const uint8_t* data, int len) {
                          odomPacket->rightSpeedMmps,
                          odomPacket->headingX100,
                          odomPacket->totalDistMm);
+            return;
+        }
+    }
+    
+    // 处理普通命令（WirelessPacket）
+    if (len >= sizeof(WirelessPacket)) {
+        const WirelessPacket* packet = reinterpret_cast<const WirelessPacket*>(data);
+        if (validatePacket(*packet)) {
+            // 处理状态反馈
+            if (packet->type == CommandType::STATUS) {
+                // 转发状态到电脑
+                Serial.write(data, len);
+            }
+            // 注意：ODOMETRY 类型已由上方 OdometryPacket 分支处理（JSON格式化），
+            // 不在此处透传原始二进制数据
         }
     }
 }

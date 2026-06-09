@@ -212,9 +212,18 @@ impl SerialManager {
                                 self.line_buffer.pop();
                             }
                             if !self.line_buffer.is_empty() {
-                                let line = String::from_utf8_lossy(&self.line_buffer).to_string();
-                                self.line_buffer.clear();
-                                return Some(line);
+                                // 使用 String::from_utf8 严格检查，非 UTF-8 时记录日志并丢弃
+                                match String::from_utf8(self.line_buffer.clone()) {
+                                    Ok(line) => {
+                                        self.line_buffer.clear();
+                                        return Some(line);
+                                    }
+                                    Err(e) => {
+                                        warn!("非 UTF-8 数据，已丢弃: {:?}", e.utf8_error());
+                                        self.line_buffer.clear();
+                                        return None;
+                                    }
+                                }
                             }
                         }
                     }
@@ -256,9 +265,10 @@ impl SerialManager {
         if let Some(ref mut port) = self.port {
             let mut header = [0u8; 2];
 
-            // 查找帧头
+            // 查找帧头（添加总超时限制 5 秒）
+            let start = std::time::Instant::now();
             let mut found = false;
-            for _ in 0..1000 {
+            while start.elapsed() < Duration::from_secs(5) {
                 if let Ok(()) = port.read_exact(&mut header[0..1]) {
                     if header[0] == FRAME_HEADER[0] {
                         if let Ok(()) = port.read_exact(&mut header[1..2]) {
@@ -280,8 +290,8 @@ impl SerialManager {
             port.read_exact(&mut size_bytes)?;
             let frame_size = u32::from_le_bytes(size_bytes) as usize;
 
-            // 检查帧大小是否合理
-            if frame_size > 10 * 1024 * 1024 || frame_size == 0 {
+            // 检查帧大小是否合理（上限 256KB）
+            if frame_size > 256 * 1024 || frame_size == 0 {
                 warn!("帧大小异常: {} 字节", frame_size);
                 return Ok(false);
             }
@@ -359,14 +369,13 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
 
             match result {
                 Ok(SerialTaskResult::VideoFrame(buffer)) => {
-                    // 交换缓冲区：新帧存入 video_frame，旧帧复用为下次读取缓冲
-                    let old = {
+                    // 使用 Arc::clone 共享视频帧引用，避免 clone 整帧数据
+                    {
                         let mut video = state.video_frame.lock().unwrap();
-                        let old = video.take();
-                        *video = Some(buffer);
-                        old
-                    };
-                    frame_buffer = old.unwrap_or_default();
+                        *video = Some(Arc::new(buffer));
+                    }
+                    // 恢复帧缓冲区以复用（无需 take，因为视频帧已通过 Arc 共享）
+                    frame_buffer = Vec::new();
                 }
                 Ok(SerialTaskResult::OdometryLine { line, buffer }) => {
                     // 恢复帧缓冲区以复用（避免每次重新分配）
