@@ -33,12 +33,12 @@
  * 不可变参数结构体，用于配置PID控制器
  */
 struct PIDParams {
-    const float kp;            // 比例系数
-    const float ki;            // 积分系数
-    const float kd;            // 微分系数
-    const float outputMin;     // 输出最小值
-    const float outputMax;     // 输出最大值
-    const float integralLimit; // 积分限幅（防积分饱和）
+    float kp;            // 比例系数
+    float ki;            // 积分系数
+    float kd;            // 微分系数
+    float outputMin;     // 输出最小值
+    float outputMax;     // 输出最大值
+    float integralLimit; // 积分限幅（防积分饱和）
     
     constexpr PIDParams(
         float p, float i, float d,
@@ -52,14 +52,14 @@ struct PIDParams {
  * 记录PID计算的中间状态
  */
 struct PIDState {
-    const float setpoint;          // 目标值
-    const float input;             // 输入值（当前测量值）
-    const float output;            // 输出值（修正量）
-    const float error;             // 当前误差
-    const float lastError;         // 上次误差
-    const float integral;          // 积分累计
-    const float derivative;        // 微分项
-    const uint32_t lastTime;       // 上次更新时间
+    float setpoint;          // 目标值
+    float input;             // 输入值（当前测量值）
+    float output;            // 输出值（修正量）
+    float error;             // 当前误差
+    float lastError;         // 上次误差
+    float integral;          // 积分累计
+    float derivative;        // 微分项
+    uint32_t lastTime;       // 上次更新时间
     
     constexpr PIDState(
         float sp, float inp, float out, float err, float lastErr,
@@ -73,12 +73,12 @@ struct PIDState {
  * 包含左右电机的修正后PWM值和方向
  */
 struct SmartMotorOutput {
-    const uint8_t leftPwm;          // 左电机PWM（0-255）
-    const uint8_t rightPwm;         // 右电机PWM（0-255）
-    const MotorDirection leftDir;    // 左电机方向
-    const MotorDirection rightDir;  // 右电机方向
-    const float correction;         // PID修正量
-    const bool isStraightLine;     // 是否在直线模式
+    uint8_t leftPwm;          // 左电机PWM（0-255）
+    uint8_t rightPwm;         // 右电机PWM（0-255）
+    MotorDirection leftDir;    // 左电机方向
+    MotorDirection rightDir;  // 右电机方向
+    float correction;         // PID修正量
+    bool isStraightLine;     // 是否在直线模式
     
     constexpr SmartMotorOutput(
         uint8_t lp, uint8_t rp, MotorDirection ld, MotorDirection rd,

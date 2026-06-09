@@ -20,12 +20,12 @@
  * 包含所有舵机相关的常量参数
  */
 struct ServoConfig {
-    const uint8_t pin;           // 控制引脚
-    const uint8_t minAngle;      // 最小角度（防卡死）
-    const uint8_t maxAngle;      // 最大角度（防卡死）
-    const uint16_t minPulse;     // 最小脉宽（微秒）
-    const uint16_t maxPulse;     // 最大脉宽（微秒）
-    const uint8_t defaultAngle;  // 默认初始角度
+    uint8_t pin;           // 控制引脚
+    uint8_t minAngle;      // 最小角度（防卡死）
+    uint8_t maxAngle;      // 最大角度（防卡死）
+    uint16_t minPulse;     // 最小脉宽（微秒）
+    uint16_t maxPulse;     // 最大脉宽（微秒）
+    uint8_t defaultAngle;  // 默认初始角度
     
     constexpr ServoConfig(
         uint8_t p, uint8_t minA, uint8_t maxA,
@@ -39,10 +39,10 @@ struct ServoConfig {
  * 记录当前角度和目标角度（支持平滑移动）
  */
 struct ServoState {
-    const uint8_t currentAngle;   // 当前角度
-    const uint8_t targetAngle;    // 目标角度
-    const uint8_t speed;          // 移动速度（每步角度变化）
-    const bool isMoving;          // 是否正在移动
+    uint8_t currentAngle;   // 当前角度
+    uint8_t targetAngle;    // 目标角度
+    uint8_t speed;          // 移动速度（每步角度变化）
+    bool isMoving;          // 是否正在移动
     
     constexpr ServoState(
         uint8_t curr, uint8_t tgt, uint8_t spd, bool moving
@@ -53,8 +53,8 @@ struct ServoState {
  * 云台状态（双轴）
  */
 struct GimbalState {
-    const ServoState horizontal;  // 水平舵机
-    const ServoState vertical;    // 垂直舵机
+    ServoState horizontal;  // 水平舵机
+    ServoState vertical;    // 垂直舵机
     
     constexpr GimbalState(ServoState h, ServoState v)
         : horizontal(h), vertical(v) {}

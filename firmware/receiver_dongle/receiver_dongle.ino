@@ -23,7 +23,7 @@
  * 版本：1.2.0
  */
 
-#include "wireless.h"
+#include <../libraries/wireless_protocol/src/wireless.h>
 
 // ============================================
 // 常量定义
@@ -256,7 +256,7 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
 // ESP-NOW 回调
 // ============================================
 
-void onReceiverDataRecv(const uint8_t* mac, const uint8_t* data, int len) {
+void onReceiverDataRecv(const esp_now_recv_info* info, const uint8_t* data, int len) {
     // 检查是否是视频数据（优先且严格校验）
     if (len >= sizeof(VideoPacket)) {
         const VideoPacket* packet = reinterpret_cast<const VideoPacket*>(data);

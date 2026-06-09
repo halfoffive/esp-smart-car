@@ -31,10 +31,10 @@
  * 记录编码器的硬件参数
  */
 struct EncoderConfig {
-    const uint8_t pin;              // 中断引脚
-    const uint8_t pulsesPerRev;     // 每圈脉冲数（编码器线数）
-    const float wheelDiameter;       // 轮子直径(mm)
-    const float gearRatio;           // 减速比（电机转速:轮速）
+    uint8_t pin;              // 中断引脚
+    uint8_t pulsesPerRev;     // 每圈脉冲数（编码器线数）
+    float wheelDiameter;       // 轮子直径(mm)
+    float gearRatio;           // 减速比（电机转速:轮速）
     
     constexpr EncoderConfig(
         uint8_t p, uint8_t ppr, float wd, float gr
@@ -46,11 +46,11 @@ struct EncoderConfig {
  * 所有字段均为 const，确保不可变性
  */
 struct WheelSpeed {
-    const float rpm;                // 转速(RPM)
-    const float mmps;               // 线速度(mm/s)
-    const float distanceMm;         // 累计行走距离(mm)
-    const uint32_t pulseCount;      // 脉冲计数
-    const uint32_t timestampMs;     // 时间戳(ms)
+    float rpm;                // 转速(RPM)
+    float mmps;               // 线速度(mm/s)
+    float distanceMm;         // 累计行走距离(mm)
+    uint32_t pulseCount;      // 脉冲计数
+    uint32_t timestampMs;     // 时间戳(ms)
     
     constexpr WheelSpeed(
         float r, float m, float d, uint32_t pc, uint32_t ts
@@ -62,13 +62,13 @@ struct WheelSpeed {
  * 包含左右轮速度和整车状态
  */
 struct OdometryData {
-    const WheelSpeed leftWheel;     // 左轮数据
-    const WheelSpeed rightWheel;    // 右轮数据
-    const float linearSpeed;        // 整车线速度(mm/s)
-    const float angularVelocity;    // 角速度(rad/s)
-    const float heading;            // 航向角(弧度)
-    const float distanceMm;         // 整车行走距离(mm)
-    const uint32_t timestampMs;     // 时间戳(ms)
+    WheelSpeed leftWheel;     // 左轮数据
+    WheelSpeed rightWheel;    // 右轮数据
+    float linearSpeed;        // 整车线速度(mm/s)
+    float angularVelocity;    // 角速度(rad/s)
+    float heading;            // 航向角(弧度)
+    float distanceMm;         // 整车行走距离(mm)
+    uint32_t timestampMs;     // 时间戳(ms)
     
     constexpr OdometryData(
         WheelSpeed lw, WheelSpeed rw,
@@ -83,8 +83,8 @@ struct OdometryData {
  * 用于补偿左右轮速度差异
  */
 struct SpeedCalibration {
-    const float leftCorrection;     // 左轮修正系数(>1加速, <1减速)
-    const float rightCorrection;    // 右轮修正系数
+    float leftCorrection;     // 左轮修正系数(>1加速, <1减速)
+    float rightCorrection;    // 右轮修正系数
     
     constexpr SpeedCalibration(float lc, float rc)
         : leftCorrection(lc), rightCorrection(rc) {}
@@ -155,7 +155,7 @@ namespace OdometerState {
  * 每检测到一个脉冲递增计数
  */
 inline void IRAM_ATTR onLeftEncoderPulse() {
-    OdometerState::g_leftPulses++;
+    OdometerState::g_leftPulses += 1;
 }
 
 /**
@@ -163,7 +163,7 @@ inline void IRAM_ATTR onLeftEncoderPulse() {
  * 每检测到一个脉冲递增计数
  */
 inline void IRAM_ATTR onRightEncoderPulse() {
-    OdometerState::g_rightPulses++;
+    OdometerState::g_rightPulses += 1;
 }
 
 // ============================================

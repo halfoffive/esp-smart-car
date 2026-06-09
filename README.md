@@ -7,10 +7,13 @@
 ```
 esp-smart-car/
 ├── firmware/                    # 嵌入式固件
+│   ├── libraries/               # Arduino 库（跨 sketch 共享）
+│   │   └── wireless_protocol/   # 无线通信协议库（ESP-NOW + 视频分包）
+│   │       └── src/
+│   │           └── wireless.h   # 共享头文件
 │   ├── car_controller/          # 车载控制器（ESP32-C6）
 │   │   ├── motor_control.h      # 电机控制（函数式编程，差速支持）
 │   │   ├── servo_control.h      # 舵机控制（函数式编程）
-│   │   ├── wireless.h           # 无线通信（ESP-NOW，含测速协议）
 │   │   ├── odometer.h           # 编码器测速模块
 │   │   ├── pid_control.h        # PID控制器（直线修正+航向锁定）
 │   │   └── car_controller.ino   # 主程序
@@ -133,13 +136,16 @@ esp-smart-car/
 2. 添加 ESP32 开发板支持
    - 文件 -> 首选项 -> 附加开发板管理器网址
    - 添加：`https://espressif.github.io/arduino-esp32/package_esp32_index.json`
-3. 安装库：
+3. 安装无线协议库（`wireless_protocol`）：
+   - 方式A（推荐）：将 Arduino IDE 的 sketchbook 路径设为 `firmware/`，库会自动识别
+   - 方式B：将 `firmware/libraries/wireless_protocol` 复制到 Arduino 的库文件夹（`~/Arduino/libraries/` 或 `%USERPROFILE%\Documents\Arduino\libraries\`）
+4. 安装库：
    - ESP32Camera
    - ESP-NOW
-4. 选择开发板：
+5. 选择开发板：
    - ESP32-C6："ESP32C6 Dev Module"
    - ESP32-S3："ESP32S3 Dev Module"
-5. 上传固件
+6. 上传固件
 
 ### 桌面端
 
@@ -184,7 +190,7 @@ bun run build
 ### 函数式编程风格
 
 嵌入式固件采用函数式编程风格：
-- 数据不可变（使用 `const`）
+- 数据不可变（通过值传递新对象，不修改旧对象）
 - 纯函数（无副作用）
 - 显式状态传递
 - 高阶函数组合
@@ -239,6 +245,14 @@ cargo clippy       # 静态分析检查
 - 检查 PWM 信号
 
 ## 版本历史
+
+- v1.5.0 - 2026-06-09
+  - P0 固件编译错误修复：重构 `wireless.h` 为 Arduino 库（`firmware/libraries/wireless_protocol/`），避免复制到各 sketch 目录
+  - 修复 ESP32 Arduino core 3.3.8 回调签名不兼容（`esp_now_send_cb_t` / `esp_now_recv_cb_t`）
+  - 修复所有状态结构体 `const` 成员导致的 "use of deleted function 'operator='" 编译错误
+  - 修复 `car_controller.ino` 中 `onDataRecv` 重定义问题
+  - 修复 `odometer.h` C++20 `volatile` 弃用警告
+  - 将 `VideoPacket` 和 `StreamConfig` 定义迁移到 `wireless.h`，供 `receiver_dongle.ino` 共享
 
 - v1.4.0 - 2026-06-09
   - 全面代码排查与优化 v3（27项修复，启用 karpathy-guidelines + frontend-design）

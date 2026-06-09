@@ -11,7 +11,7 @@
 
 #include <Arduino.h>
 #include "esp_camera.h"
-#include "wireless.h"  // 复用无线通信协议
+#include <../libraries/wireless_protocol/src/wireless.h>  // 复用无线通信协议（Arduino 库）
 
 // ============================================
 // 纯数据类型定义
@@ -22,10 +22,10 @@
  */
 struct FrameState {
     camera_fb_t* frameBuffer;        // 帧缓冲指针（非 const：需要传递给 esp_camera_fb_return 释放）
-    const size_t frameSize;          // 帧大小
-    const uint32_t timestamp;        // 时间戳
-    const uint16_t frameId;          // 帧序号
-    const bool isValid;              // 是否有效
+    size_t frameSize;          // 帧大小
+    uint32_t timestamp;        // 时间戳
+    uint16_t frameId;          // 帧序号
+    bool isValid;              // 是否有效
     
     constexpr FrameState(
         camera_fb_t* fb, size_t sz, uint32_t ts, uint16_t id, bool valid
@@ -36,12 +36,12 @@ struct FrameState {
  * 传输状态
  */
 struct StreamState {
-    const bool isStreaming;         // 是否正在流传输
-    const uint32_t lastFrameTime;   // 最后帧时间
-    const uint16_t fps;             // 实际帧率
-    const uint32_t totalFrames;     // 总帧数
-    const uint32_t droppedFrames;   // 丢弃帧数
-    const uint32_t bytesSent;       // 发送字节数
+    bool isStreaming;         // 是否正在流传输
+    uint32_t lastFrameTime;   // 最后帧时间
+    uint16_t fps;             // 实际帧率
+    uint32_t totalFrames;     // 总帧数
+    uint32_t droppedFrames;   // 丢弃帧数
+    uint32_t bytesSent;       // 发送字节数
     
     constexpr StreamState(
         bool stream, uint32_t last, uint16_t fps,
@@ -50,28 +50,10 @@ struct StreamState {
         totalFrames(total), droppedFrames(drop), bytesSent(bytes) {}
 };
 
-/**
- * 视频数据包
- * 用于分包传输大帧
- */
-struct __attribute__((packed)) VideoPacket {
-    uint8_t magic;        // 魔术字 0xA6
-    uint8_t version;      // 版本
-    uint16_t frameId;     // 帧序号
-    uint16_t packetId;    // 包序号
-    uint16_t totalPackets; // 总包数
-    uint16_t dataLen;     // 数据长度
-    uint8_t data[128];    // 数据（最大128字节）
-    uint8_t checksum;     // 校验和
-};
-
 // ============================================
 // 常量定义
 // ============================================
-namespace StreamConfig {
-    constexpr uint8_t VIDEO_MAGIC = 0xA6;       // 视频帧魔术字
-    constexpr uint8_t PROTOCOL_VERSION = 1;   // 协议版本
-    constexpr uint8_t MAX_PACKET_SIZE = 128;   // 每包最大数据量
+namespace VideoStreamConfig {
     constexpr uint16_t TARGET_FPS = 30;       // 目标帧率
     constexpr uint32_t FRAME_INTERVAL = 1000 / TARGET_FPS; // 帧间隔
     constexpr uint8_t JPEG_QUALITY_MIN = 5;   // 最小JPEG质量
@@ -129,11 +111,11 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
 inline uint8_t adjustQuality(const uint32_t bytesSent, const uint32_t frameSize) {
     // 如果帧太大，提高压缩率（降低质量）
     if (frameSize > 10000) {
-        return StreamConfig::JPEG_QUALITY_MAX;
+        return VideoStreamConfig::JPEG_QUALITY_MAX;
     }
     // 如果帧很小，降低压缩率（提高质量）
     if (frameSize < 5000) {
-        return StreamConfig::JPEG_QUALITY_MIN;
+        return VideoStreamConfig::JPEG_QUALITY_MIN;
     }
     return 20; // 默认质量
 }
@@ -218,7 +200,7 @@ inline void updateStreaming() {
     const uint32_t currentTime = millis();
     
     // 检查帧间隔
-    if (currentTime - g_streamState.lastFrameTime < StreamConfig::FRAME_INTERVAL) {
+    if (currentTime - g_streamState.lastFrameTime < VideoStreamConfig::FRAME_INTERVAL) {
         return;
     }
     

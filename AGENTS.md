@@ -9,6 +9,8 @@
 ```
 esp-smart-car/
 ├── firmware/              # Embedded firmware (Arduino IDE)
+│   ├── libraries/         # Arduino libraries (shared across sketches)
+│   │   └── wireless_protocol/  # ESP-NOW wireless protocol library
 │   ├── car_controller/     # Vehicle controller (ESP32-C6)
 │   ├── camera_module/     # Camera module (ESP32-S3 CAM)
 │   └── receiver_dongle/   # USB receiver (ESP32-C6)
@@ -24,7 +26,7 @@ esp-smart-car/
 |------|----------|-------|
 | Add motor control logic | `firmware/car_controller/motor_control.h` | Functional programming style |
 | Add servo control logic | `firmware/car_controller/servo_control.h` | Smooth movement algorithm |
-| Modify wireless protocol | `firmware/car_controller/wireless.h` | ESP-NOW protocol |
+| Modify wireless protocol | `firmware/libraries/wireless_protocol/src/wireless.h` | ESP-NOW protocol (Arduino library) |
 | Add camera resolution | `firmware/camera_module/camera_config.h` | OV2640 configuration |
 | Add video streaming | `firmware/camera_module/video_stream.h` | Frame packetization |
 | Add serial communication | `desktop/backend/src/serial.rs` | USB serial port |
@@ -40,7 +42,7 @@ esp-smart-car/
 |--------|------|----------|------|
 | `MotorControl` | namespace | `motor_control.h` | 4-motor differential drive |
 | `ServoControl` | namespace | `servo_control.h` | 2-servo gimbal control |
-| `WirelessProtocol` | namespace | `wireless.h` | ESP-NOW communication |
+| `WirelessProtocol` | namespace | `wireless.h` (Arduino library) | ESP-NOW communication |
 | `CameraConfig` | struct | `camera_config.h` | OV2640 configuration |
 | `VideoStream` | namespace | `video_stream.h` | Frame transmission |
 | `SerialManager` | struct | `serial.rs` | USB serial communication |
@@ -54,8 +56,9 @@ esp-smart-car/
 - **Chinese comments**: All functions, structs, enums have detailed Chinese comments
 - **Type safety**: Use `enum class` instead of `enum` to prevent implicit conversions
 - **Namespace organization**: Use `namespace` for each module (e.g., `PinConfig`, `SG90Config`)
-- **Struct-based state**: All state stored in const structs, new state created via functions
+- **Struct-based state**: All state stored in structs, new state created via functions
 - **Hardware abstraction**: Pure functions for logic, separate `apply_*` functions for side effects
+- **Arduino library**: Shared wireless protocol (`wireless.h`) is an Arduino library in `firmware/libraries/` to avoid duplication across sketches
 
 ### Backend (Rust)
 - **Tokio async**: All I/O operations are async
@@ -82,7 +85,7 @@ esp-smart-car/
 
 ## Unique Styles
 
-- **Functional C++**: All data structures are immutable, state changes via function returns
+- **Functional C++**: All data structures are immutable (value semantics), state changes via function returns
 - **Binary protocol**: Custom 8-byte packet format for ESP-NOW communication
 - **Frame packetization**: Video frames split into 128-byte chunks for wireless transmission
 - **Differential steering**: Left/right motor speed differential for turning
@@ -104,9 +107,12 @@ bun run dev        # Development server (port 3000)
 bun run build      # Production build (outputs to ../backend/frontend/dist)
 
 # Firmware (Arduino IDE)
-# Open .ino files in Arduino IDE
-# Select board: ESP32C6 or ESP32S3
-# Upload to respective devices
+# 1. Install the wireless_protocol library:
+#    - Option A: Set Arduino IDE sketchbook to `firmware/` (library auto-detected)
+#    - Option B: Copy `firmware/libraries/wireless_protocol` to Arduino libraries folder
+# 2. Open .ino files in Arduino IDE
+# 3. Select board: ESP32C6 or ESP32S3
+# 4. Upload to respective devices
 ```
 
 ## Hardware Wiring
@@ -129,8 +135,21 @@ Key connections:
 - **Video buffer**: 4096 bytes for frame reassembly
 - **Timeout protection**: 1-second auto-stop if no commands received
 - **Calibration**: Servo angles may need adjustment based on physical mounting
+- **Arduino library**: `wireless.h` is installed as an Arduino library in `firmware/libraries/wireless_protocol/` to avoid duplication across sketches
 
 ## 近期修复记录
+
+### 2026-06-09 - P0 固件编译错误修复（5项严重错误）
+- **范围**: 嵌入式固件全面编译错误修复，重构 wireless.h 为 Arduino 库
+- **严重修复**:
+  - `wireless.h` — 重构为 Arduino 库（`firmware/libraries/wireless_protocol/`），避免复制到各 sketch 目录，消除维护负担
+  - `wireless.h` — 修复 ESP32 Arduino core 3.3.8 回调签名不兼容：`esp_now_send_cb_t` 改为 `void (*)(const wifi_tx_info_t*, esp_now_send_status_t)`，`esp_now_recv_cb_t` 改为 `void (*)(const esp_now_recv_info*, const uint8_t*, int)`
+  - `wireless.h` — 移除 `onDataRecv` 定义（改为 `extern` 声明），从 `initializeWireless()` 中移除回调注册，消除 `car_controller.ino` 中 `onDataRecv` 重定义
+  - `wireless.h` — 新增 `VideoPacket` 和 `StreamConfig` 定义（从 `video_stream.h` 迁移），供 `receiver_dongle.ino` 共享使用
+  - `motor_control.h` / `servo_control.h` / `odometer.h` / `pid_control.h` / `video_stream.h` — 移除所有状态结构体的 `const` 成员，修复 "use of deleted function 'operator='" 编译错误
+  - `odometer.h` — `volatile uint32_t g_leftPulses++` 改为 `g_leftPulses += 1`，消除 C++20 `volatile` 弃用警告
+  - `video_stream.h` — 移除 `VideoPacket` / `StreamConfig` 定义，改为 `#include <wireless.h>`（Arduino 库），新增 `VideoStreamConfig` 命名空间存放视频流特有常量
+  - `car_controller.ino` / `receiver_dongle.ino` / `camera_module.ino` — 修改所有 ESP-NOW 回调签名匹配新版 API；`car_controller.ino` `#include "wireless.h"` 改为 `#include <wireless.h>`
 
 ### 2026-06-09 - 全面代码排查与优化 v3（27项修复）
 - **范围**: 前端 Vue + 后端 Rust + 嵌入式固件三部分全面审查，启用 karpathy-guidelines 和 frontend-design 深度审计，修复 10 项严重问题、9 项高优先级问题、8 项一般问题

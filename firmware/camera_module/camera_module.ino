@@ -48,7 +48,7 @@ void handleCameraCommand(const uint8_t* data, int len) {
 // ESP-NOW 回调
 // ============================================
 
-void onCameraDataRecv(const uint8_t* mac, const uint8_t* data, int len) {
+void onCameraDataRecv(const esp_now_recv_info* info, const uint8_t* data, int len) {
     handleCameraCommand(data, len);
 }
 
@@ -98,9 +98,11 @@ void loop() {
     // 每100帧打印一次统计
     const StreamState state = getStreamState();
     if (state.totalFrames % 100 == 0 && state.totalFrames > 0) {
-        Serial.printf("[视频流] FPS:%d, 总帧:%d, 丢弃:%d, 发送:%d KB\n",
-                      state.fps, state.totalFrames, state.droppedFrames,
-                      state.bytesSent / 1024);
+        Serial.printf("[视频流] FPS:%d, 总帧:%lu, 丢弃:%lu, 发送:%lu KB\n",
+                      state.fps,
+                      (unsigned long)state.totalFrames,
+                      (unsigned long)state.droppedFrames,
+                      (unsigned long)(state.bytesSent / 1024));
     }
     
     // 小延迟

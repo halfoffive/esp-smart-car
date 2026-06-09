@@ -29,11 +29,11 @@ enum class MotorDirection : uint8_t {
  * 所有字段均为 const，确保不可变性
  */
 struct MotorState {
-    const uint8_t pinIn1;        // 输入引脚1
-    const uint8_t pinIn2;        // 输入引脚2
-    const uint8_t pinEn;         // 使能引脚(PWM)
-    const MotorDirection direction; // 当前方向
-    const uint8_t speed;         // 当前速度 (0-255)
+    uint8_t pinIn1;        // 输入引脚1
+    uint8_t pinIn2;        // 输入引脚2
+    uint8_t pinEn;         // 使能引脚(PWM)
+    MotorDirection direction; // 当前方向
+    uint8_t speed;         // 当前速度 (0-255)
     
     // 构造函数 - 显式初始化所有字段
     constexpr MotorState(
@@ -48,10 +48,10 @@ struct MotorState {
  * 包含4个电机的独立状态
  */
 struct VehicleMotion {
-    const MotorState frontLeft;   // 左前轮
-    const MotorState frontRight;  // 右前轮
-    const MotorState rearLeft;    // 左后轮
-    const MotorState rearRight;   // 右后轮
+    MotorState frontLeft;   // 左前轮
+    MotorState frontRight;  // 右前轮
+    MotorState rearLeft;    // 左后轮
+    MotorState rearRight;   // 右后轮
     
     constexpr VehicleMotion(
         MotorState fl, MotorState fr,

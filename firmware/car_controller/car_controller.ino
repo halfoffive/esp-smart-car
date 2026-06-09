@@ -24,7 +24,7 @@
 
 #include "motor_control.h"
 #include "servo_control.h"
-#include "wireless.h"
+#include <../libraries/wireless_protocol/src/wireless.h>
 #include "odometer.h"
 #include "pid_control.h"
 
@@ -277,7 +277,7 @@ void sendOdometryData() {
 // ESP-NOW 接收回调
 // ============================================
 
-void onDataRecv(const uint8_t* mac, const uint8_t* incomingData, int len) {
+void onDataRecv(const esp_now_recv_info* info, const uint8_t* incomingData, int len) {
     // 先尝试按 WirelessPacket 解析
     if (len == sizeof(WirelessPacket)) {
         const WirelessPacket* packet = reinterpret_cast<const WirelessPacket*>(incomingData);

@@ -60,10 +60,10 @@ enum class Resolution : uint8_t {
  * 因此 LOW 对应最大压缩值，BEST 对应最小压缩值
  */
 enum class ImageQuality : uint8_t {
-    LOW = 50,      // 低质量（高压缩，数值大=质量低）
-    MEDIUM = 30,   // 中等质量
-    HIGH = 15,     // 高质量（低压缩）
-    BEST = 5       // 最佳质量（最低压缩值）
+    QUALITY_LOW = 50,      // 低质量（高压缩，数值大=质量低）
+    QUALITY_MEDIUM = 30,   // 中等质量
+    QUALITY_HIGH = 15,     // 高质量（低压缩）
+    QUALITY_BEST = 5       // 最佳质量（最低压缩值）
 };
 
 /**
@@ -135,7 +135,7 @@ inline framesize_t resolutionToFramesize(const Resolution res) {
 inline CameraConfiguration createDefaultConfig() {
     return CameraConfiguration(
         Resolution::QVGA,      // 320x240，平衡画质与性能
-        ImageQuality::MEDIUM,  // 中等质量
+        ImageQuality::QUALITY_MEDIUM,  // 中等质量
         0,                     // 默认亮度
         0,                     // 默认对比度
         0,                     // 默认饱和度
@@ -151,7 +151,7 @@ inline CameraConfiguration createDefaultConfig() {
 inline CameraConfiguration createHighPerformanceConfig() {
     return CameraConfiguration(
         Resolution::QQVGA,      // 160x120，最小分辨率
-        ImageQuality::LOW,     // 低质量，高压缩
+        ImageQuality::QUALITY_LOW,     // 低质量，高压缩
         0, 0, 0,
         false, true,
         60                     // 60 FPS
@@ -164,7 +164,7 @@ inline CameraConfiguration createHighPerformanceConfig() {
 inline CameraConfiguration createHighQualityConfig() {
     return CameraConfiguration(
         Resolution::VGA,      // 640x480
-        ImageQuality::HIGH,    // 高质量
+        ImageQuality::QUALITY_HIGH,    // 高质量
         0, 0, 0,
         false, true,
         15                     // 15 FPS
