@@ -55,8 +55,8 @@ async fn main() -> anyhow::Result<()> {
         .merge(static_routes)
         .with_state(state);
 
-    // 监听地址
-    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+    // 监听地址（仅本地访问，不暴露给其他设备）
+    let addr = SocketAddr::from(([127, 0, 0, 1], 8080));
     info!("Web服务器监听: http://{}", addr);
     info!("WebSocket端点: ws://{}/ws", addr);
 
