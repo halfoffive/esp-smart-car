@@ -139,6 +139,12 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-12 - api.rs port_name 所有权错误修复
+- **范围**: 后端 Rust `api.rs` 编译错误 E0382
+- **修复**:
+  - `api.rs` — `connect_serial` 中 `port_name` 被 move 进 `spawn_blocking` 闭包后，闭包外仍被引用（日志和响应消息），导致编译失败。在闭包前添加 `port_name.clone()`，闭包内使用 clone 值，闭包外保留原值
+- **验证**: `cargo clippy` 0 errors
+
 ### 2026-06-12 - 全面代码排查与优化 v4（20项修复）
 - **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 三部分全面审查，启用 karpathy-guidelines 和 frontend-design 深度审计
 - **严重修复（P0 - 5项）**:

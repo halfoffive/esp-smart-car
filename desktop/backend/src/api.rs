@@ -237,9 +237,10 @@ pub async fn connect_serial(
 
     // 在 spawn_blocking 中执行阻塞 I/O（serialport::open 是阻塞调用）
     let state_clone = Arc::clone(&state);
+    let port_name_clone = port_name.clone();
     let connect_result = tokio::task::spawn_blocking(move || {
         let mut manager = state_clone.serial_manager.lock().unwrap();
-        manager.connect(&port_name, baud_rate)
+        manager.connect(&port_name_clone, baud_rate)
     })
     .await;
 

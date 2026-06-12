@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **api.rs port_name 所有权错误** — `connect_serial` 中 `port_name` 被 move 进 `spawn_blocking` 闭包后闭包外仍被引用（E0382），闭包前添加 `port_name.clone()` 解决
 - **receiver_dongle.ino 'D' 命令分类错误** — 'D' 从 SERVO 移到 MOVE 分支（'D' 是右转，不是云台下）
 - **receiver_dongle.ino H/J/K 命令未识别** — `parseSerialCommand` 和 `getCommandType` 添加 H/J/K 云台命令
 - **servo_control.h 缺少 'J' 云台下处理** — 添加 `case 'J': case 'j':` 与 'D' 相同逻辑

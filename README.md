@@ -246,6 +246,9 @@ cargo clippy       # 静态分析检查
 
 ## 版本历史
 
+- v1.5.1 - 2026-06-12
+  - 修复 api.rs `connect_serial` 中 `port_name` 所有权错误（E0382），闭包前添加 clone
+
 - v1.5.0 - 2026-06-09
   - P0 固件编译错误修复：重构 `wireless.h` 为 Arduino 库（`firmware/libraries/wireless_protocol/`），避免复制到各 sketch 目录
   - 修复 ESP32 Arduino core 3.3.8 回调签名不兼容（`esp_now_send_cb_t` / `esp_now_recv_cb_t`）
