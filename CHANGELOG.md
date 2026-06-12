@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **ControlPanel.vue 串口扫描** — 添加"扫描"按钮调用 `GET /api/ports`，页面加载时自动扫描一次，解决此前只能手动输入串口名称的问题
+
 ### Fixed
 - **api.rs port_name 所有权错误** — `connect_serial` 中 `port_name` 被 move 进 `spawn_blocking` 闭包后闭包外仍被引用（E0382），闭包前添加 `port_name.clone()` 解决
 - **receiver_dongle.ino 'D' 命令分类错误** — 'D' 从 SERVO 移到 MOVE 分支（'D' 是右转，不是云台下）

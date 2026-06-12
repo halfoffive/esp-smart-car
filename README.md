@@ -246,6 +246,9 @@ cargo clippy       # 静态分析检查
 
 ## 版本历史
 
+- v1.5.2 - 2026-06-12
+  - 添加串口扫描功能：ControlPanel.vue 新增"扫描"按钮，调用 `GET /api/ports` 获取可用串口列表，页面加载时自动扫描
+
 - v1.5.1 - 2026-06-12
   - 修复 api.rs `connect_serial` 中 `port_name` 所有权错误（E0382），闭包前添加 clone
 

@@ -6,7 +6,7 @@
     
     <!-- 连接设置 -->
     <div class="flex gap-2 items-center">
-      <select 
+      <select
         v-model="selectedPort"
         aria-label="串口选择"
         class="flex-1 min-w-0 bg-dark-800 border border-dark-600 rounded-lg px-2 py-1.5 text-xs text-dark-100 focus:outline-none focus:border-primary-500"
@@ -16,14 +16,23 @@
           {{ port }}
         </option>
       </select>
-      
-      <button 
+
+      <button
+        @click="scanPorts"
+        class="px-2 py-1.5 text-xs bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg border border-dark-600 transition-colors shrink-0"
+        :disabled="isScanning"
+        :aria-label="isScanning ? '扫描中' : '扫描可用串口'"
+      >
+        {{ isScanning ? '扫描中...' : '扫描' }}
+      </button>
+
+      <button
         @click="isConnected ? disconnect() : connect()"
         :class="[
           isConnected ? 'btn-danger' : 'btn-primary',
           { 'opacity-50 cursor-not-allowed': isConnecting }
         ]"
-        class="px-3 py-1.5 text-xs"
+        class="px-3 py-1.5 text-xs shrink-0"
         :disabled="isConnecting"
         :aria-label="isConnecting ? '连接中' : (isConnected ? '断开串口连接' : '连接串口')"
       >
@@ -260,6 +269,8 @@ const availablePorts = ref<string[]>([])
 const currentSpeed = ref(5)
 /** 连接进行中状态标志 */
 const isConnecting = ref(false)
+/** 串口扫描进行中状态标志 */
+const isScanning = ref(false)
 
 /** 速度滑块防抖定时器：快速拖动时只发送最终值，不发送中间值 */
 let speedDebounceTimer: number | null = null
@@ -370,20 +381,28 @@ const emergencyStop = () => {
   addLog('紧急停止！', 'error')
 }
 
-const refreshPorts = async () => {
+/** 扫描可用串口：调用 /api/ports 获取列表并填充下拉框 */
+const scanPorts = async () => {
+  isScanning.value = true
   try {
-    const status = await get<{ port_name?: string }>('/api/status')
-    
-    if (status.port_name) {
-      availablePorts.value = [status.port_name]
+    const result = await get<{ success: boolean; ports: string[] }>('/api/ports')
+
+    if (result.success && result.ports.length > 0) {
+      availablePorts.value = result.ports
+      addLog(`发现 ${result.ports.length} 个串口: ${result.ports.join(', ')}`, 'info')
+    } else {
+      availablePorts.value = []
+      addLog('未找到可用串口', 'warning')
     }
   } catch (e) {
-    addLog('获取串口列表失败', 'warning')
+    addLog(`扫描串口失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
+  } finally {
+    isScanning.value = false
   }
 }
 
 onMounted(() => {
-  refreshPorts()
+  scanPorts()
 })
 
 onUnmounted(() => {

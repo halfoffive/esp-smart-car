@@ -139,6 +139,13 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-12 - 串口扫描功能
+- **范围**: 前端 ControlPanel.vue 串口连接体验优化
+- **修复**:
+  - `ControlPanel.vue` — 添加"扫描"按钮，调用 `GET /api/ports` 获取可用串口列表并填充下拉框；页面加载时自动扫描一次
+  - 后端 `/api/ports` 端点此前已存在但前端从未调用，用户只能手动输入串口名称
+- **验证**: `bun run build` 成功
+
 ### 2026-06-12 - api.rs port_name 所有权错误修复
 - **范围**: 后端 Rust `api.rs` 编译错误 E0382
 - **修复**:
