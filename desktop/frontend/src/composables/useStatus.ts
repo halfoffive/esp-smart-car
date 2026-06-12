@@ -16,12 +16,21 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import type { Ref } from 'vue'
 import { useApi } from './useApi'
 
-/** 状态数据接口 */
+/** 状态数据接口（与后端 StatusResponse 对齐） */
 export interface StatusData {
   serial_status: string
-  fps: number
-  current_speed: number
+  port_name: string | null
+  baud_rate: number | null
   frame_count: number
+  bytes_sent: number
+  current_speed: number
+  ws_clients: number
+  uptime: number
+  version: string
+  left_speed: number
+  right_speed: number
+  heading: number
+  total_distance: number
   command_count: number
 }
 
@@ -34,9 +43,18 @@ function createStatusPoller() {
   // 响应式状态
   const status: Ref<StatusData> = ref({
     serial_status: '未连接',
-    fps: 0,
-    current_speed: 5,
+    port_name: null,
+    baud_rate: null,
     frame_count: 0,
+    bytes_sent: 0,
+    current_speed: 5,
+    ws_clients: 0,
+    uptime: 0,
+    version: '',
+    left_speed: 0,
+    right_speed: 0,
+    heading: 0,
+    total_distance: 0,
     command_count: 0,
   })
   const isPolling = ref(false)

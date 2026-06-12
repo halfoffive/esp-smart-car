@@ -385,16 +385,14 @@ void loop() {
     // 1. 更新云台（平滑移动）
     g_currentGimbal = updateGimbal(g_currentGimbal);
     
-    // 2. 更新测速数据
-    updateOdometer();
-    
-    // 3. 定期发送测速数据到PC端
+    // 2. 定期更新测速数据并发送（与采样周期对齐，避免无效调用）
     if (currentTime - g_lastOdomReportTime >= ODOMETRY_REPORT_INTERVAL_MS) {
+        updateOdometer();
         sendOdometryData();
         g_lastOdomReportTime = currentTime;
     }
     
-    // 4. 检查通信超时
+    // 3. 检查通信超时
     if (!g_emergencyStop && (currentTime - g_lastCmdTime) > 1000) {
         // 超过1秒未收到命令，自动停止
         if (g_currentMotion.frontLeft.direction != MotorDirection::STOP) {
@@ -406,11 +404,11 @@ void loop() {
         }
     }
     
-    // 5. 检查紧急停止恢复
+    // 4. 检查紧急停止恢复
     if (g_emergencyStop && (currentTime - g_lastCmdTime) < 500) {
         g_emergencyStop = false;
     }
     
-    // 6. 小延迟，避免占用过多CPU
+    // 5. 小延迟，避免占用过多CPU
     delay(10);
 }

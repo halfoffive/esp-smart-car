@@ -81,6 +81,27 @@ pub struct ApiResponse {
     pub message: String,
 }
 
+/// 列出可用串口
+pub async fn list_ports() -> (StatusCode, Json<serde_json::Value>) {
+    let ports = tokio::task::spawn_blocking(|| {
+        serialport::available_ports()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| p.port_name)
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default();
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "ports": ports,
+        })),
+    )
+}
+
 /// 处理命令
 pub async fn handle_command(
     State(state): State<Arc<AppState>>,
@@ -206,6 +227,7 @@ pub async fn connect_serial(
     Json(request): Json<ConnectRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
     let baud_rate = request.baud_rate.unwrap_or(DEFAULT_BAUD_RATE);
+    let port_name = request.port_name;
 
     // 先断开现有连接（在锁内）
     {
@@ -213,31 +235,43 @@ pub async fn connect_serial(
         manager.disconnect();
     } // 释放锁
 
-    // 执行阻塞 I/O（不在锁保护下）
-    let connect_result = {
-        let mut manager = state.serial_manager.lock().unwrap();
-        manager.connect(&request.port_name, baud_rate)
-    }; // 释放锁
+    // 在 spawn_blocking 中执行阻塞 I/O（serialport::open 是阻塞调用）
+    let state_clone = Arc::clone(&state);
+    let connect_result = tokio::task::spawn_blocking(move || {
+        let mut manager = state_clone.serial_manager.lock().unwrap();
+        manager.connect(&port_name, baud_rate)
+    })
+    .await;
 
     // 根据结果更新状态
     match connect_result {
-        Ok(()) => {
-            info!("串口连接成功: {} @ {}", request.port_name, baud_rate);
+        Ok(Ok(())) => {
+            info!("串口连接成功: {} @ {}", port_name, baud_rate);
             (
                 StatusCode::OK,
                 Json(ApiResponse {
                     success: true,
-                    message: format!("已连接到 {}", request.port_name),
+                    message: format!("已连接到 {}", port_name),
                 }),
             )
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             warn!("串口连接失败: {}", e);
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(ApiResponse {
                     success: false,
                     message: format!("连接失败: {}", e),
+                }),
+            )
+        }
+        Err(e) => {
+            warn!("串口连接任务异常: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    success: false,
+                    message: format!("连接任务异常: {}", e),
                 }),
             )
         }

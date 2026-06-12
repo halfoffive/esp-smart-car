@@ -34,10 +34,18 @@ void handleCameraCommand(const uint8_t* data, int len) {
     
     switch (packet->type) {
         case CommandType::SERVO:
-            // 转发舵机命令到车载控制器
+            // 云台命令转发到车载控制器（摄像头不直接控制舵机）
+            sendToCar(*packet);
             break;
         case CommandType::STATUS:
-            // 发送状态反馈
+            // 状态查询：回复当前视频流状态
+            {
+                const StreamState state = getStreamState();
+                Serial.printf("[状态] 流传输:%s, FPS:%d, 总帧:%lu\n",
+                              state.isStreaming ? "ON" : "OFF",
+                              state.fps,
+                              (unsigned long)state.totalFrames);
+            }
             break;
         default:
             break;

@@ -27,9 +27,9 @@
   --color-dark-900: #0f172a;
   --color-dark-950: #020617;
 
-  /* 字体 */
-  --font-sans: 'Inter', system-ui, sans-serif;
-  --font-mono: 'Fira Code', monospace;
+  /* 字体 - 工业科技风 */
+  --font-sans: 'Space Grotesk', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
 @layer base {
@@ -111,6 +111,7 @@
   .control-key-sm.control-key-active {
     @apply bg-primary-600 border-primary-500 text-white
            shadow-primary-500/30 shadow-lg transform scale-95;
+    box-shadow: 0 0 12px rgba(14, 165, 233, 0.5), 0 0 4px rgba(14, 165, 233, 0.3);
   }
 
   .control-key-sm:disabled {
@@ -120,6 +121,22 @@
   .video-container {
     @apply relative bg-black rounded-xl overflow-hidden
            border border-dark-700 shadow-2xl;
+  }
+
+  /* 视频区域扫描线纹理 - 增强科技感 */
+  .video-container::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0, 0, 0, 0.03) 2px,
+      rgba(0, 0, 0, 0.03) 4px
+    );
+    z-index: 1;
   }
 
   .video-placeholder {

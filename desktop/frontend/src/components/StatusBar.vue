@@ -59,11 +59,11 @@ import { computed } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
 import { useStatus } from '../composables/useStatus'
 
-const { isConnected } = useWebSocket()
+const { isConnected, videoFps } = useWebSocket()
 const { status } = useStatus()
 
 const serialConnected = computed(() => status.value.serial_status === '已连接')
-const fps = computed(() => status.value.fps || 0)
+const fps = computed(() => videoFps.value || 0)
 const currentSpeed = computed(() => Math.min(9, Math.max(1, status.value.current_speed || 5)))
 const frameCount = computed(() => status.value.frame_count || 0)
 </script>

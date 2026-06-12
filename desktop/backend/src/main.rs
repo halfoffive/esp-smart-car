@@ -40,7 +40,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/command", post(api::handle_command))
         .route("/api/status", get(api::get_status))
         .route("/api/connect", post(api::connect_serial))
-        .route("/api/disconnect", post(api::disconnect_serial));
+        .route("/api/disconnect", post(api::disconnect_serial))
+        .route("/api/ports", get(api::list_ports));
 
     // 静态文件路由（SPA fallback）
     let static_routes = Router::new().fallback_service(

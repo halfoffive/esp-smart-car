@@ -162,9 +162,9 @@ inline void sendVideoFrame(const FrameState& frame) {
         }
         packet.checksum = sum;
         
-        // 发送（使用ESP-NOW广播），只发送实际有效大小
+        // 发送到接收器（指定 MAC 地址，避免广播给车载端造成误解析）
         const size_t sendSize = sizeof(VideoPacket) - StreamConfig::MAX_PACKET_SIZE + packetLen;
-        esp_now_send(nullptr, 
+        sendRawPacket(WirelessConfig::RECEIVER_MAC, 
                      reinterpret_cast<const uint8_t*>(&packet),
                      sendSize);
         
@@ -217,6 +217,13 @@ inline void updateStreaming() {
     
     // 发送帧
     sendVideoFrame(frame);
+    
+    // 动态调整质量（根据帧大小自适应压缩率）
+    const uint8_t newQuality = adjustQuality(g_streamState.bytesSent, frame.frameSize);
+    sensor_t* sensor = esp_camera_sensor_get();
+    if (sensor != NULL) {
+        sensor->set_quality(sensor, newQuality);
+    }
     
     // 更新状态
     const uint16_t fps = calculateFPS(g_streamState.lastFrameTime, currentTime);

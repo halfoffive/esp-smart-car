@@ -39,6 +39,7 @@ export interface OdometryData {
 interface WebSocketInstance {
   isConnected: Ref<boolean>
   videoFrame: Ref<string | null>
+  videoFps: Ref<number>
   odometry: Ref<OdometryData>
   connect: () => void
   disconnect: () => void
@@ -55,6 +56,7 @@ function createWebSocket() {
   // 响应式状态（闭包内部）
   const isConnected = ref(false)
   const videoFrame = ref<string | null>(null)
+  const videoFps = ref(0)
   const odometry = ref<OdometryData>({
     leftSpeed: 0,
     rightSpeed: 0,
@@ -278,6 +280,7 @@ function createWebSocket() {
   return {
     isConnected,
     videoFrame,
+    videoFps,
     odometry,
     connect,
     disconnect,
@@ -323,6 +326,7 @@ export const useWebSocket = (owner = false): WebSocketInstance => {
   return {
     isConnected: state.isConnected,
     videoFrame: state.videoFrame,
+    videoFps: state.videoFps,
     odometry: state.odometry,
     connect: safeConnect,
     disconnect: safeDisconnect,

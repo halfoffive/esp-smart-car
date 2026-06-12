@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **receiver_dongle.ino 'D' 命令分类错误** — 'D' 从 SERVO 移到 MOVE 分支（'D' 是右转，不是云台下）
+- **receiver_dongle.ino H/J/K 命令未识别** — `parseSerialCommand` 和 `getCommandType` 添加 H/J/K 云台命令
+- **servo_control.h 缺少 'J' 云台下处理** — 添加 `case 'J': case 'j':` 与 'D' 相同逻辑
+- **pid_control.h 初始状态不一致** — `g_straightLineEnabled` 改为 `false`，`g_driveMode` 改为 `NORMAL`，与 car_controller 同步
+- **video_stream.h ESP-NOW 广播误发** — 改为指定接收器 MAC 地址，避免车载端误解析视频包
+- **receiver_dongle.ino VideoFrameBuffer 内存泄漏** — `new[]` 分配改为静态数组
+- **api.rs connect_serial 阻塞 I/O** — `serialport::open()` 移入 `spawn_blocking`，避免阻塞 async 运行时
+- **websocket.rs drive_mode 协议不对齐** — 添加注释说明双字节发送逻辑（模式字符 + 模式值）
+- **car_controller.ino updateOdometer 过频** — 移到定时条件内，与测速上报同频
+- **odometer.h getCurrentOdometry 非原子读取** — 扩大 `noInterrupts` 保护范围到所有共享变量
+- **useStatus.ts StatusData 接口不匹配** — 扩展为与后端 StatusResponse 完全对齐的字段
+- **SpeedDashboard.vue shift() 性能差** — 改为 `slice(-MAX_SAMPLES)` 截断
+- **camera_module.ino handleCameraCommand 空实现** — 添加云台命令转发和状态查询逻辑
+- **motor_control.h parseCommandWithSpeed 副作用** — 移除 `Serial.printf` 调试输出
+- **video_stream.h adjustQuality 死代码** — 在 `updateStreaming` 中调用实现动态质量调整
+- **receiver_dongle.ino SerialCommand const 成员** — 移除 `const` 修饰符，允许赋值操作
+- **wireless.h static 全局变量** — 改为 `inline` 变量，确保多翻译单元单一定义
+- **StatusBar.vue fps 引用已删除字段** — 改为从 `useWebSocket().videoFps` 获取
+- **useWebSocket.ts 缺少 videoFps** — 添加 `videoFps` ref，VideoPlayer 同步更新
+
+### Added
+- **api.rs list_ports 端点** — `GET /api/ports` 列出可用串口，使用 `spawn_blocking` 避免阻塞
+- **main.rs /api/ports 路由** — 注册新端口列表 API
+- **useWebSocket.ts videoFps** — 全局视频帧率状态，供 StatusBar 等组件消费
+
+### Changed
+- **字体升级** — Inter → Space Grotesk（显示），Fira Code → JetBrains Mono（等宽），工业科技风
+- **控制按钮微交互** — 激活态添加 cyan glow 阴影效果
+- **视频区域扫描线** — 添加半透明扫描线纹理，增强科技感
 - **ControlPanel.vue onUnmounted 未 await** — `disconnect()` 改为 `.catch(() => {})` 处理 Promise rejection
 - **ControlPanel.vue handleSpeedInput 重复** — 直接读取 `currentSpeed.value`，移除 `event.target`/`parseFloat`
 - **VideoPlayer.vue RAF 空转** — 移除 `requestAnimationFrame` 循环，改用 `watch(videoFrame)` 监听帧变化

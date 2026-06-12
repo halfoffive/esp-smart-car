@@ -139,6 +139,38 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-12 - 全面代码排查与优化 v4（20项修复）
+- **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 三部分全面审查，启用 karpathy-guidelines 和 frontend-design 深度审计
+- **严重修复（P0 - 5项）**:
+  - `receiver_dongle.ino` — 'D' 命令分类错误，从 SERVO 移到 MOVE 分支（'D' 是右转，不是云台下）
+  - `receiver_dongle.ino` — H/J/K 云台命令未被识别，`parseSerialCommand` 和 `getCommandType` 添加支持，**云台控制此前完全失效**
+  - `servo_control.h` — `parseGimbalCommand` 缺少 'J' 云台下处理，添加 `case 'J': case 'j':` 与 'D' 相同逻辑
+  - `pid_control.h` — `initializePIDController()` 初始状态与 `car_controller.ino` 不一致：`g_straightLineEnabled` 改为 `false`，`g_driveMode` 改为 `NORMAL`
+  - `video_stream.h` — ESP-NOW 广播视频帧给所有设备，car_controller 收到视频包误解析，改为指定接收器 MAC 地址
+- **高优先级修复（P1 - 5项）**:
+  - `receiver_dongle.ino` — `VideoFrameBuffer` 用 `new[]` 分配但从未 `delete[]`，改为静态数组消除内存泄漏
+  - `api.rs` — `connect_serial` 中 `serialport::open()` 阻塞 I/O 在 `MutexGuard` 内，移入 `spawn_blocking`
+  - `websocket.rs` — `drive_mode` 发送双字节（模式字符 + 模式值），添加注释说明协议对齐
+  - `car_controller.ino` — `updateOdometer` 每 10ms 调用但 99% 直接 return，移到定时条件内与测速上报同频
+  - `odometer.h` — `getCurrentOdometry` 非原子读取多个浮点变量，扩大 `noInterrupts` 保护范围
+- **中优先级修复（P2 - 6项）**:
+  - `useStatus.ts` — `StatusData` 接口与后端 `StatusResponse` 不匹配，扩展为完整字段
+  - `SpeedDashboard.vue` — `speedSamples.shift()` O(n) 性能差，改为 `slice(-MAX_SAMPLES)` 截断
+  - `camera_module.ino` — `handleCameraCommand` SERVO/STATUS 分支为空，添加云台命令转发和状态查询
+  - `motor_control.h` — `parseCommandWithSpeed` 标注纯函数但含 `Serial.printf`，移除副作用
+  - `video_stream.h` — `adjustQuality` 已定义但从未调用，在 `updateStreaming` 中调用实现动态质量调整
+  - `StatusBar.vue` — 引用已删除的 `status.value.fps`，改为从 `useWebSocket().videoFps` 获取
+- **低优先级/优化（P3 - 4项）**:
+  - `api.rs` + `main.rs` — 新增 `GET /api/ports` 端点列出可用串口
+  - `receiver_dongle.ino` — `SerialCommand` 移除 `const` 成员，允许赋值操作
+  - `wireless.h` — `static` 全局变量改为 `inline`，确保多翻译单元单一定义
+  - `useWebSocket.ts` — 添加 `videoFps` ref，VideoPlayer 同步更新
+- **前端 UI 优化**:
+  - 字体升级：Inter → Space Grotesk（显示），Fira Code → JetBrains Mono（等宽）
+  - 控制按钮激活态添加 cyan glow 阴影微交互
+  - 视频区域添加半透明扫描线纹理，增强科技感
+- **验证**: `bun run build` 成功；`cargo test`/`cargo clippy` 因 Rust 1.96.0 编译器 ICE（已知 bug）暂无法运行
+
 ### 2026-06-09 - P0 固件编译错误修复（5项严重错误）
 - **范围**: 嵌入式固件全面编译错误修复，重构 wireless.h 为 Arduino 库
 - **严重修复**:

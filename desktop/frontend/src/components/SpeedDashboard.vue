@@ -122,8 +122,9 @@ watch(odometry, (newOdom) => {
   // 记录速度样本（取两轮绝对值平均值）
   const avg = (leftAbs + rightAbs) / 2
   speedSamples.value.push(avg)
+  // 超过最大样本数时截断（比 shift() O(n) 更高效）
   if (speedSamples.value.length > MAX_SAMPLES) {
-    speedSamples.value.shift()
+    speedSamples.value = speedSamples.value.slice(-MAX_SAMPLES)
   }
 
   // 计算平均速度

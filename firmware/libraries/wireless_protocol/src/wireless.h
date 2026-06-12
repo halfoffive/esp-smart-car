@@ -159,11 +159,11 @@ namespace StreamConfig {
 // ============================================
 // 全局状态（可修改，非纯函数）
 // ============================================
-// 注意：这些用于存储回调中的状态
-static WirelessState g_wirelessState(
+// 注意：使用 inline 确保头文件被多个翻译单元包含时只有一个定义
+inline WirelessState g_wirelessState(
     DeviceRole::CAR, false, 0, 0, 0, 0, 0, 0
 );
-static esp_now_peer_info_t g_peerInfo;
+inline esp_now_peer_info_t g_peerInfo{};
 
 // ============================================
 // 纯函数：数据包操作

@@ -57,7 +57,7 @@
 import { ref, watch, onUnmounted } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
 
-const { videoFrame, isConnected } = useWebSocket()
+const { videoFrame, videoFps, isConnected } = useWebSocket()
 
 const videoSrc = ref<string | null>(null)
 const fps = ref(0)
@@ -77,6 +77,7 @@ const updateVideo = () => {
 
   if (now - lastFpsUpdate >= 1000) {
     fps.value = frameCount
+    videoFps.value = frameCount  // 同步到全局状态，供 StatusBar 使用
     frameCount = 0
     lastFpsUpdate = now
   }

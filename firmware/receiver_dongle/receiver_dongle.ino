@@ -42,19 +42,19 @@ namespace ReceiverConfig {
  * 串口命令结构
  */
 struct SerialCommand {
-    const char cmd;          // 命令字符
-    const uint8_t speed;     // 速度值
-    const bool isValid;      // 是否有效
+    char cmd;                // 命令字符（非 const：允许赋值操作）
+    uint8_t speed;           // 速度值（非 const：允许赋值操作）
+    bool isValid;            // 是否有效（非 const：允许赋值操作）
     
     constexpr SerialCommand(char c, uint8_t s, bool v)
         : cmd(c), speed(s), isValid(v) {}
 };
 
 /**
- * 视频帧缓冲区
+ * 视频帧缓冲区（使用静态数组，避免 new/delete 内存泄漏）
  */
 struct VideoFrameBuffer {
-    uint8_t* data;           // 数据指针
+    uint8_t data[ReceiverConfig::BUFFER_SIZE]; // 静态数组，无需动态分配
     size_t size;             // 当前大小
     size_t capacity;         // 容量
     uint16_t frameId;        // 帧序号
@@ -62,7 +62,7 @@ struct VideoFrameBuffer {
     uint16_t totalPackets;   // 总包数
     bool isComplete;         // 是否完整
     
-    VideoFrameBuffer() : data(nullptr), size(0), capacity(0),
+    VideoFrameBuffer() : size(0), capacity(ReceiverConfig::BUFFER_SIZE),
                          frameId(0), packetsReceived(0), totalPackets(0), isComplete(false) {}
 };
 
@@ -99,7 +99,11 @@ inline SerialCommand parseSerialCommand(const char input) {
         case 'Q': case 'q':
         case 'E': case 'e':
         case ' ':  // 停止
+            return SerialCommand(input, 0, true);
         case 'U': case 'u':
+        case 'J': case 'j':  // 云台下（与前端 'J' 对齐）
+        case 'H': case 'h':  // 云台左（与前端 'H' 对齐）
+        case 'K': case 'k':  // 云台右（与前端 'K' 对齐）
         case 'L': case 'l':
         case 'R': case 'r':
         case 'C': case 'c':
@@ -121,12 +125,15 @@ inline CommandType getCommandType(const char cmd) {
         case 'W': case 'w':
         case 'A': case 'a':
         case 'S': case 's':
+        case 'D': case 'd':      // 'D' 是右转（MOVE），不是云台
         case 'Q': case 'q':
         case 'E': case 'e':
         case ' ':
             return CommandType::MOVE;
         case 'U': case 'u':
-        case 'D': case 'd':
+        case 'J': case 'j':      // 云台下（与前端 'J' 对齐）
+        case 'H': case 'h':      // 云台左（与前端 'H' 对齐）
+        case 'K': case 'k':      // 云台右（与前端 'K' 对齐）
         case 'L': case 'l':
         case 'R': case 'r':
         case 'C': case 'c':
@@ -182,11 +189,9 @@ inline void forwardToCamera(const SerialCommand& cmd) {
 // ============================================
 
 /**
- * 初始化视频缓冲区
+ * 初始化视频缓冲区（静态数组无需动态分配）
  */
 inline void initVideoBuffer() {
-    g_videoBuffer.capacity = ReceiverConfig::BUFFER_SIZE;
-    g_videoBuffer.data = new uint8_t[g_videoBuffer.capacity];
     g_videoBuffer.size = 0;
     g_videoBuffer.isComplete = false;
 }

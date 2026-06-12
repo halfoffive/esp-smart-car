@@ -335,17 +335,21 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             *last = std::time::Instant::now();
         }
         "drive_mode" => {
-            // 行走模式切换
+            // 行走模式切换：发送 DRIVE_MODE 命令类型 + 模式值
+            // 车端 handleDriveModeCommand 接收 packet->data 作为模式值
+            // 协议：先发 'M'/'L'/'B' 标识类型，再发模式值 0/1/2
             if let Some(mode) = message["mode"].as_u64() {
-                let cmd = match mode {
-                    0 => 'M', // 普通模式
-                    1 => 'L', // 直线修正模式
-                    2 => 'B', // 航向锁定模式
-                    _ => 'L',
-                };
                 {
                     let mut manager = state.serial_manager.lock().unwrap();
-                    let _ = manager.send_command(cmd as u8);
+                    // 发送模式标识字符
+                    let mode_char = match mode {
+                        0 => 'M', // 普通模式
+                        1 => 'L', // 直线修正模式
+                        2 => 'B', // 航向锁定模式
+                        _ => 'L',
+                    };
+                    let _ = manager.send_command(mode_char as u8);
+                    // 发送模式数值（0/1/2），车端通过 DRIVE_MODE 类型解析
                     let _ = manager.send_command(mode as u8);
                 }
                 info!("切换行走模式: {}", mode);

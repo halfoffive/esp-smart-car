@@ -271,7 +271,8 @@ inline GimbalState updateGimbal(const GimbalState& current) {
 
 /**
  * 纯函数：解析云台控制命令
- * 支持：U(上), D(下), L(左), R(右), C(居中)
+ * 支持：U(上), D/J(下), H(左), K(右), C(居中)
+ * 注：前端使用 J 作为云台下命令，D 已被占用为右转
  */
 inline GimbalState parseGimbalCommand(const GimbalState& current, const char cmd) {
     const uint8_t step = 5;  // 每步移动角度
@@ -286,7 +287,9 @@ inline GimbalState parseGimbalCommand(const GimbalState& current, const char cmd
                         ? newVAngle + step : SG90Config::MAX_ANGLE;
             break;
         case 'D': case 'd':
+        case 'J': case 'j':
             // 安全减法：防止 uint8_t 下溢（0 - 5 = 251）
+            // 'J' 与 'D' 功能相同：云台下（前端使用 'J'）
             newVAngle = (newVAngle >= step) ? newVAngle - step : 0;
             break;
         case 'H': case 'h':

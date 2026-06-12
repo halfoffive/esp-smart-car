@@ -324,35 +324,44 @@ inline void updateOdometer() {
  * 防止ISR在读取过程中修改数据导致撕裂读取
  */
 inline OdometryData getCurrentOdometry() {
-    // 关中断读取所有ISR共享的volatile变量（脉冲计数器）
+    // 关中断读取所有 ISR 共享的 volatile 变量和由主循环更新的浮点变量
+    // 防止 ISR 在读取过程中修改脉冲计数器导致数据不一致
     noInterrupts();
     const uint32_t leftPulses = OdometerState::g_leftPulses;
     const uint32_t rightPulses = OdometerState::g_rightPulses;
+    
+    // 读取由 updateOdometer() 更新的浮点变量（主循环和此函数可能并发访问）
+    const float leftRpm = OdometerState::g_leftRpm;
+    const float leftSpeedMmps = OdometerState::g_leftSpeedMmps;
+    const float leftDistanceMm = OdometerState::g_leftDistanceMm;
+    const float rightRpm = OdometerState::g_rightRpm;
+    const float rightSpeedMmps = OdometerState::g_rightSpeedMmps;
+    const float rightDistanceMm = OdometerState::g_rightDistanceMm;
+    const float heading = OdometerState::g_heading;
+    const float totalDistanceMm = OdometerState::g_totalDistanceMm;
+    const uint32_t lastSampleTime = OdometerState::g_lastSampleTime;
     interrupts();
     
     return OdometryData(
         WheelSpeed(
-            OdometerState::g_leftRpm,
-            OdometerState::g_leftSpeedMmps,
-            OdometerState::g_leftDistanceMm,
+            leftRpm,
+            leftSpeedMmps,
+            leftDistanceMm,
             leftPulses,
-            OdometerState::g_lastSampleTime
+            lastSampleTime
         ),
         WheelSpeed(
-            OdometerState::g_rightRpm,
-            OdometerState::g_rightSpeedMmps,
-            OdometerState::g_rightDistanceMm,
+            rightRpm,
+            rightSpeedMmps,
+            rightDistanceMm,
             rightPulses,
-            OdometerState::g_lastSampleTime
+            lastSampleTime
         ),
-        (OdometerState::g_leftSpeedMmps + OdometerState::g_rightSpeedMmps) / 2.0f,
-        calculateAngularVelocity(
-            OdometerState::g_leftSpeedMmps, 
-            OdometerState::g_rightSpeedMmps
-        ),
-        OdometerState::g_heading,
-        OdometerState::g_totalDistanceMm,
-        OdometerState::g_lastSampleTime
+        (leftSpeedMmps + rightSpeedMmps) / 2.0f,
+        calculateAngularVelocity(leftSpeedMmps, rightSpeedMmps),
+        heading,
+        totalDistanceMm,
+        lastSampleTime
     );
 }
 
