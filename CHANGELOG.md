@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **P1: 视频包校验和验证** — `receiver_dongle.ino` 接收端添加校验和验证，使用 `len - 1` 计算（排除 checksum 字段），与发送端对齐，损坏包静默丢弃防止花屏
+- **P3: 箭头键临时数组优化** — `useKeyboard.ts` 定义 `PREVENT_DEFAULT_KEYS` 常量 Set，避免每次 keydown 创建新数组
 - **P2: 帧捕获错误恢复** — `video_stream.h` 添加连续失败计数，超过 10 次自动重启摄像头硬件，修复摄像头故障后无法恢复
 - **P2: 非标准包日志** — `car_controller.ino` onDataRecv 添加非标准长度包日志（DEBUG_WIRELESS 开关控制），便于调试
 - **P3: 串口重启指数退避** — `main.rs` 串口任务重启从固定 3 秒改为指数退避（3s→60s 最大），防止持续失败时频繁重试

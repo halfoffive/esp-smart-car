@@ -37,6 +37,9 @@ const VALID_KEYS = new Set([
 /** 方向键集合（互斥控制） */
 const DIRECTION_KEYS = new Set(['W', 'A', 'S', 'D', 'Q', 'E'])
 
+/** 需要阻止默认行为的按键集合 */
+const PREVENT_DEFAULT_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '])
+
 /**
  * 键盘控制组合式函数
  * 
@@ -59,7 +62,7 @@ export const useKeyboard = (sendCommand: (cmd: string) => void) => {
 
     // 阻止箭头键和空格的默认行为（防止页面滚动等）
     // 注意：event.key 对箭头键始终为首字母大写格式（如 'ArrowUp'），需在 toUpperCase 之前检查
-    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(event.key)) {
+    if (PREVENT_DEFAULT_KEYS.has(event.key)) {
       event.preventDefault()
     }
 
