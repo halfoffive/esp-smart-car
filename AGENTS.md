@@ -139,6 +139,13 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-13 - 清理 dead_code 警告
+- **范围**: 后端 Rust
+- **修复**:
+  - `websocket.rs` — 移除未使用的 `base64_encode` 函数，消除 `cargo clippy` dead_code 警告
+  - `websocket.rs` 测试模块 — 内联 Base64 编码调用，添加 `use base64::Engine;` 导入
+- **验证**: `cargo clippy` 0 warnings；`cargo test` 43 测试全过（37 unit + 1 main + 5 integration）
+
 ### 2026-06-13 - 综合代码审计修复 v5.1（23项追加修复）
 - **范围**: 基于 v5 全面排查报告，修复 4 项 P0、6 项 P1、3 项 P2 问题
 - **P0 严重修复（4项）**:

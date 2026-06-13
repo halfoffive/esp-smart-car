@@ -21,7 +21,6 @@ use axum::{
     extract::State,
     response::IntoResponse,
 };
-use base64::Engine;
 use futures::{sink::SinkExt, stream::StreamExt};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -407,11 +406,6 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
     Ok(())
 }
 
-/// Base64编码
-fn base64_encode(data: &[u8]) -> String {
-    base64::engine::general_purpose::STANDARD.encode(data)
-}
-
 /// 解析MAC地址字符串（格式：AA:BB:CC:DD:EE:FF 或 AABBCCDDEEFF）
 fn parse_mac_address(mac_str: &str) -> anyhow::Result<[u8; 6]> {
     let hex_only: String = mac_str.chars().filter(|c| c.is_ascii_hexdigit()).collect();
@@ -430,6 +424,7 @@ fn parse_mac_address(mac_str: &str) -> anyhow::Result<[u8; 6]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
 
     /// 辅助函数：创建测试用 AppState
     fn create_test_state() -> Arc<AppState> {
@@ -476,7 +471,7 @@ mod tests {
     /// 测试 base64 编码
     #[test]
     fn test_base64_encode() {
-        let encoded = base64_encode(&[0x00, 0x01, 0x02]);
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&[0x00, 0x01, 0x02]);
         assert_eq!(encoded, "AAEC");
     }
 
