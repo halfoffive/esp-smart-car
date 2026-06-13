@@ -24,7 +24,7 @@
 
 #include "motor_control.h"
 #include "servo_control.h"
-#include <../libraries/wireless_protocol/src/wireless.h>
+#include "../libraries/wireless_protocol/src/wireless.h"
 #include "odometer.h"
 #include "pid_control.h"
 
@@ -365,7 +365,9 @@ void setup() {
     }
     
     // 注册接收回调
-    esp_now_register_recv_cb(onDataRecv);
+    if (esp_now_register_recv_cb(onDataRecv) != ESP_OK) {
+        Serial.println("[无线通信] 注册接收回调失败");
+    }
     
     // 初始化状态
     g_currentMotion = createStopState();

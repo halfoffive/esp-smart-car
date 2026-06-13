@@ -12,6 +12,8 @@
  * 发送：{"type": "video", "data": "base64..."}
  * 接收：{"type": "command", "data": "W"}
  */
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
@@ -156,6 +158,22 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 break;
             }
 
+            // 无客户端时跳过帧处理和测速发送，节省资源
+            let client_count = {
+                let manager = video_state.ws_manager.lock().expect("ws_manager lock poisoned");
+                manager.client_count()
+            };
+            if client_count == 0 {
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+                    _ = video_cancel.cancelled() => {
+                        debug!("视频广播任务收到取消信号，优雅退出");
+                        break;
+                    }
+                }
+                continue;
+            }
+
             // 检查串口列表变化，变化时广播 port_list（每秒最多检查一次）
             if last_port_check.elapsed() >= std::time::Duration::from_secs(1) {
                 last_port_check = Instant::now();
@@ -168,7 +186,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     let port_message = serde_json::json!({
                         "type": "port_list",
                         "ports": current_ports,
-                        "timestamp": chrono::Utc::now().timestamp_millis()
+                        "timestamp": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64
                     });
                     if let Err(e) = video_tx
                         .send(Message::Text(port_message.to_string().into()))
@@ -186,23 +207,11 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             };
 
             if let Some(ref b64_data) = frame_b64 {
-                // 使用多点采样哈希判断帧是否更新（基于 Base64 字符串长度和首尾采样）
-                let hash = {
-                    let len = b64_data.len() as u64;
-                    let first4 = b64_data
-                        .get(0..4)
-                        .map(|s| u32::from_be_bytes(s.as_bytes().try_into().unwrap_or([0; 4])) as u64)
-                        .unwrap_or(0);
-                    let last4 = if b64_data.len() >= 8 {
-                        b64_data
-                            .get(b64_data.len() - 4..)
-                            .map(|s| u32::from_be_bytes(s.as_bytes().try_into().unwrap_or([0; 4])) as u64)
-                            .unwrap_or(0)
-                    } else {
-                        0u64
-                    };
-                    len ^ (first4 << 32) ^ last4
-                };
+                // 使用 SipHash-2-4（DefaultHasher）对完整 Base64 字符串计算哈希，
+                // 替代此前仅采样首尾字节的弱哈希，消除不同帧哈希碰撞导致的丢帧
+                let mut hasher = DefaultHasher::new();
+                b64_data.as_str().hash(&mut hasher);
+                let hash = hasher.finish();
 
                 if last_frame_hash != Some(hash) {
                     last_frame_hash = Some(hash);
@@ -211,7 +220,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         "type": "video",
                         "format": "jpeg",
                         "data": b64_data.as_str(),
-                        "timestamp": chrono::Utc::now().timestamp_millis()
+                        "timestamp": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64
                     });
 
                     if let Err(e) = video_tx
@@ -235,7 +247,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         "rightSpeed": odom.right_speed_mmps,
                         "heading": odom.heading,
                         "distance": odom.total_distance_mm,
-                        "timestamp": chrono::Utc::now().timestamp_millis()
+                        "timestamp": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64
                     })
                 }; // odom 锁在此处释放
 

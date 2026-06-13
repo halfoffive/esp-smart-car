@@ -152,6 +152,7 @@ namespace StreamConfig {
 // 全局状态（可修改，非纯函数）
 // ============================================
 // 注意：使用 inline 确保头文件被多个翻译单元包含时只有一个定义
+// g_peerInfo 仅在 initializeWireless() 中用于添加 ESP-NOW peer，初始化后不再读取
 inline WirelessState g_wirelessState(
     DeviceRole::CAR, 0
 );
@@ -384,25 +385,33 @@ inline bool sendToCamera(const WirelessPacket& packet) {
  * 输入：6字节MAC地址指针
  */
 inline void setTargetCarMac(const uint8_t* newMac) {
+    // 如果新MAC与当前MAC相同，跳过操作避免不必要的删除+重新添加
+    if (memcmp(WirelessConfig::CAR_MAC, newMac, 6) == 0) {
+        Serial.println("[无线通信] 车载端MAC未变化，跳过更新");
+        return;
+    }
+
     // 保存旧 MAC，删除旧 peer，再添加新 peer
     // esp_now_mod_peer 按 peer_addr 查找，用新 MAC 查不到旧 peer，需先删后加
     uint8_t oldMac[6];
     memcpy(oldMac, WirelessConfig::CAR_MAC, 6);
-    
+
     if (esp_now_del_peer(oldMac) != ESP_OK) {
         Serial.println("[无线通信] 删除旧车载端配对信息失败");
     }
-    
+
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, newMac, 6);
     peerInfo.channel = WirelessConfig::CHANNEL;
     peerInfo.encrypt = false;
-    
+
     if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-        Serial.println("[无线通信] 添加新车载端配对信息失败");
+        Serial.println("[无线通信] 添加新车载端配对信息失败，MAC未更新");
+        return;  // 失败时不更新全局 MAC，避免指向未注册的 peer
     }
-    
+
     memcpy(WirelessConfig::CAR_MAC, newMac, 6);
+    Serial.println("[无线通信] 车载端MAC更新成功");
 }
 
 /**
@@ -410,25 +419,33 @@ inline void setTargetCarMac(const uint8_t* newMac) {
  * 输入：6字节MAC地址指针
  */
 inline void setTargetCameraMac(const uint8_t* newMac) {
+    // 如果新MAC与当前MAC相同，跳过操作避免不必要的删除+重新添加
+    if (memcmp(WirelessConfig::CAMERA_MAC, newMac, 6) == 0) {
+        Serial.println("[无线通信] 摄像头MAC未变化，跳过更新");
+        return;
+    }
+
     // 保存旧 MAC，删除旧 peer，再添加新 peer
     // esp_now_mod_peer 按 peer_addr 查找，用新 MAC 查不到旧 peer，需先删后加
     uint8_t oldMac[6];
     memcpy(oldMac, WirelessConfig::CAMERA_MAC, 6);
-    
+
     if (esp_now_del_peer(oldMac) != ESP_OK) {
         Serial.println("[无线通信] 删除旧摄像头配对信息失败");
     }
-    
+
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, newMac, 6);
     peerInfo.channel = WirelessConfig::CHANNEL;
     peerInfo.encrypt = false;
-    
+
     if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-        Serial.println("[无线通信] 添加新摄像头配对信息失败");
+        Serial.println("[无线通信] 添加新摄像头配对信息失败，MAC未更新");
+        return;  // 失败时不更新全局 MAC，避免指向未注册的 peer
     }
-    
+
     memcpy(WirelessConfig::CAMERA_MAC, newMac, 6);
+    Serial.println("[无线通信] 摄像头MAC更新成功");
 }
 
 #endif // WIRELESS_H

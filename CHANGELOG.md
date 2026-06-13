@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.4] - 2026-06-13
+
+### Fixed
+- **综合代码审计 v9** — 全面审查固件/后端/前端三部分，启用 karpathy-guidelines 深度排查，修复 36 项问题（1 P1 + 4 P2 + 2 Serious + 3 High + 26 P3/Low）
+- **P1: 摄像头 SERVO 转发修复** — `camera_module.ino` 移除损坏的 `sendToCar(*packet)` 调用，摄像头仅与接收器配对，CAR_MAC 不在 peer 表中导致 esp_now_send 静默失败
+- **P2: 航向锁定角度环绕归一化** — `pid_control.h` headingError 添加 [-PI, PI] 归一化，防止角度跨 0/2PI 边界时车辆旋转大圈
+- **P2: MAC 设置局部故障修复** — `wireless.h` setTargetCarMac/setTargetCameraMac 添加 same-MAC 跳过检查和 peer 添加失败时 early return，防止全局 MAC 指向未注册 peer
+- **P2: autoCalibrate 除零保护完善** — `odometer.h` 校正系数计算同时检查 leftSpeed/rightSpeed > 0.1f
+- **P2: 帧头 JPEG SOI 验证** — `serial.rs` read_frame_data 读取帧数据后验证 JPEG SOI (0xFF 0xD8)，不匹配则触发流对齐恢复，防止串口数据中的 0xAA 0x55 巧合造成帧头误检测
+- **Serious: 孤立轮询器逃逸修复** — `useStatus.ts` startPolling 中 await fetchStatus() 后检查 refCount，避免组件在 await 期间卸载导致 interval 定时器孤立运行
+- **Serious: 速度发送协议修正** — `ControlPanel.vue` setSpeed 改用 sendSpeed()（type:speed）替代 sendCommand()（type:command），与后端 speed 消息处理对齐
+- **High: 串口 WS 失败回滚** — `ControlPanel.vue` connect() 中 wsConnect 失败时自动调用 /api/disconnect 回滚串口连接
+- **High: 键盘焦点检查** — `useKeyboard.ts` handleKeyDown 检查 document.activeElement，忽略 INPUT/TEXTAREA 中的按键
+- **High: IME 组合检查** — `useKeyboard.ts` handleKeyDown 检查 event.isComposing，防止中文输入法误触发
+- **P3: 固件死代码/返回值检查** — `camera_config.h` updateCameraConfig 添加注释；`wireless.h` g_peerInfo 添加 init-only 注释；3 个 .ino 文件 esp_now_register_recv_cb 返回值检查
+- **P3: 固件代码质量** — `include` 路径规范化（尖括号改双引号）；`video_stream.h` const_cast 消除（直接写入 packet.data）；`servo_control.h` ServoConfig constexpr 去重
+- **P3: 后端优化** — `websocket.rs` 帧哈希改用 SipHash-2-4 DefaultHasher；chrono → std::time::SystemTime；无客户端时跳过视频处理
+- **P3: 后端优化** — `Cargo.toml` tower → dev-dependencies；`serial.rs` line_buf 64KB 硬上限 + std::mem::take 替代 clone；`main.rs` dotenvy 错误处理
+- **P3: 前端优化** — `package.json` 移除未使用的 pinia；`style.css` 移除死 .status-indicator 类；`SpeedDashboard.vue` 运行时间补充秒数显示；`ControlPanel.vue` 移除 slider 冗余 ARIA 属性
+- **文档更新** — 5 个 AGENTS.md 同步：AppState 位置修正（main.rs→lib.rs）、视频缓冲区 4096→32768、composables 列表补全、添加 /api/ports 端点
+- 验证: `cargo clippy` 0 warnings；`cargo test` 42 测试全过；`bun run build` 成功
+
 ## [Unreleased]
 
 ### Fixed

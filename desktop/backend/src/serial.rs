@@ -270,8 +270,8 @@ impl SerialManager {
                 Err(e) => return Err(anyhow::anyhow!("流对齐恢复时串口错误: {}", e)),
             }
         }
-        warn!("流对齐恢复超时");
-        Ok(())
+        warn!("流对齐恢复超时（2秒内未找到帧头）");
+        Err(anyhow::anyhow!("流对齐恢复超时"))
     }
 
     /// 读取视频帧（帧头已确认后读取帧大小和数据）
@@ -291,8 +291,16 @@ impl SerialManager {
         let mut frame_data = vec![0u8; frame_size];
         match port.read_exact(&mut frame_data) {
             Ok(()) => {
-                debug!("接收帧: {} 字节", frame_size);
-                Ok(SerialReadResult::VideoFrame(frame_data))
+                // 验证帧数据是否为有效 JPEG（以 0xFF 0xD8 SOI 标记开头）
+                // 防止串口数据中恰好出现 0xAA 0x55 字节序列导致的帧头误检测
+                if frame_size >= 2 && frame_data[0] == 0xFF && frame_data[1] == 0xD8 {
+                    debug!("接收帧: {} 字节", frame_size);
+                    Ok(SerialReadResult::VideoFrame(frame_data))
+                } else {
+                    warn!("帧数据不以 JPEG SOI 开头（疑似帧头误检测），触发流对齐恢复");
+                    Self::resync_stream(port)?;
+                    Ok(SerialReadResult::NoData)
+                }
             }
             Err(e) => {
                 warn!("读取帧数据失败: {}，进入流对齐恢复", e);
@@ -323,6 +331,12 @@ impl SerialManager {
                 Ok(_) => {
                     let b = byte[0];
 
+                    // 防止 line_buf 无限增长（虽已设5秒超时，加硬上限更安全）
+                    if line_buf.len() > 64 * 1024 {
+                        warn!("行缓冲区超过 64KB 上限，丢弃");
+                        line_buf.clear();
+                    }
+
                     if b == FRAME_HEADER[0] {
                         // 可能是帧头起始，尝试读取第二个字节
                         let mut second = [0u8; 1];
@@ -343,10 +357,10 @@ impl SerialManager {
                                     let result = Self::read_frame_data(port);
                                     return result;
                                 } else {
-                                    // 0xAA 后不是 0x55，只丢弃第一个 0xAA
-                                    // 将第二个字节重新检查（可能是下一个 0xAA）
+                                    // 0xAA 不是帧头（后跟非 0x55 字节），不作为帧头处理
+                                    // 将 0xAA 和第二个字节作为普通数据保留在行缓冲中
                                     // 关键修复：不丢弃第二个字节
-                                    line_buf.push(b); // 不作为帧头，作为普通数据保留在行缓冲中
+                                    line_buf.push(b); // 保留 0xAA
                                     // 重新处理第二个字节
                                     if second[0] == FRAME_HEADER[0] {
                                         // 第二个字节也是 0xAA，可能是帧头的开始
@@ -401,14 +415,12 @@ impl SerialManager {
                     } else if b == b'\n' {
                         // 行结束，尝试解析为测速JSON
                         if !line_buf.is_empty() {
-                            match String::from_utf8(line_buf.clone()) {
+                            match String::from_utf8(std::mem::take(&mut line_buf)) {
                                 Ok(line) => {
-                                    line_buf.clear();
                                     return Ok(SerialReadResult::OdometryLine(line));
                                 }
                                 Err(_) => {
-                                    // 非 UTF-8 数据，丢弃
-                                    line_buf.clear();
+                                    // line_buf 已被 std::mem::take 清空，无需再 clear
                                     continue;
                                 }
                             }

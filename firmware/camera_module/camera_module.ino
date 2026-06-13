@@ -34,11 +34,11 @@ void handleCameraCommand(const uint8_t* data, int len) {
     
     switch (packet->type) {
         case CommandType::SERVO:
-            // 云台命令转发到车载控制器（摄像头不直接控制舵机）
-            sendToCar(*packet);
+            // 云台命令由接收器转发到车载控制器
+            // 摄像头仅与接收器配对，sendToCar(CAR_MAC) 会因 CAR_MAC 不在 peer 表中而静默失败
             break;
         case CommandType::STATUS:
-            // 状态查询：回复当前视频流状态
+            // 状态查询：记录当前视频流状态到串口日志（ESP-NOW 状态回复尚未实现）
             {
                 const StreamState state = getStreamState();
                 Serial.printf("[状态] 流传输:%s, FPS:%d, 总帧:%lu\n",
@@ -87,7 +87,9 @@ void setup() {
         ESP.restart();
     }
     
-    esp_now_register_recv_cb(onCameraDataRecv);
+    if (esp_now_register_recv_cb(onCameraDataRecv) != ESP_OK) {
+        Serial.println("[无线通信] 注册接收回调失败");
+    }
     
     // 启动视频流
     startStreaming();

@@ -14,7 +14,10 @@ use esp_smart_car_backend::{api, serial, websocket, AppState};
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // 加载环境变量（必须在日志初始化之前，否则 .env 中的 RUST_LOG 不生效）
-    dotenvy::dotenv().ok();
+    if let Err(e) = dotenvy::dotenv() {
+        // .env 文件中可能不存在（开发环境），这并非致命错误
+        eprintln!("加载 .env 文件失败: {}（将使用默认配置）", e);
+    }
 
     // 初始化日志
     tracing_subscriber::fmt()

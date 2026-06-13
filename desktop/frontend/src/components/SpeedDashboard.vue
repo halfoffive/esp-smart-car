@@ -149,7 +149,7 @@ const displayRunTime = computed(() => {
   const s = runTimeSeconds.value
   if (s < 60) return `${s}`
   if (s < 3600) return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-  return `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}`
+  return `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
 })
 
 const runTimeUnit = computed(() => {

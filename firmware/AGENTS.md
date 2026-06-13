@@ -29,7 +29,7 @@ firmware/
 |------|----------|-------|
 | 修改电机控制 | `car_controller/motor_control.h` | 纯函数，差速控制 |
 | 修改舵机控制 | `car_controller/servo_control.h` | 平滑移动算法 |
-| 修改无线协议 | `car_controller/wireless.h` | 8字节数据包 + 测速包 |
+| 修改无线协议 | `libraries/wireless_protocol/src/wireless.h` | 8字节数据包 + 测速包 |
 | 修改测速模块 | `car_controller/odometer.h` | 编码器中断+速度计算 |
 | 修改PID控制 | `car_controller/pid_control.h` | 直线修正+航向锁定 |
 | 修改摄像头配置 | `camera_module/camera_config.h` | 分辨率/质量 |
@@ -87,5 +87,5 @@ firmware/
 - **ESP-NOW 信道**：固定 channel 1，所有设备必须一致
 - **MAC 地址**：在 `wireless.h` 中配置，需要与接收器匹配
 - **PWM 频率**：电机 1kHz，舵机 50Hz
-- **内存**：视频帧缓冲 4096 字节，注意不要溢出
+- **内存**：视频帧缓冲 32768 字节，注意不要溢出
 - **电源**：电机和逻辑电源必须隔离，共地

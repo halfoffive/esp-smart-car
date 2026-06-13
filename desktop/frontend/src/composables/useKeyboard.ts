@@ -63,6 +63,15 @@ export const useKeyboard = (sendCommand: (cmd: string) => void) => {
     // 忽略 OS 按键重复事件，防止命令风暴
     if (event.repeat) return;
 
+    // 忽略 IME 输入过程中的按键（如中文拼音输入等组合输入）
+    if (event.isComposing) return;
+
+    // 忽略输入框/文本域中的按键，防止在输入 MAC 地址等文本时误触发车辆控制
+    const activeEl = document.activeElement
+    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || (activeEl as HTMLElement).isContentEditable)) {
+      return
+    }
+
     // 阻止箭头键和空格的默认行为（防止页面滚动等）
     // 注意：event.key 对箭头键始终为首字母大写格式（如 'ArrowUp'），需在 toUpperCase 之前检查
     if (PREVENT_DEFAULT_KEYS.has(event.key)) {

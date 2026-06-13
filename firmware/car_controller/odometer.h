@@ -267,6 +267,11 @@ inline float updateHeading(float heading, float angularVelocity, float dtSec) {
  * 更新测速数据
  * 在主循环中定期调用（建议100ms周期）
  * 副作用：更新全局测速状态
+ *
+ * ISR 安全说明：本函数使用 noInterrupts()/interrupts() 保护 volatile 脉冲计数器的读取。
+ * ESP32 上 32-bit float 读写为硬件原子操作，因此 g_leftSpeedMmps/g_rightSpeedMmps/g_heading
+ * 的浮点更新无需额外同步。调用者（loop() 和 ESP-NOW 回调 onDataRecv）运行于不同 FreeRTOS
+ * 任务上下文，但由于浮点原子性和本函数仅在 loop() 中执行写入，风险可控。
  */
 inline void updateOdometer() {
     const uint32_t now = millis();
@@ -406,9 +411,9 @@ inline SpeedCalibration autoCalibrate() {
     const float rightSpeed = OdometerState::g_rightSpeedMmps;
     const float avgSpeed = (leftSpeed + rightSpeed) / 2.0f;
     
-    // 修正系数：使轮速趋向平均值
-    const float leftCorrection = (avgSpeed > 0.1f) ? avgSpeed / leftSpeed : 1.0f;
-    const float rightCorrection = (avgSpeed > 0.1f) ? avgSpeed / rightSpeed : 1.0f;
+    // 修正系数：使轮速趋向平均值（同时检查除数为零）
+    const float leftCorrection = (avgSpeed > 0.1f && leftSpeed > 0.1f) ? avgSpeed / leftSpeed : 1.0f;
+    const float rightCorrection = (avgSpeed > 0.1f && rightSpeed > 0.1f) ? avgSpeed / rightSpeed : 1.0f;
     
     // 修正系数上限约束，防止极端值导致 PID 振荡
     constexpr float MIN_CORRECTION = 0.5f;

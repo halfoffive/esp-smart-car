@@ -11,7 +11,7 @@
 
 #include <Arduino.h>
 #include "esp_camera.h"
-#include <../libraries/wireless_protocol/src/wireless.h>  // 复用无线通信协议（Arduino 库）
+#include "../libraries/wireless_protocol/src/wireless.h"  // 复用无线通信协议（Arduino 库）
 
 // ============================================
 // 纯数据类型定义
@@ -171,9 +171,10 @@ inline void sendVideoFrame(const FrameState& frame) {
         }
 
         // 校验和写入实际发送的最后一个字节位置
+        // packet 是栈上非 const 变量，data 为非 const 数组成员，直接写入无需 const_cast
         // packetLen<128 时写入 data[packetLen]（data 数组内偏移），
-        // packetLen=128 时写入 packet.checksum（结构体尾部字段）
-        const_cast<uint8_t*>(packetData)[10 + packetLen] = sum;
+        // packetLen=128 时写入 packet.checksum（结构体尾部字段，二者地址相同）
+        packet.data[packetLen] = sum;
 
         // 发送到接收器（指定 MAC 地址，避免广播给车载端造成误解析）
         sendRawPacket(WirelessConfig::RECEIVER_MAC,

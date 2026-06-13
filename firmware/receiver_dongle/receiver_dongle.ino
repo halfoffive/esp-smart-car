@@ -23,7 +23,7 @@
  * 版本：1.2.0
  */
 
-#include <../libraries/wireless_protocol/src/wireless.h>
+#include "../libraries/wireless_protocol/src/wireless.h"
 
 // ============================================
 // 常量定义
@@ -445,7 +445,9 @@ void setup() {
     }
     
     // 注册接收回调
-    esp_now_register_recv_cb(onReceiverDataRecv);
+    if (esp_now_register_recv_cb(onReceiverDataRecv) != ESP_OK) {
+        Serial.println("[无线通信] 注册接收回调失败");
+    }
     
     // 初始化视频缓冲区
     initVideoBuffer();

@@ -238,7 +238,7 @@ inline bool initializeCamera(const CameraConfiguration& config) {
 }
 
 /**
- * 纯函数：更新摄像头配置
+ * 更新摄像头配置（可在 loop() 中调用以运行时切换图像参数，当前未使用）
  */
 inline bool updateCameraConfig(const CameraConfiguration& config) {
     sensor_t* sensor = esp_camera_sensor_get();

@@ -81,6 +81,24 @@ namespace SG90Config {
 }
 
 // ============================================
+// 预设舵机配置（避免各函数重复在栈上构造）
+// ============================================
+namespace ServoDefaults {
+    constexpr ServoConfig HORIZONTAL = ServoConfig(
+        ServoPinConfig::HORIZONTAL_SERVO_PIN,
+        SG90Config::MIN_ANGLE, SG90Config::MAX_ANGLE,
+        SG90Config::MIN_PULSE, SG90Config::MAX_PULSE,
+        SG90Config::DEFAULT_ANGLE
+    );
+    constexpr ServoConfig VERTICAL = ServoConfig(
+        ServoPinConfig::VERTICAL_SERVO_PIN,
+        SG90Config::MIN_ANGLE, SG90Config::MAX_ANGLE,
+        SG90Config::MIN_PULSE, SG90Config::MAX_PULSE,
+        SG90Config::DEFAULT_ANGLE
+    );
+}
+
+// ============================================
 // 纯函数：舵机核心逻辑
 // ============================================
 
@@ -220,9 +238,9 @@ inline void initializeServoPins() {
     pinMode(ServoPinConfig::HORIZONTAL_SERVO_PIN, OUTPUT);
     pinMode(ServoPinConfig::VERTICAL_SERVO_PIN, OUTPUT);
     
-    // 初始化到默认位置
-    const ServoConfig hConfig = createDefaultServoConfig(ServoPinConfig::HORIZONTAL_SERVO_PIN);
-    const ServoConfig vConfig = createDefaultServoConfig(ServoPinConfig::VERTICAL_SERVO_PIN);
+    // 初始化到默认位置（使用预设 constexpr 配置，避免栈上重复构造）
+    const ServoConfig hConfig = ServoDefaults::HORIZONTAL;
+    const ServoConfig vConfig = ServoDefaults::VERTICAL;
     
     // 输出初始PWM信号
     const uint16_t hPulse = angleToPulse(SG90Config::DEFAULT_ANGLE, hConfig);
@@ -260,9 +278,9 @@ inline GimbalState updateGimbal(const GimbalState& current) {
     const ServoState nextH = calculateNextStep(current.horizontal);
     const ServoState nextV = calculateNextStep(current.vertical);
     
-    // 应用新状态
-    const ServoConfig hConfig = createDefaultServoConfig(ServoPinConfig::HORIZONTAL_SERVO_PIN);
-    const ServoConfig vConfig = createDefaultServoConfig(ServoPinConfig::VERTICAL_SERVO_PIN);
+    // 应用新状态（使用预设 constexpr 配置）
+    const ServoConfig hConfig = ServoDefaults::HORIZONTAL;
+    const ServoConfig vConfig = ServoDefaults::VERTICAL;
     
     applyServoState(nextH, hConfig);
     applyServoState(nextV, vConfig);
@@ -308,9 +326,9 @@ inline GimbalState parseGimbalCommand(const GimbalState& current, const char cmd
             break;
     }
     
-    // 限制角度范围
-    const ServoConfig hConfig = createDefaultServoConfig(ServoPinConfig::HORIZONTAL_SERVO_PIN);
-    const ServoConfig vConfig = createDefaultServoConfig(ServoPinConfig::VERTICAL_SERVO_PIN);
+    // 限制角度范围（使用预设 constexpr 配置）
+    const ServoConfig hConfig = ServoDefaults::HORIZONTAL;
+    const ServoConfig vConfig = ServoDefaults::VERTICAL;
     
     newHAngle = clampAngle(newHAngle, hConfig);
     newVAngle = clampAngle(newVAngle, vConfig);

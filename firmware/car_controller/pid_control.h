@@ -271,6 +271,11 @@ inline void initializePIDController() {
  * 更新直线修正PID
  * 在每个控制周期调用
  * 返回修正后的电机输出
+ *
+ * 调用上下文要求：本函数读取 OdometerState 中的浮点速度/航向变量，
+ * 这些变量由 loop() 中的 updateOdometer() 写入。ESP32 上 32-bit float
+ * 读写为硬件原子操作，但在 ESP-NOW 回调（ISR 上下文）中调用时需注意
+ * 可能读到 loop() 写入前的旧值。
  */
 inline SmartMotorOutput updateSmartControl(
     uint8_t basePwm,
@@ -324,7 +329,11 @@ inline SmartMotorOutput updateSmartControl(
             PIDControllerState::g_headingLockTargetInitialized = true;
         }
 
-        const float headingError = OdometerState::g_heading - PIDControllerState::g_headingLockTarget;
+        // 航向误差归一化到 [-PI, PI]，防止角度跨 0/2PI 边界时误差跳变
+        // 例如：当前航向 0.17rad(10°)，目标 6.11rad(350°)，最短路径是 +0.35rad 而非 -5.94rad
+        float headingError = OdometerState::g_heading - PIDControllerState::g_headingLockTarget;
+        if (headingError > M_PI) headingError -= 2.0f * M_PI;
+        if (headingError < -M_PI) headingError += 2.0f * M_PI;
         PIDControllerState::g_headingPidState = computePID(
             PIDDefaults::HEADING_PID,
             PIDControllerState::g_headingPidState,

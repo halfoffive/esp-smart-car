@@ -24,7 +24,9 @@ desktop/frontend/
     │   └── SpeedDashboard.vue # 测速仪表盘（4模块）
     └── composables/
         ├── useWebSocket.ts   # WebSocket + 测速数据
-        └── useKeyboard.ts   # 键盘控制
+        ├── useKeyboard.ts   # 键盘控制
+        ├── useApi.ts        # HTTP API 封装
+        └── useStatus.ts     # 状态轮询（共享数据源）
 ```
 
 ## Where to Look
@@ -51,12 +53,14 @@ desktop/frontend/
 | `SpeedDashboard` | Vue SFC | `SpeedDashboard.vue` | 测速仪表盘 |
 | `useWebSocket` | Composable | `useWebSocket.ts` | WebSocket+测速 |
 | `useKeyboard` | Composable | `useKeyboard.ts` | 键盘控制 |
+| `useApi` | Composable | `useApi.ts` | HTTP API 调用封装 |
+| `useStatus` | Composable | `useStatus.ts` | 状态轮询管理 |
 | `OdometryData` | Interface | `useWebSocket.ts` | 测速数据类型 |
 
 ## Conventions
 
 - **Composition API**：使用 `<script setup>` 和组合式函数
-- **Pinia**：状态管理（已配置）
+- **状态管理**：组合式函数（composables）单例模式，无需 Pinia
 - **TailwindCSS**：工具类优先，自定义主题
 - **类型安全**：TypeScript 严格模式，禁止 `any`
 - **响应式**：使用 `ref` 和 `computed`

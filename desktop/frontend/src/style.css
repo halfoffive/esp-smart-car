@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* 主题变量 - 从 tailwind.config.js 迁移 */
+/* 主题变量 - CSS-first Tailwind v4 配置 */
 @theme {
   /* 主色调 - 天蓝色系 */
   --color-primary-50: #f0f9ff;
@@ -77,10 +77,6 @@
   .panel-header {
     @apply text-sm font-semibold text-dark-100 pb-2
            border-b border-dark-700;
-  }
-
-  .status-indicator {
-    @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium;
   }
 
   .status-online {

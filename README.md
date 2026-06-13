@@ -246,6 +246,17 @@ cargo clippy       # 静态分析检查
 
 ## 版本历史
 
+- v1.7.4 - 2026-06-13
+  - 综合代码审计 v9：修复 36 项问题（1 P1 + 4 P2 + 2 Serious + 3 High + 26 P3/Low）
+  - P1: 摄像头 SERVO 转发修复（camera_module.ino — 移除损坏的 sendToCar）
+  - P2: 航向锁定角度环绕归一化、MAC 设置局部故障修复、autoCalibrate 除零保护、帧头 JPEG SOI 验证
+  - Serious: useStatus 孤立轮询器逃逸修复、速度发送改用 sendSpeed 协议
+  - High: 串口连接 WS 失败回滚、键盘焦点/IME 检查
+  - 固件 P3: 死代码清理、返回值检查、include 路径规范化、const_cast 消除、ServoConfig 去重
+  - 后端优化: 帧哈希改用 DefaultHasher、chrono→std::time、tower→dev-deps、line_buf 硬上限
+  - 前端优化: pinia 移除、死 CSS 清理、运行时间显示秒数、ARIA 属性去重
+  - 文档: 5 个 AGENTS.md 同步更新（AppState 位置、视频缓冲区大小、composables 列表等）
+
 - v1.7.3 - 2026-06-14
   - 综合代码审计 v8：修复 9 项问题（2 P2 + 7 P3）
   - P2: drive_mode 命令原子性修复（websocket.rs `send_bytes` 替代两次 `send_command`）

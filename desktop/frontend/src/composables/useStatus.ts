@@ -82,6 +82,11 @@ function createStatusPoller() {
     isPolling.value = true
     // 先同步获取一次状态，确保首次渲染有真实数据而非硬编码零值
     await fetchStatus()
+    // await 期间 refCount 可能已归零（组件已卸载），避免创建孤立轮询器
+    if (refCount === 0) {
+      isPolling.value = false
+      return
+    }
     interval = setInterval(fetchStatus, POLL_INTERVAL)
   }
 

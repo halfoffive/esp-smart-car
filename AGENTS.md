@@ -47,7 +47,7 @@ esp-smart-car/
 | `VideoStream` | namespace | `video_stream.h` | Frame transmission |
 | `SerialManager` | struct | `serial.rs` | USB serial communication |
 | `WebSocketManager` | struct | `websocket.rs` | Client connection management |
-| `AppState` | struct | `main.rs` | Shared application state |
+| `AppState` | struct | `lib.rs` | Shared application state |
 
 ## Conventions
 
@@ -132,7 +132,7 @@ Key connections:
 - **Ground common**: All devices must share common ground
 - **Baud rate**: 921600 for USB serial (high-speed video)
 - **ESP-NOW channel**: Fixed channel 1 for all devices
-- **Video buffer**: 4096 bytes for frame reassembly
+- **Video buffer**: 32768 bytes for frame reassembly
 - **Timeout protection**: 1-second auto-stop if no commands received
 - **Calibration**: Servo angles may need adjustment based on physical mounting
 - **Arduino library**: `wireless.h` is installed as an Arduino library in `firmware/libraries/wireless_protocol/` to avoid duplication across sketches

@@ -84,9 +84,6 @@
             :style="{ background: sliderBackground }"
             @input="handleSpeedInput"
             aria-label="速度控制滑块"
-            aria-valuemin="1"
-            aria-valuemax="9"
-            :aria-valuenow="Math.round(currentSpeed)"
           />
         </div>
         <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">9</span>
@@ -289,7 +286,7 @@ import { useKeyboard } from '../composables/useKeyboard'
 import { useApi } from '../composables/useApi'
 import { useStatus } from '../composables/useStatus'
 
-const { sendCommand: wsSendCommand, isConnected, sendDriveMode, availablePorts: wsAvailablePorts, sendMacConfig, connect: wsConnect, disconnect: wsDisconnect } = useWebSocket(true)
+const { sendCommand: wsSendCommand, sendSpeed, isConnected, sendDriveMode, availablePorts: wsAvailablePorts, sendMacConfig, connect: wsConnect, disconnect: wsDisconnect } = useWebSocket(true)
 const { post, get } = useApi()
 const { status } = useStatus()
 
@@ -394,8 +391,8 @@ const setSpeed = () => {
     addLog('WebSocket 未连接，无法设置速度', 'warning')
     return
   }
-  const speed = Math.round(currentSpeed.value).toString()
-  wsSendCommand(speed)
+  const speed = Math.round(currentSpeed.value)
+  sendSpeed(speed)
 }
 
 const connect = async () => {
@@ -419,6 +416,8 @@ const connect = async () => {
         await wsConnect()
       } catch (e) {
         addLog(`WebSocket 连接失败: ${e instanceof Error ? e.message : String(e)}`, 'warning')
+        // WebSocket 失败时回滚串口连接，避免串口打开但 WS 断开的不一致状态
+        await post('/api/disconnect').catch(() => {})
       }
     } else {
       addLog(`连接失败: ${result.message}`, 'error')

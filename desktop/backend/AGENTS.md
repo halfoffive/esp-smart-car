@@ -11,6 +11,7 @@ desktop/backend/
 ├── Cargo.toml             # 依赖配置
 ├── .env                   # 环境变量
 └── src/
+    ├── lib.rs           # 应用状态定义
     ├── main.rs            # 主程序（HTTP服务器 + WebSocket）
     ├── serial.rs          # 串口通信管理
     ├── websocket.rs       # WebSocket 处理
@@ -31,7 +32,7 @@ desktop/backend/
 
 | Symbol | Type | Location | Role |
 |--------|------|----------|------|
-| `AppState` | struct | `main.rs` | 全局共享状态 |
+| `AppState` | struct | `lib.rs` | 全局共享状态 |
 | `SerialManager` | struct | `serial.rs` | 串口连接管理 |
 | `WebSocketManager` | struct | `websocket.rs` | 客户端管理 |
 | `SerialConnectionState` | enum | `serial.rs` | 连接状态 |
@@ -53,6 +54,7 @@ desktop/backend/
 |--------|------|-------------|
 | GET | `/ws` | WebSocket 连接 |
 | POST | `/api/command` | 发送控制命令 |
+| GET | `/api/ports` | 获取可用串口列表 |
 | GET | `/api/status` | 获取系统状态 |
 | POST | `/api/connect` | 连接串口 |
 | POST | `/api/disconnect` | 断开串口 |
