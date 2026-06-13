@@ -176,49 +176,38 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
 
-            // 获取视频帧（使用 Arc::clone 共享引用，避免 clone 整帧数据）
-            let frame = {
-                let video = video_state.video_frame.lock().unwrap();
-                video.as_ref().map(Arc::clone)
+            // 获取视频帧（使用预编码 Base64 数据，避免每客户端重复编码）
+            let frame_b64: Option<Arc<String>> = {
+                let b64 = video_state.video_frame_b64.lock().unwrap();
+                b64.clone()
             };
 
-            if let Some(ref frame_data) = frame {
-                // 使用多点采样哈希（帧长度 + 前4字节 + 中4字节 + 末4字节）判断帧是否更新
-                // 避免仅用首字节（JPEG 固定 0xFF）导致同尺寸帧哈希碰撞
+            if let Some(ref b64_data) = frame_b64 {
+                // 使用多点采样哈希判断帧是否更新（基于 Base64 字符串长度和首尾采样）
                 let hash = {
-                    let len = frame_data.len() as u64;
-                    let first4 = frame_data
+                    let len = b64_data.len() as u64;
+                    let first4 = b64_data
                         .get(0..4)
-                        .map(|s| u32::from_be_bytes(s.try_into().unwrap_or([0; 4])) as u64)
+                        .map(|s| u32::from_be_bytes(s.as_bytes().try_into().unwrap_or([0; 4])) as u64)
                         .unwrap_or(0);
-                    let mid4 = {
-                        let mid = frame_data.len() / 2;
-                        frame_data
-                            .get(mid..mid + 4)
-                            .map(|s| u32::from_be_bytes(s.try_into().unwrap_or([0; 4])) as u64)
-                            .unwrap_or(0)
-                    };
-                    let last4 = if frame_data.len() >= 8 {
-                        frame_data
-                            .get(frame_data.len() - 4..)
-                            .map(|s| u32::from_be_bytes(s.try_into().unwrap_or([0; 4])) as u64)
+                    let last4 = if b64_data.len() >= 8 {
+                        b64_data
+                            .get(b64_data.len() - 4..)
+                            .map(|s| u32::from_be_bytes(s.as_bytes().try_into().unwrap_or([0; 4])) as u64)
                             .unwrap_or(0)
                     } else {
                         0u64
                     };
-                    len ^ (first4 << 32) ^ (mid4 << 16) ^ last4
+                    len ^ (first4 << 32) ^ last4
                 };
 
                 if last_frame_hash != Some(hash) {
                     last_frame_hash = Some(hash);
 
-                    // 编码为Base64
-                    let base64 = base64_encode(frame_data);
-
                     let message = serde_json::json!({
                         "type": "video",
                         "format": "jpeg",
-                        "data": base64,
+                        "data": b64_data.as_str(),
                         "timestamp": chrono::Utc::now().timestamp_millis()
                     });
 
@@ -359,6 +348,8 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             // 行走模式切换：发送 'T' 标识 + 模式值
             // 'T' 是 DRIVE_MODE 专属命令字节，与 MAC_CONFIG 的 'M' 不冲突
             if let Some(mode) = message["mode"].as_u64() {
+                // 未知模式回退到普通模式（0），防止固件收到无法识别的模式值
+                let mode_value = if mode <= 2 { mode as u8 } else { 0u8 };
                 {
                     let mut manager = state.serial_manager.lock().unwrap();
                     // 发送 DRIVE_MODE 标识字符 'T'
@@ -367,12 +358,12 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
                         return Err(anyhow::anyhow!("命令发送失败: {}", e));
                     }
                     // 发送模式数值（0=普通, 1=直线修正, 2=航向锁定）
-                    if let Err(e) = manager.send_command(mode as u8) {
+                    if let Err(e) = manager.send_command(mode_value) {
                         warn!("命令发送失败: {}", e);
                         return Err(anyhow::anyhow!("命令发送失败: {}", e));
                     }
                 }
-                info!("切换行走模式: {}", mode);
+                info!("切换行走模式: {} (发送值: {})", mode, mode_value);
             }
         }
         "mac_config" => {

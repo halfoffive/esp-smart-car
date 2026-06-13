@@ -246,7 +246,8 @@ inline void initializeServoPins() {
 inline void applyServoState(const ServoState& state, const ServoConfig& config) {
     const uint16_t pulse = angleToPulse(state.currentAngle, config);
     // 将微秒转换为duty cycle（16位分辨率）
-    const uint32_t duty = (pulse * 65535ULL) / 20000; // 20ms周期
+    // 使用 uint64_t 中间计算防止乘法溢出（pulse 最大 2400，2400*65535 = 157M，超出 uint32_t 范围）
+    const uint32_t duty = static_cast<uint32_t>((static_cast<uint64_t>(pulse) * 65535ULL) / 20000ULL);
     ledcWrite(config.pin, duty);
 }
 

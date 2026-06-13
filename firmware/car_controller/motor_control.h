@@ -355,19 +355,4 @@ inline VehicleMotion parseWASDCommand(const char cmd, const uint8_t speed) {
     }
 }
 
-/**
- * 纯函数：带速度调节的命令解析
- * 支持：WASD + 数字键1-9调节速度
- * 注：修改 currentSpeed 参数，但这是显式传递的可变引用
- */
-inline VehicleMotion parseCommandWithSpeed(const char cmd, uint8_t& currentSpeed) {
-    // 数字键1-9映射到速度等级
-    if (cmd >= '1' && cmd <= '9') {
-        currentSpeed = map(cmd - '0', 1, 9, 28, 255);  // 映射到28-255
-        return createStopState();  // 仅调节速度，不改变运动状态
-    }
-    
-    return parseWASDCommand(cmd, currentSpeed);
-}
-
 #endif // MOTOR_CONTROL_H

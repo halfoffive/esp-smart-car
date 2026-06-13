@@ -8,10 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **DRIVE_MODE 与 MAC_CONFIG 命令字节冲突** — 行走模式切换命令从 'M'/'L'/'B' 改为专属字节 'T'，消除与 MAC_CONFIG 的 'M' 冲突。协议：先发 'T' 标识，再发模式值（0/1/2）
-- **receiver_dongle.ino 缺少 DRIVE_MODE 转发** — `parseSerialCommand`/`getCommandType` 新增 'T' 识别，`forwardToCar` 新增 DRIVE_MODE 分支读取1字节模式值并构建 WirelessPacket 发送
-- **car_controller.ino DRIVE_MODE 超时未更新** — 无线命令处理中 DRIVE_MODE case 添加 `g_lastCmdTime = millis()`，防止行走模式切换后1秒超时自动停止
-- **serial.rs 双重可变借用编译错误** — `read_frame_data` 移除 `&mut self` 和 `frame_count` 参数，改为独立函数；帧计数在调用方更新，消除 `self.port` 与 `self.frame_count` 同时可变借用冲突
+- **P0: ESP-NOW 网络拓扑修复** — `wireless.h` Receiver 角色初始化时同时添加 Car 和 Camera 两个 Peer，修复云台控制转发静默失败
+- **P0: DRIVE_MODE 协议重构** — 行走模式切换命令从 'M'/'L'/'B' 改为专属字节 'T'，消除与 MAC_CONFIG 的 'M' 冲突。协议：先发 'T' 标识，再发模式值（0/1/2）；`receiver_dongle.ino` 实现 DRIVE_MODE 转发逻辑
+- **P0: 串口数据流解析器重构** — `serial.rs` 引入 BufReader + 统一缓冲状态机，修复帧头重叠遗漏（0xAA 0xAA 0x55）和视频/测速数据互斥吞没问题
+- **P0: 串口连接自动触发 WebSocket** — `ControlPanel.vue` 串口连接成功后自动触发 WebSocket 连接，补齐实时数据推送入口
+- **P0: 视频缓冲区扩大** — `receiver_dongle.ino` 视频缓冲区从 4KB 扩大到 32KB，匹配后端帧大小上限
+- **P0: 紧急停止显式解除** — `car_controller.ino` 紧急停止改为仅运动命令显式解除，移除 500ms 自动恢复安全隐患
+- **P1: 航向角归一化** — `odometer.h` 航向角 fmod 归一化到 [0, 2π)，防止 int16_t 溢出
+- **P1: MAC 配对表更新** — `wireless.h` setTargetCarMac/setTargetCameraMac 添加 esp_now_mod_peer 调用更新配对表
+- **P1: HEADING_LOCK 航向锁定实现** — `pid_control.h` 实现 HEADING_LOCK 模式（航向 PID 控制）
+- **P1: SERVO 分支命令统一** — `receiver_dongle.ino` SERVO 分支移除 'L'/'R' 历史兼容命令，统一为 H/K/U/J/C
+- **P1: CameraConfiguration const 移除** — `camera_config.h` CameraConfiguration 移除 const 成员修饰，允许运行时切换配置
+- **P1: dotenv 时序修复** — `main.rs` dotenvy::dotenv() 移至 tracing_subscriber 之前，修复 RUST_LOG 配置失效
+- **P1: 命令发送失败感知** — `websocket.rs` handle_message 命令发送失败返回错误响应，前端可感知
+- **P1: 串口任务自动重启** — `main.rs` 串口任务退出后自动重启（3秒延迟），防止"假死"
+- **P1: MAC 配置帧边界** — `websocket.rs` + `receiver_dongle.ino` MAC 配置增加帧边界标识（0xFF + 长度字节），防止数据注入
+- **P1: build.rs 锁文件检测** — `build.rs` 锁文件检测优先级改为 bun.lockb → bun.lock → .package-lock.json
+- **P1: 速度初始值同步** — `useStatus.ts` 速度初始值从后端 /api/status 同步，消除硬编码
+- **P1: setSpeed 连接检查** — `ControlPanel.vue` setSpeed 添加 isConnected 检查
+- **P1: headers 深度合并** — `useApi.ts` headers 深度合并，保留默认 Content-Type
+- **P1: 运行时长基于后端** — `SpeedDashboard.vue` 运行时长改为基于后端 uptime 字段
+- **P1: heartbeatTimer 清理** — `useWebSocket.ts` connect() 关闭旧连接前先清理 heartbeatTimer
+- **P2: Base64 共享编码** — `websocket.rs` + `serial.rs` + `lib.rs` Base64 编码移至串口任务，广播 Arc<String> 避免每客户端重复编码
+- **P2: /api/ports 缓存** — `api.rs` /api/ports 使用 AppState 缓存
+- **P2: 增量平均速度** — `SpeedDashboard.vue` 平均速度改用 runningSum 增量计算
+- **P2: 校准系数约束** — `odometer.h` autoCalibrate 修正系数约束在 0.5~2.0
+- **P2: 移除 Pinia 依赖** — `main.ts` 移除未使用的 Pinia 依赖
+- **P2: 移除死代码** — `motor_control.h` 移除未使用的 parseCommandWithSpeed 函数
+- **P2: 心跳不触发额外测速** — `receiver_dongle.ino` 心跳不触发额外 sendOdometryData（已确认无需修改）
+- **P2: BufReader 减少系统调用** — `serial.rs` BufReader 包装串口端口减少系统调用
+- **P3: appearance 修复** — `style.css` 移除与 accent-color 矛盾的 appearance: none
+- **P3: 箭头键修复** — `useKeyboard.ts` 箭头键 preventDefault 大小写修复
+- **P3: drive_mode 回退** — `websocket.rs` drive_mode 未知模式回退到普通模式
+- **P3: duty 溢出修复** — `servo_control.h` duty 计算使用 uint64_t 中间值防溢出
+- **P3: volatile 清理** — `odometer.h` g_lastLeftPulses/g_lastRightPulses 移除 volatile 误标
 
 ### Added
 - **后端自动串口扫描** — `serial.rs` 新增 `run_port_scan_task` 后台任务，每秒扫描可用串口，列表变化时更新状态

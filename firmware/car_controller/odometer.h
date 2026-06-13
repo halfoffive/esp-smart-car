@@ -122,8 +122,8 @@ namespace OdometerState {
     // 脉冲计数（volatile 用于中断安全）
     volatile uint32_t g_leftPulses = 0;
     volatile uint32_t g_rightPulses = 0;
-    volatile uint32_t g_lastLeftPulses = 0;   // volatile：主循环和中断上下文均访问
-    volatile uint32_t g_lastRightPulses = 0;  // volatile：主循环和中断上下文均访问
+    uint32_t g_lastLeftPulses = 0;    // 非 ISR 变量，仅主循环访问
+    uint32_t g_lastRightPulses = 0;   // 非 ISR 变量，仅主循环访问
     
     // 累计距离
     float g_leftDistanceMm = 0.0f;
@@ -410,10 +410,20 @@ inline SpeedCalibration autoCalibrate() {
     const float leftCorrection = (avgSpeed > 0.1f) ? avgSpeed / leftSpeed : 1.0f;
     const float rightCorrection = (avgSpeed > 0.1f) ? avgSpeed / rightSpeed : 1.0f;
     
-    Serial.printf("[测速模块] 自动校准结果: 左=%.3f, 右=%.3f\n",
-                  leftCorrection, rightCorrection);
+    // 修正系数上限约束，防止极端值导致 PID 振荡
+    constexpr float MIN_CORRECTION = 0.5f;
+    constexpr float MAX_CORRECTION = 2.0f;
+    const float clampedLeft = (leftCorrection < MIN_CORRECTION) ? MIN_CORRECTION 
+                            : (leftCorrection > MAX_CORRECTION) ? MAX_CORRECTION 
+                            : leftCorrection;
+    const float clampedRight = (rightCorrection < MIN_CORRECTION) ? MIN_CORRECTION 
+                             : (rightCorrection > MAX_CORRECTION) ? MAX_CORRECTION 
+                             : rightCorrection;
     
-    return SpeedCalibration(leftCorrection, rightCorrection);
+    Serial.printf("[测速模块] 自动校准结果: 左=%.3f, 右=%.3f\n",
+                  clampedLeft, clampedRight);
+    
+    return SpeedCalibration(clampedLeft, clampedRight);
 }
 
 #endif // ODOMETER_H

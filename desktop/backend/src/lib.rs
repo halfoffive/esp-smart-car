@@ -20,6 +20,8 @@ pub struct AppState {
     /// 视频帧数据（使用 std::sync::Mutex，不跨 .await 持锁）
     /// 内层 Arc 共享引用，避免 clone 整帧数据
     pub video_frame: Arc<std::sync::Mutex<Option<Arc<Vec<u8>>>>>,
+    /// 视频帧 Base64 编码数据（共享引用，避免每客户端重复编码）
+    pub video_frame_b64: Arc<std::sync::Mutex<Option<Arc<String>>>>,
 
     /// 当前速度（使用 AtomicU8，单字节无锁原子操作）
     pub current_speed: AtomicU8,
@@ -48,6 +50,7 @@ impl AppState {
             serial_manager: Arc::new(std::sync::Mutex::new(serial::SerialManager::new())),
             ws_manager: Arc::new(std::sync::Mutex::new(websocket::WebSocketManager::new())),
             video_frame: Arc::new(std::sync::Mutex::new(None)),
+            video_frame_b64: Arc::new(std::sync::Mutex::new(None)),
 
             current_speed: AtomicU8::new(5),
             odometry: Arc::new(tokio::sync::Mutex::new(OdometryData::default())),

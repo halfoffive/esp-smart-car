@@ -139,6 +139,48 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-13 - 综合代码审计修复 v5（68项修复）
+- **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 三部分全面审查，修复 6 项 P0 严重缺陷、15 项 P1 高优先级问题、8 项 P2 中优先级问题、5 项 P3 低优先级问题
+- **P0 严重修复（6项）**:
+  - `wireless.h` — Receiver 角色初始化时同时添加 Car 和 Camera 两个 ESP-NOW Peer，修复云台控制转发静默失败
+  - `websocket.rs` + `receiver_dongle.ino` + `car_controller.ino` — 行走模式协议重构：DRIVE_MODE 分配专属命令字节 'T'，消除与 MAC_CONFIG 的 'M' 冲突；接收器实现 DRIVE_MODE 转发逻辑
+  - `serial.rs` — 串口数据流解析器重构：引入 BufReader + 统一缓冲状态机，修复帧头重叠遗漏（0xAA 0xAA 0x55）和视频/测速数据互斥吞没问题
+  - `ControlPanel.vue` — 串口连接成功后自动触发 WebSocket 连接，补齐实时数据推送入口
+  - `receiver_dongle.ino` — 视频缓冲区从 4KB 扩大到 32KB，匹配后端帧大小上限
+  - `car_controller.ino` — 紧急停止改为仅运动命令显式解除，移除 500ms 自动恢复安全隐患
+- **P1 高优先级修复（15项）**:
+  - `odometer.h` — 航向角 fmod 归一化到 [0, 2π)，防止 int16_t 溢出
+  - `wireless.h` — setTargetCarMac/setTargetCameraMac 添加 esp_now_mod_peer 调用更新配对表
+  - `pid_control.h` — 实现 HEADING_LOCK 航向锁定模式（航向 PID 控制）
+  - `receiver_dongle.ino` — SERVO 分支移除 'L'/'R' 历史兼容命令，统一为 H/K/U/J/C
+  - `camera_config.h` — CameraConfiguration 移除 const 成员修饰，允许运行时切换配置
+  - `main.rs` — dotenvy::dotenv() 移至 tracing_subscriber 之前，修复 RUST_LOG 配置失效
+  - `websocket.rs` — handle_message 命令发送失败返回错误响应，前端可感知
+  - `main.rs` — 串口任务退出后自动重启（3秒延迟），防止"假死"
+  - `websocket.rs` + `receiver_dongle.ino` — MAC 配置增加帧边界标识（0xFF + 长度字节），防止数据注入
+  - `build.rs` — 锁文件检测优先级改为 bun.lockb → bun.lock → .package-lock.json
+  - `useStatus.ts` — 速度初始值从后端 /api/status 同步，消除硬编码
+  - `ControlPanel.vue` — setSpeed 添加 isConnected 检查
+  - `useApi.ts` — headers 深度合并，保留默认 Content-Type
+  - `SpeedDashboard.vue` — 运行时长改为基于后端 uptime 字段
+  - `useWebSocket.ts` — connect() 关闭旧连接前先清理 heartbeatTimer
+- **P2 中优先级修复（8项）**:
+  - `websocket.rs` + `serial.rs` + `lib.rs` — Base64 编码移至串口任务，广播 Arc<String> 避免每客户端重复编码
+  - `api.rs` — /api/ports 使用 AppState 缓存
+  - `SpeedDashboard.vue` — 平均速度改用 runningSum 增量计算
+  - `odometer.h` — autoCalibrate 修正系数约束在 0.5~2.0
+  - `main.ts` — 移除未使用的 Pinia 依赖
+  - `motor_control.h` — 移除未使用的 parseCommandWithSpeed 函数
+  - `receiver_dongle.ino` — 心跳不触发额外 sendOdometryData（已确认无需修改）
+  - `serial.rs` — BufReader 包装串口端口减少系统调用
+- **P3 低优先级修复（5项）**:
+  - `style.css` — 移除与 accent-color 矛盾的 appearance: none
+  - `useKeyboard.ts` — 箭头键 preventDefault 大小写修复
+  - `websocket.rs` — drive_mode 未知模式回退到普通模式
+  - `servo_control.h` — duty 计算使用 uint64_t 中间值防溢出
+  - `odometer.h` — g_lastLeftPulses/g_lastRightPulses 移除 volatile 误标
+- **验证**: `bun run build` 成功；`cargo clippy`/`cargo test` 因 Rust 1.96.0 编译器 ICE（已知 bug）暂无法运行
+
 ### 2026-06-13 - DRIVE_MODE 协议重构：消除 'M' 命令字节冲突
 - **范围**: 后端 Rust + 嵌入式固件，修复 DRIVE_MODE 与 MAC_CONFIG 共用 'M' 命令字节的冲突
 - **修复**:

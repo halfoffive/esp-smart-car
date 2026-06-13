@@ -57,16 +57,17 @@ export const useKeyboard = (sendCommand: (cmd: string) => void) => {
     // 忽略 OS 按键重复事件，防止命令风暴
     if (event.repeat) return;
 
+    // 阻止箭头键和空格的默认行为（防止页面滚动等）
+    // 注意：event.key 对箭头键始终为首字母大写格式（如 'ArrowUp'），需在 toUpperCase 之前检查
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(event.key)) {
+      event.preventDefault()
+    }
+
     const key = event.key.toUpperCase()
 
     // 检查是否为有效的控制键
     if (!VALID_KEYS.has(key)) {
       return
-    }
-
-    // 阻止默认行为（防止页面滚动等）
-    if ([' ', 'ARROWUP', 'ARROWDOWN', 'ARROWLEFT', 'ARROWRIGHT'].includes(key)) {
-      event.preventDefault()
     }
 
     // 添加到激活集合（替换整个 Set 以触发 Vue 响应式）

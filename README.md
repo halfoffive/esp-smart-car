@@ -246,6 +246,20 @@ cargo clippy       # 静态分析检查
 
 ## 版本历史
 
+- v1.7.0 - 2026-06-13
+  - 综合代码审计 v5：修复 68 项问题（6 P0 + 15 P1 + 8 P2 + 5 P3）
+  - P0: ESP-NOW 网络拓扑修复（Receiver 同时添加 Car 和 Camera Peer）
+  - P0: DRIVE_MODE 协议重构（专属命令字节 'T'，消除与 MAC_CONFIG 的 'M' 冲突）
+  - P0: 串口数据流解析器重构（BufReader + 统一缓冲状态机，修复帧头重叠和数据互斥吞没）
+  - P0: 串口连接自动触发 WebSocket 连接
+  - P0: 视频缓冲区从 4KB 扩大到 32KB
+  - P0: 紧急停止改为仅运动命令显式解除
+  - P1: HEADING_LOCK 航向锁定模式实现（航向 PID 控制）
+  - P1: MAC 配对表运行时更新、MAC 配置帧边界防护
+  - P1: 串口任务退出后自动重启、dotenv 时序修复、命令失败感知
+  - P2: Base64 共享编码、/api/ports 缓存、增量平均速度、移除 Pinia 死代码
+  - P3: appearance 修复、箭头键修复、duty 溢出修复、volatile 清理
+
 - v1.6.0 - 2026-06-12
   - 自动串口扫描：后端每秒扫描可用串口，变化时通过 WebSocket 主动推送给前端
   - MAC 地址动态配置：前端可输入车载 ESP32-C6 的 MAC 地址，通过 WebSocket 下发到接收器，支持 `localStorage` 持久化

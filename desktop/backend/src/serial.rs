@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use base64::Engine;
 use serialport::{SerialPort, SerialPortType};
 use tracing::{debug, error, info, warn};
 
@@ -425,10 +426,19 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
 
             match result {
                 Ok(SerialTaskResult::VideoFrame(buffer)) => {
+                    // Base64 编码视频帧，存储共享引用避免每客户端重复编码
+                    let b64_data = base64::engine::general_purpose::STANDARD.encode(&buffer);
+                    let b64_arc = Arc::new(b64_data);
+
                     // 使用 Arc::clone 共享视频帧引用，避免 clone 整帧数据
                     {
                         let mut video = state.video_frame.lock().unwrap();
                         *video = Some(Arc::new(buffer));
+                    }
+                    // 存储 Base64 编码结果，供 WebSocket 客户端共享读取
+                    {
+                        let mut b64 = state.video_frame_b64.lock().unwrap();
+                        *b64 = Some(b64_arc);
                     }
                 }
                 Ok(SerialTaskResult::OdometryLine(line)) => {

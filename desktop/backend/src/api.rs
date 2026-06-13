@@ -81,17 +81,12 @@ pub struct ApiResponse {
     pub message: String,
 }
 
-/// 列出可用串口
-pub async fn list_ports() -> (StatusCode, Json<serde_json::Value>) {
-    let ports = tokio::task::spawn_blocking(|| {
-        serialport::available_ports()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|p| p.port_name)
-            .collect::<Vec<_>>()
-    })
-    .await
-    .unwrap_or_default();
+/// 列出可用串口（使用 AppState 缓存的串口列表，避免每次请求都执行 spawn_blocking）
+pub async fn list_ports(
+    State(state): State<Arc<AppState>>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    // 使用 AppState 缓存的串口列表，避免每次请求都执行 spawn_blocking
+    let ports = state.available_ports.lock().await.clone();
 
     (
         StatusCode::OK,

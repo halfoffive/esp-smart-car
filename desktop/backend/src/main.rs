@@ -94,5 +94,7 @@ mod tests {
         assert_eq!(current_speed, 5);
         let video_frame = state.video_frame.lock().unwrap();
         assert!(video_frame.is_none());
+        let video_frame_b64 = state.video_frame_b64.lock().unwrap();
+        assert!(video_frame_b64.is_none());
     }
 }
