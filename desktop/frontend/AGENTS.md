@@ -35,7 +35,7 @@ desktop/frontend/
 |------|----------|-------|
 | 修改 UI 布局 | `src/App.vue` | 全屏自适应布局 |
 | 修改视频显示 | `src/components/VideoPlayer.vue` | 实时视频 |
-| 修改控制面板 | `src/components/ControlPanel.vue` | WASD + 云台 + 直线修正开关 |
+| 修改控制面板 | `src/components/ControlPanel.vue` | WASD + 速度调节 + 三态行走模式 + BLE 扫描 |
 | 修改状态栏 | `src/components/StatusBar.vue` | 连接状态 |
 | 修改测速显示 | `src/components/SpeedDashboard.vue` | 4模块：当前/最高/平均速度+运行信息 |
 | 修改 WebSocket | `src/composables/useWebSocket.ts` | 连接管理+测速数据解析 |
@@ -60,7 +60,7 @@ desktop/frontend/
 ## Conventions
 
 - **Composition API**：使用 `<script setup>` 和组合式函数
-- **状态管理**：组合式函数（composables）单例模式，无需 Pinia
+- **状态管理**：组合式函数（composables）单例模式，无需 Pinia 等外部状态库
 - **TailwindCSS**：工具类优先，自定义主题
 - **类型安全**：TypeScript 严格模式，禁止 `any`
 - **响应式**：使用 `ref` 和 `computed`
@@ -77,8 +77,8 @@ desktop/frontend/
 ### ControlPanel
 - **Props**: 无
 - **Emits**: `command`, `speed`
-- **State**: `activeKeys`, `currentSpeed`, `logs`, `smartDriveOn`
-- **Features**: WASD 控制、速度调节、云台控制、直线修正开关、系统日志
+- **State**: `activeKeys`, `currentSpeed`, `logs`, `driveMode`
+- **Features**: WASD 控制、速度调节、三态行走模式（普通/直线/锁定）、BLE 扫描、系统日志
 
 ### SpeedDashboard
 - **Props**: 无（从 useWebSocket 获取测速数据）
@@ -95,7 +95,7 @@ desktop/frontend/
 - **禁止使用 `any` 或 `@ts-ignore`**：类型安全是强制性的
 - **禁止空 catch 块**：错误必须被处理或报告
 - **禁止删除失败的测试**：修复代码，而不是测试
-- **禁止全局可变状态**：使用 Pinia 或组合式函数
+- **禁止全局可变状态**：使用组合式函数单例模式管理状态
 - **禁止全屏滚动**：UI 必须适应 100vh，无需滚动
 
 ## Commands
@@ -119,7 +119,7 @@ bun run preview      # 预览生产构建
 - **代理**：Vite 配置代理 `/api` 和 `/ws` 到后端（端口 8080）
 - **视频帧**：WebSocket 接收 Base64 JPEG，显示为 `data:image/jpeg;base64,...`
 - **测速数据**：WebSocket 接收 `odometry` 类型消息，包含左右轮速度、航向、距离
-- **键盘**：支持 WASD + 空格 + Q/E + U/J/H/K/C + 1-9
+- **键盘**：支持 WASD + 空格 + Q/E + 1-9
 - **智能修正**：通过 WebSocket 发送 `drive_mode` 命令切换
 - **响应式**：全屏100vh布局，右侧面板含控制+测速模块
 - **主题**：深色模式，使用 `dark-` 颜色系列

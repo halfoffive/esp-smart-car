@@ -38,6 +38,7 @@ desktop/backend/
 | `SerialManager` | struct | `serial.rs` | 串口连接管理 |
 | `WebSocketManager` | struct | `websocket.rs` | 客户端管理 |
 | `SerialConnectionState` | enum | `serial.rs` | 连接状态 |
+| `BleDevice` | struct | `lib.rs` | BLE 设备信息 |
 | `CommandRequest` | struct | `api.rs` | API 请求体 |
 | `StatusResponse` | struct | `api.rs` | API 响应体 |
 
@@ -60,11 +61,12 @@ desktop/backend/
 | GET | `/api/status` | 获取系统状态 |
 | POST | `/api/connect` | 连接串口 |
 | POST | `/api/disconnect` | 断开串口 |
+| GET | `/api/ble-devices` | 获取 BLE 设备列表 |
 
 ## Anti-Patterns
 
 - **禁止使用 `unwrap`**：所有错误必须显式处理
-- **禁止阻塞操作**：所有 I/O 必须异步
+- **阻塞 I/O 隔离**：串口等阻塞 I/O 通过 `tokio::task::spawn_blocking` 隔离，避免阻塞 async 运行时
 - **禁止全局状态**：使用 `AppState` 传递共享状态
 - **禁止裸指针**：使用安全 Rust 抽象
 

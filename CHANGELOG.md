@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 硬件变更
 - **移除舵机**：砍掉 SG90 水平/垂直舵机，简化硬件
-- **软串口连接**：ESP32-S3 摄像头与 ESP32-C6 车载控制器改为软串口直连（GPIO 14/15），替代 ESP-NOW 无线通信
+- **HardwareSerial 直连**：ESP32-S3 摄像头与 ESP32-C6 车载控制器改为 HardwareSerial (Serial1) 直连（GPIO 14/15），替代 ESP-NOW 无线通信
 - **BLE 扫描**：接收器新增 BLE 扫描功能，电脑端可发现周围蓝牙设备
 
 ### 固件
-- car_controller: 移除舵机代码，新增软串口视频帧接收/转发
+- car_controller: 移除舵机代码，新增 HardwareSerial 视频帧接收/转发
 - camera_module: 移除 ESP-NOW，改为 Serial1 发送视频帧
 - receiver_dongle: 新增 BLE 扫描功能
 - wireless.h: 移除 SERVO/CAMERA 相关类型和函数
@@ -55,18 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **文档更新** — 5 个 AGENTS.md 同步：AppState 位置修正（main.rs→lib.rs）、视频缓冲区 4096→32768、composables 列表补全、添加 /api/ports 端点
 - 验证: `cargo clippy` 0 warnings；`cargo test` 42 测试全过；`bun run build` 成功
 
-## [Unreleased]
-
-### Fixed
-- **P1: camera_module.ino Serial1.begin 参数错误** — ESP32 Arduino core 没有 `(baud, config)` 的 2 参数重载，`SERIAL_8N1` 被误作 `rxPin` 导致串口初始化失败。改为 `Serial1.begin(921600)` 使用默认引脚
-- **P2: receiver_dongle.ino BLEDevice::init 重复调用** — `performBleScan()` 每次调用都执行 `BLEDevice::init("")`，可能导致资源泄漏。改为在 `setup()` 中初始化一次，扫描时只做扫描
-- **P2: car_controller.ino 视频帧接收/转发竞态** — `receiveCameraFrame()` 和 `forwardCameraFrame()` 共享缓冲区，发送期间可能接收新帧覆盖数据。将状态机变量从局部 static 提升为全局 static，并在 `receiveCameraFrame()` 开头添加 `g_cameraFrameReady` 检查，帧就绪时暂停接收
-
 ## [1.8.1] - 2026-06-13
 
 ### Added
 - **前端资源嵌入二进制** — `main.rs` 使用 `rust-embed` 将 `frontend/dist/` 编译进 Rust 可执行文件，`Cargo.toml` 新增 `rust-embed` + `mime_guess` 依赖，移除 `tower-http`（仅用于 `ServeDir`）。exe 可在任意位置运行，无需前端 `dist` 目录伴随
 - **SPA fallback 保留** — 所有未匹配路由返回 `index.html`，支持 Vue 客户端路由
+
+### Fixed
+- **P1: camera_module.ino Serial1.begin 参数错误** — ESP32 Arduino core 没有 `(baud, config)` 的 2 参数重载，`SERIAL_8N1` 被误作 `rxPin` 导致串口初始化失败。改为 `Serial1.begin(921600)` 使用默认引脚
+- **P2: receiver_dongle.ino BLEDevice::init 重复调用** — `performBleScan()` 每次调用都执行 `BLEDevice::init("")`，可能导致资源泄漏。改为在 `setup()` 中初始化一次，扫描时只做扫描
+- **P2: car_controller.ino 视频帧接收/转发竞态** — `receiveCameraFrame()` 和 `forwardCameraFrame()` 共享缓冲区，发送期间可能接收新帧覆盖数据。将状态机变量从局部 static 提升为全局 static，并在 `receiveCameraFrame()` 开头添加 `g_cameraFrameReady` 检查，帧就绪时暂停接收
 
 ### Fixed
 - **P2: DRIVE_MODE 命令原子性修复** — `websocket.rs` drive_mode 从两次独立 `send_command` 改为 `send_bytes(&[b'T', mode_value])` 原子发送，防止中间插入其他命令导致接收器 50ms 超时丢弃
@@ -82,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **P0: 视频包校验和传输修复** — `video_stream.h` 校验和写入位置从 `packet.checksum`（偏移138）改为实际发送末字节，`sendSize` 增加校验和 1 字节；`receiver_dongle.ino` 读取改为 `data[len-1]`，修复非满载包校验和从未传输 & 越界读取 UB，视频帧最后一个分包不再丢失
 - **P1: videoFps 死状态修复** — `useWebSocket.ts` videoFps 添加实际每秒帧率统计更新逻辑，StatusBar FPS 指示器恢复正常
-- **P1: 主循环延迟优化** — `car_controller.ino` loop() 中 delay(10) → delay(1)，舵机更新粒度提升10倍，命令响应延迟降低
+- **P1: 主循环延迟优化** — `car_controller.ino` loop() 中 delay(10) → delay(1)，命令响应延迟降低
 - **P2: speed 死代码消除** — `websocket.rs` speed 消息类型现在也通过串口发送速度等级字符，sendSpeed() API 已可用
 - **P2: 注释修正** — `car_controller.ino` + `receiver_dongle.ino` setup() 云台按键注释从 U/D/L/R/C 修正为 U/J/H/K/C
 - **P2: 静态初始值修正** — `pid_control.h` g_driveMode 静态初始值从 STRAIGHT_LINE 改为 NORMAL，与运行时一致
@@ -394,26 +392,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 自动超时保护（1秒无命令自动停止）
   - 紧急停止功能
   
-- **舵机云台控制系统** - SG90 双舵机控制（`servo_control.h`）
-  - 水平舵机控制（左右旋转）
-  - 垂直舵机控制（上下旋转）
-  - 平滑移动算法（逐步逼近目标角度）
-  - 角度安全限制（0-180度）
-  - 云台居中功能
-  - 云台控制命令解析（U/D/L/R/C）
-  
 - **ESP-NOW 无线通信协议**（`wireless.h`）
   - 自定义二进制通信协议
-  - 数据包格式：魔术字 + 版本 + 类型 + 数据 + 速度 + 序列号 + 校验和
-  - 支持命令类型：MOVE / SERVO / SPEED / STOP / STATUS
-  - 设备角色定义：CAR / RECEIVER / CAMERA
+  - 数据包格式：魔术字 + 版本 + 类型 + 数据 + 速度 + 序列号 + 校验和（12字节）
+  - 支持命令类型：MOVE / SPEED / STOP / STATUS / ODOMETRY / DRIVE_MODE / MAC_CONFIG
+  - 设备角色定义：CAR / RECEIVER
   - 自动重连机制
-  
+
 - **ESP32-S3 CAM 视频传输系统**（`camera_module.ino`）
   - OV2640 摄像头初始化与配置
   - 多分辨率支持（QQVGA 到 UXGA）
   - 动态 JPEG 质量调整
-  - 视频帧分包传输（每包128字节）
+  - 通过 Serial1 直接发送完整视频帧到车载控制器
   - 帧率控制（目标 30 FPS）
   - 帧统计与丢帧检测
   
@@ -443,7 +433,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - WASD 键盘控制（支持物理按键映射）
     - 鼠标点击控制（按钮式）
     - 速度滑块控制（1-9级）
-    - 云台方向控制（U/D/L/R/C）
+    - 三态行走模式（普通/直线/锁定）
+    - BLE 扫描按钮
     - 紧急停止按钮
   - 状态栏显示
     - WebSocket 连接状态
@@ -477,17 +468,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 传输方式：ESP-NOW 无线 + USB 串口
 
 #### 前端架构
-- **状态管理**：Pinia（Vue 官方推荐）
-- **组合式函数**：useWebSocket（WebSocket 连接管理）、useKeyboard（键盘事件）
+- **组合式函数**：useWebSocket（WebSocket 连接管理）、useKeyboard（键盘事件）、useApi（API 封装）、useStatus（状态轮询）
 - **响应式设计**：TailwindCSS 工具类，支持暗色主题
-- **性能优化**：requestAnimationFrame 视频帧更新
+- **性能优化**：watch 监听视频帧变化
 
 ### Hardware Requirements
 - ESP32-C6 开发板 × 2（车载 + 接收器）
-- ESP32-S3 CAM × 2（摄像头模块）
+- ESP32-S3 CAM（摄像头模块）
 - L298N 电机驱动模块 × 2
 - 直流减速电机 × 4
-- SG90 舵机 × 2
 - 7.4V 锂电池
 - 5V 稳压模块
 
@@ -515,12 +504,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - tailwindcss 4
 - @tailwindcss/vite
 - typescript 5.4.5
-- pinia 2.1.7
 
 ### Known Issues
 - 视频传输在高分辨率下可能卡顿（建议降低分辨率或帧率）
 - ESP-NOW 通信距离受环境影响（建议空旷场地使用）
-- 舵机电源需要独立供电（避免干扰 ESP32）
 
 ### Future Plans
 - 增加第二路摄像头支持

@@ -182,7 +182,6 @@ bun run build
 4. 启动 Rust 后端（自动提供前端页面）
 5. 在浏览器中打开 `http://localhost:8080`
 6. 在 Web UI 中连接串口（串口列表会自动通过 WebSocket 实时推送）
-7. （可选）在控制面板中设置车载 ESP32-C6 的 MAC 地址，支持动态配对
 
 ## 开发说明
 
@@ -274,7 +273,7 @@ cargo clippy       # 静态分析检查
   - 前端优化: pinia 移除、死 CSS 清理、运行时间显示秒数、ARIA 属性去重
   - 文档: 5 个 AGENTS.md 同步更新（AppState 位置、视频缓冲区大小、composables 列表等）
 
-- v1.7.3 - 2026-06-14
+- v1.7.3 - 2026-06-13
   - 综合代码审计 v8：修复 9 项问题（2 P2 + 7 P3）
   - P2: drive_mode 命令原子性修复（websocket.rs `send_bytes` 替代两次 `send_command`）
   - P2: ControlPanel WebSocket 连接异常处理（wsConnect 添加 await + try-catch）

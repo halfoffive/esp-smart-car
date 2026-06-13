@@ -69,7 +69,6 @@ esp-smart-car/
 
 ### Frontend (Vue + TypeScript)
 - **Composition API**: Use `<script setup>` and composables
-- **Pinia**: State management (pre-configured)
 - **TailwindCSS**: Utility-first styling with custom theme
 - **Functional components**: Composables for reusable logic
 - **WebSocket**: Real-time communication via custom composable
@@ -86,10 +85,10 @@ esp-smart-car/
 ## Unique Styles
 
 - **Functional C++**: Value semantics preferred, state changes via function returns; `static` globals allowed only when confined to a single translation unit (e.g. `video_stream.h`, `wireless.h`)
-- **Binary protocol**: Custom 8-byte packet format for ESP-NOW communication
-- **Frame packetization**: Video frames split into 128-byte chunks for wireless transmission
+- **Binary protocol**: Custom 12-byte packet format for ESP-NOW communication
+- **Frame packetization** (历史): Video frames previously split into 128-byte chunks for ESP-NOW wireless transmission; 当前 camera_module 通过 Serial1 直接发送完整帧
 - **Differential steering**: Left/right motor speed differential for turning
-- **Soft serial bridge**: ESP32-S3 camera connected via GPIO 14/15 software serial (921600 baud)
+- **HardwareSerial bridge**: ESP32-S3 camera connected to ESP32-C6 car controller via GPIO 14/15 HardwareSerial (Serial1) at 921600 baud
 
 ## Commands
 
@@ -131,7 +130,7 @@ Key connections:
 - **Power isolation**: Motor power and logic power must be separate
 - **Ground common**: All devices must share common ground
 - **Baud rate**: 921600 for USB serial (high-speed video)
-- **Soft serial**: GPIO 14/15 at 921600 baud for camera video frames, wire length ≤ 30cm
+- **HardwareSerial (Serial1)**: GPIO 14/15 at 921600 baud for camera video frames, wire length ≤ 30cm
 - **ESP-NOW channel**: Fixed channel 1 for all devices
 - **Video buffer**: 32768 bytes for frame reassembly
 - **Timeout protection**: 1-second auto-stop if no commands received
