@@ -139,6 +139,26 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-13 - 综合代码审计修复 v5.1（23项追加修复）
+- **范围**: 基于 v5 全面排查报告，修复 4 项 P0、6 项 P1、3 项 P2 问题
+- **P0 严重修复（4项）**:
+  - `pid_control.h` — HEADING_LOCK 模式使用正确的 HEADING_PID 参数和 g_headingPidState 状态变量，修复航向锁定功能名存实亡的问题
+  - `video_stream.h` — 校验和计算改为仅覆盖实际发送字节（sendSize - 1），修复发送端与接收端校验和不匹配
+  - `serial.rs` — read_next 改为独立关联函数，run_serial_task 使用 take/return 模式避免长时间持 serial_manager 锁，修复视频接收期间 API 请求无响应
+  - `serial.rs` — 新增 resync_stream 流对齐恢复，帧读取失败后跳过残留字节直到找到下一个帧头，修复一次失败导致后续所有帧错位
+- **P1 高优先级修复（6项）**:
+  - `receiver_dongle.ino` — DRIVE_MODE 添加 50ms 超时等待读取模式值，修复命令静默丢弃
+  - `receiver_dongle.ino` — 视频包新增校验和验证，损坏包静默丢弃
+  - `ControlPanel.vue` — 行走模式从布尔开关改为三态按钮（普通/直线/锁定），航向锁定模式 UI 可访问
+  - `useWebSocket.ts` — onopen 中清理 reconnectTimer，防止手动重连后定时器触发创建多余连接
+  - `car_controller.ino` — STATUS 心跳不再触发 sendOdometryData()，消除冗余测速上报
+  - `lib.rs` + `serial.rs` + `api.rs` + `websocket.rs` — odometry 从 tokio::sync::Mutex 改为 std::sync::Mutex（不跨 .await 持锁）
+- **P2 中优先级修复（3项）**:
+  - `serial.rs` — 帧头扫描嵌套逻辑已随 read_next 重构自然简化
+  - `video_stream.h` — static 全局变量风格与 wireless.h 保持一致（当前仅单翻译单元包含，风险可控）
+  - `main.rs` — 串口任务无限重启已有 3 秒退避，当前设计下暂不添加指数退避
+- **验证**: `bun run build` 成功；`cargo clippy`/`cargo test` 因 Rust 1.96.0 编译器 ICE 暂无法运行
+
 ### 2026-06-13 - 综合代码审计修复 v5（68项修复）
 - **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 三部分全面审查，修复 6 项 P0 严重缺陷、15 项 P1 高优先级问题、8 项 P2 中优先级问题、5 项 P3 低优先级问题
 - **P0 严重修复（6项）**:

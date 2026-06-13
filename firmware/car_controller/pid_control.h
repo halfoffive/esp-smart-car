@@ -333,14 +333,14 @@ inline SmartMotorOutput updateSmartControl(
         }
 
         const float headingError = OdometerState::g_heading - PIDControllerState::g_headingLockTarget;
-        PIDControllerState::g_straightPidState = computePID(
-            PIDDefaults::STRAIGHT_PID,
-            PIDControllerState::g_straightPidState,
+        PIDControllerState::g_headingPidState = computePID(
+            PIDDefaults::HEADING_PID,
+            PIDControllerState::g_headingPidState,
             headingError,
             0.0f,
             now
         );
-        const float correction = PIDControllerState::g_straightPidState.output;
+        const float correction = PIDControllerState::g_headingPidState.output;
         return applyStraightCorrection(
             basePwm, leftDir, rightDir,
             leftSpeed, rightSpeed, correction
@@ -363,12 +363,21 @@ inline void setDriveMode(DriveMode mode) {
         PIDControllerState::g_headingLockTargetInitialized = false;
     }
 
+    // 切换到航向锁定模式时，重置航向 PID 状态
+    if (mode == DriveMode::HEADING_LOCK) {
+        PIDControllerState::g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, 0, millis());
+    }
+
+    // 切换到直线修正模式时，重置直线 PID 状态
+    if (mode == DriveMode::STRAIGHT_LINE) {
+        PIDControllerState::g_straightPidState = PIDState(0, 0, 0, 0, 0, 0, 0, millis());
+    }
+
     PIDControllerState::g_driveMode = mode;
 
     // 切换到锁定航向模式时，重置标志以便捕获当前航向
     if (mode == DriveMode::HEADING_LOCK) {
         PIDControllerState::g_headingLockTargetInitialized = false;
-        PIDControllerState::g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, 0, millis());
     }
 
     const char* modeName = "";

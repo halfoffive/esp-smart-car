@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **P0: HEADING_LOCK PID参数修正** — `pid_control.h` HEADING_LOCK 模式使用正确的 HEADING_PID 参数和 g_headingPidState 状态变量，修复航向锁定功能名存实亡
+- **P0: 视频校验和范围修复** — `video_stream.h` 校验和计算改为仅覆盖实际发送字节（sendSize - 1），修复发送端与接收端校验和不匹配
+- **P0: 串口锁重构(take/return)** — `serial.rs` read_next 改为独立关联函数，run_serial_task 使用 take/return 模式避免长时间持 serial_manager 锁，修复视频接收期间 API 请求无响应
+- **P0: 帧读取流对齐恢复** — `serial.rs` 新增 resync_stream 流对齐恢复，帧读取失败后跳过残留字节直到找到下一个帧头，修复一次失败导致后续所有帧错位
+- **P1: DRIVE_MODE超时保护** — `receiver_dongle.ino` DRIVE_MODE 添加 50ms 超时等待读取模式值，修复命令静默丢弃
+- **P1: 视频包校验和验证** — `receiver_dongle.ino` 视频包新增校验和验证，损坏包静默丢弃
+- **P1: 航向锁定UI三态按钮** — `ControlPanel.vue` 行走模式从布尔开关改为三态按钮（普通/直线/锁定），航向锁定模式 UI 可访问
+- **P1: 重连定时器清理** — `useWebSocket.ts` onopen 中清理 reconnectTimer，防止手动重连后定时器触发创建多余连接
+- **P1: 心跳去冗余测速** — `car_controller.ino` STATUS 心跳不再触发 sendOdometryData()，消除冗余测速上报
+- **P1: odometry Mutex优化** — `lib.rs` + `serial.rs` + `api.rs` + `websocket.rs` odometry 从 tokio::sync::Mutex 改为 std::sync::Mutex（不跨 .await 持锁）
+- **P2: 帧头扫描简化** — `serial.rs` 帧头扫描嵌套逻辑已随 read_next 重构自然简化
+- **P2: static变量风格** — `video_stream.h` static 全局变量风格与 wireless.h 保持一致（当前仅单翻译单元包含，风险可控）
+- **P2: 串口重启退避** — `main.rs` 串口任务无限重启已有 3 秒退避，当前设计下暂不添加指数退避
 - **P0: ESP-NOW 网络拓扑修复** — `wireless.h` Receiver 角色初始化时同时添加 Car 和 Camera 两个 Peer，修复云台控制转发静默失败
 - **P0: DRIVE_MODE 协议重构** — 行走模式切换命令从 'M'/'L'/'B' 改为专属字节 'T'，消除与 MAC_CONFIG 的 'M' 冲突。协议：先发 'T' 标识，再发模式值（0/1/2）；`receiver_dongle.ino` 实现 DRIVE_MODE 转发逻辑
 - **P0: 串口数据流解析器重构** — `serial.rs` 引入 BufReader + 统一缓冲状态机，修复帧头重叠遗漏（0xAA 0xAA 0x55）和视频/测速数据互斥吞没问题

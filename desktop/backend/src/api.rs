@@ -185,7 +185,7 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
     let current_speed = state.current_speed.load(Ordering::Relaxed);
 
     let (left_speed, right_speed, heading, total_distance) = {
-        let odom = state.odometry.lock().await;
+        let odom = state.odometry.lock().unwrap();
         (
             odom.left_speed_mmps,
             odom.right_speed_mmps,

@@ -128,6 +128,11 @@ function createWebSocket() {
         isConnected.value = true
         // 连接成功，重置重连计数
         retryCount = 0
+        // 清理重连定时器，防止手动重连后定时器仍触发创建多余连接
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer)
+          reconnectTimer = null
+        }
         startHeartbeat()
       }
 

@@ -224,35 +224,39 @@
       </div>
     </div>
     
-    <!-- 智能行走模式 -->
+    <!-- 行走模式选择 -->
     <div>
       <div class="flex items-center justify-between mb-1.5">
-        <h3 class="text-xs font-medium text-dark-300">智能修正</h3>
-        <div class="flex items-center gap-1.5">
-          <span class="text-[10px]" :class="smartDriveOn ? 'text-green-400' : 'text-dark-500'" role="status" aria-live="polite">
-            {{ smartDriveOn ? 'ON' : 'OFF' }}
-          </span>
-          <button 
-            @click="toggleSmartDrive"
+        <h3 class="text-xs font-medium text-dark-300">行走模式</h3>
+        <div class="flex items-center gap-1">
+          <button
+            @click="setDriveMode(0)"
             :class="[
-              'relative inline-flex h-5 w-9 items-center rounded-full transition-colors',
-              smartDriveOn ? 'bg-green-500' : 'bg-dark-600'
+              'px-2 py-0.5 text-[10px] rounded transition-colors',
+              driveMode === 0 ? 'bg-primary-500 text-white' : 'bg-dark-700 text-dark-400 hover:bg-dark-600'
             ]"
-            role="switch"
-            :aria-checked="smartDriveOn"
-            aria-label="智能直线修正开关"
-          >
-            <span 
-              :class="[
-                'inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform',
-                smartDriveOn ? 'translate-x-4.5' : 'translate-x-1'
-              ]"
-            ></span>
-          </button>
+            aria-label="普通模式"
+          >普通</button>
+          <button
+            @click="setDriveMode(1)"
+            :class="[
+              'px-2 py-0.5 text-[10px] rounded transition-colors',
+              driveMode === 1 ? 'bg-green-500 text-white' : 'bg-dark-700 text-dark-400 hover:bg-dark-600'
+            ]"
+            aria-label="直线修正模式"
+          >直线</button>
+          <button
+            @click="setDriveMode(2)"
+            :class="[
+              'px-2 py-0.5 text-[10px] rounded transition-colors',
+              driveMode === 2 ? 'bg-cyan-500 text-white' : 'bg-dark-700 text-dark-400 hover:bg-dark-600'
+            ]"
+            aria-label="航向锁定模式"
+          >锁定</button>
         </div>
       </div>
       <p class="text-[9px] text-dark-600 leading-tight">
-        启用后自动修正左右轮速度差，保持直线行走
+        {{ driveModeDesc }}
       </p>
     </div>
     
@@ -296,7 +300,8 @@ const isScanning = ref(false)
 
 /** 速度滑块防抖定时器：快速拖动时只发送最终值，不发送中间值 */
 let speedDebounceTimer: number | null = null
-const smartDriveOn = ref(false)
+/** 行走模式：0=普通, 1=直线修正, 2=航向锁定 */
+const driveMode = ref(0)
 const logs = ref<{ id: number, time: string, message: string, color: string }[]>([])
 
 /** MAC地址输入值 */
@@ -314,10 +319,25 @@ const sliderBackground = computed(() => {
   return `linear-gradient(to right, #0ea5e9 0%, #0ea5e9 ${percent}%, #374151 ${percent}%, #374151 100%)`
 })
 
-const toggleSmartDrive = () => {
-  smartDriveOn.value = !smartDriveOn.value
-  sendDriveMode(smartDriveOn.value ? 1 : 0)
-  addLog(smartDriveOn.value ? '直线修正: 已启用' : '直线修正: 已禁用', 'info')
+/** 行走模式描述文本 */
+const driveModeDesc = computed(() => {
+  switch (driveMode.value) {
+    case 0: return '普通模式：无自动修正'
+    case 1: return '直线修正：自动修正左右轮速度差'
+    case 2: return '航向锁定：锁定当前航向角，自动纠偏'
+    default: return ''
+  }
+})
+
+/** 设置行走模式：0=普通, 1=直线修正, 2=航向锁定 */
+const setDriveMode = (mode: number) => {
+  if (!isConnected.value) {
+    addLog('未连接，无法切换模式', 'warning')
+    return
+  }
+  driveMode.value = mode
+  sendDriveMode(mode)
+  addLog(`行走模式: ${driveModeDesc.value}`, 'info')
 }
 
 const addLog = (message: string, type: 'info' | 'warning' | 'error' = 'info') => {

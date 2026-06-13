@@ -305,7 +305,9 @@ void onDataRecv(const esp_now_recv_info* info, const uint8_t* incomingData, int 
                 handleStopCommand();
                 break;
             case CommandType::STATUS:
-                sendOdometryData();
+                // 心跳命令只更新时间戳，防止超时自动停止
+                // 测速数据已由 loop() 中的 200ms 定时器独立发送，无需重复发送
+                g_lastCmdTime = millis();
                 break;
             case CommandType::CALIBRATE:
                 handleCalibrateCommand();

@@ -153,18 +153,20 @@ inline void sendVideoFrame(const FrameState& frame) {
         packet.totalPackets = totalPackets;
         packet.dataLen = packetLen;
         memcpy(packet.data, data + offset, packetLen);
-        
-        // 计算校验和
+
+        // 计算实际发送大小（不含 data 数组的未使用尾部）
+        const size_t sendSize = sizeof(VideoPacket) - StreamConfig::MAX_PACKET_SIZE + packetLen;
+
+        // 计算校验和：仅覆盖实际发送的字节（不含 checksum 字段本身）
         uint8_t sum = 0;
         const uint8_t* packetData = reinterpret_cast<const uint8_t*>(&packet);
-        for (size_t j = 0; j < sizeof(packet) - 1; j++) {
+        for (size_t j = 0; j < sendSize - 1; j++) {  // -1 排除 checksum 字段
             sum += packetData[j];
         }
         packet.checksum = sum;
-        
+
         // 发送到接收器（指定 MAC 地址，避免广播给车载端造成误解析）
-        const size_t sendSize = sizeof(VideoPacket) - StreamConfig::MAX_PACKET_SIZE + packetLen;
-        sendRawPacket(WirelessConfig::RECEIVER_MAC, 
+        sendRawPacket(WirelessConfig::RECEIVER_MAC,
                      reinterpret_cast<const uint8_t*>(&packet),
                      sendSize);
         

@@ -225,7 +225,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             if last_odometry_send.elapsed() >= std::time::Duration::from_millis(200) {
                 last_odometry_send = Instant::now();
                 let message = {
-                    let odom = video_state.odometry.lock().await;
+                    let odom = video_state.odometry.lock().unwrap();
                     serde_json::json!({
                         "type": "odometry",
                         "leftSpeed": odom.left_speed_mmps,

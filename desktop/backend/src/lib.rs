@@ -25,8 +25,8 @@ pub struct AppState {
 
     /// 当前速度（使用 AtomicU8，单字节无锁原子操作）
     pub current_speed: AtomicU8,
-    /// 测速数据（使用 tokio::sync::Mutex，需跨 .await 持锁）
-    pub odometry: Arc<tokio::sync::Mutex<OdometryData>>,
+    /// 测速数据（使用 std::sync::Mutex，不跨 .await 持锁）
+    pub odometry: Arc<std::sync::Mutex<OdometryData>>,
     /// 最后心跳时间（使用 std::sync::Mutex，不跨 .await 持锁）
     pub last_heartbeat: Arc<std::sync::Mutex<std::time::Instant>>,
     /// 服务器启动时间（用于计算运行时长）
@@ -53,7 +53,7 @@ impl AppState {
             video_frame_b64: Arc::new(std::sync::Mutex::new(None)),
 
             current_speed: AtomicU8::new(5),
-            odometry: Arc::new(tokio::sync::Mutex::new(OdometryData::default())),
+            odometry: Arc::new(std::sync::Mutex::new(OdometryData::default())),
             last_heartbeat: Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
             started_at: std::time::Instant::now(),
             available_ports: Arc::new(tokio::sync::Mutex::new(Vec::new())),

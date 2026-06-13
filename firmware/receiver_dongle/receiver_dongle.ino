@@ -242,12 +242,23 @@ inline void forwardToCar(const SerialCommand& cmd) {
     // 行走模式切换命令：读取后续1字节模式值并转发
     if (type == CommandType::DRIVE_MODE) {
         // 读取模式值（1字节：0=普通, 1=直线修正, 2=航向锁定）
-        int modeVal = Serial.read();
+        // 使用超时等待，防止模式值字节尚未到达时被静默丢弃
+        constexpr uint32_t MODE_READ_TIMEOUT_MS = 50;
+        const uint32_t modeStart = millis();
+        int modeVal = -1;
+        while (millis() - modeStart < MODE_READ_TIMEOUT_MS) {
+            if (Serial.available()) {
+                modeVal = Serial.read();
+                break;
+            }
+        }
         if (modeVal >= 0) {
             WirelessPacket pkt = {};
             pkt.type = static_cast<uint8_t>(CommandType::DRIVE_MODE);
             pkt.data = static_cast<uint8_t>(modeVal);
             sendPacket(WirelessConfig::CAR_MAC, pkt);
+        } else {
+            Serial.println("[接收器] DRIVE_MODE 模式值读取超时");
         }
         return;
     }
@@ -295,11 +306,21 @@ inline void initVideoBuffer() {
  */
 inline void handleVideoPacket(const uint8_t* data, int len) {
     if (len < sizeof(VideoPacket)) return;
-    
+
     const VideoPacket* packet = reinterpret_cast<const VideoPacket*>(data);
     // 严格校验视频包魔术字和版本，防止误判
     if (packet->magic != StreamConfig::VIDEO_MAGIC ||
         packet->version != StreamConfig::PROTOCOL_VERSION) return;
+    // 校验和验证：累加除最后一个字节（checksum）外的所有接收字节
+    uint8_t calculatedSum = 0;
+    const uint8_t* packetBytes = reinterpret_cast<const uint8_t*>(packet);
+    for (int i = 0; i < len - 1; i++) {
+        calculatedSum += packetBytes[i];
+    }
+    if (calculatedSum != packetBytes[len - 1]) {
+        // 校验和不匹配，静默丢弃（视频允许丢帧）
+        return;
+    }
     // 校验 dataLen 边界，防止缓冲区溢出
     if (packet->dataLen > StreamConfig::MAX_PACKET_SIZE) return;
     
