@@ -57,6 +57,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **P1: camera_module.ino Serial1.begin 参数错误** — ESP32 Arduino core 没有 `(baud, config)` 的 2 参数重载，`SERIAL_8N1` 被误作 `rxPin` 导致串口初始化失败。改为 `Serial1.begin(921600)` 使用默认引脚
+- **P2: receiver_dongle.ino BLEDevice::init 重复调用** — `performBleScan()` 每次调用都执行 `BLEDevice::init("")`，可能导致资源泄漏。改为在 `setup()` 中初始化一次，扫描时只做扫描
+- **P2: car_controller.ino 视频帧接收/转发竞态** — `receiveCameraFrame()` 和 `forwardCameraFrame()` 共享缓冲区，发送期间可能接收新帧覆盖数据。将状态机变量从局部 static 提升为全局 static，并在 `receiveCameraFrame()` 开头添加 `g_cameraFrameReady` 检查，帧就绪时暂停接收
+
+## [1.8.1] - 2026-06-13
+
 ### Added
 - **前端资源嵌入二进制** — `main.rs` 使用 `rust-embed` 将 `frontend/dist/` 编译进 Rust 可执行文件，`Cargo.toml` 新增 `rust-embed` + `mime_guess` 依赖，移除 `tower-http`（仅用于 `ServeDir`）。exe 可在任意位置运行，无需前端 `dist` 目录伴随
 - **SPA fallback 保留** — 所有未匹配路由返回 `index.html`，支持 Vue 客户端路由

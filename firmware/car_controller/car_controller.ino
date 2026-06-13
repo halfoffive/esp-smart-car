@@ -274,53 +274,58 @@ void sendOdometryData() {
  * 帧格式: [0xAA][0x55][帧大小4字节][帧数据]
  * 接收完整帧后标记为待转发
  */
+/// 视频帧接收状态机
+static enum { WAIT_HEADER1, WAIT_HEADER2, READ_SIZE, READ_DATA } g_frameState = WAIT_HEADER1;
+static uint8_t g_sizeBytes[4];
+static size_t g_sizeBytesRead = 0;
+static uint32_t g_expectedSize = 0;
+
 void receiveCameraFrame() {
+    // 如果当前帧已就绪但尚未转发，暂停接收新数据
+    // 防止 forwardCameraFrame() 发送期间缓冲区被覆盖
+    if (g_cameraFrameReady) return;
+    
     while (g_cameraSerial.available()) {
-        static enum { WAIT_HEADER1, WAIT_HEADER2, READ_SIZE, READ_DATA } state = WAIT_HEADER1;
-        static uint8_t sizeBytes[4];
-        static size_t sizeBytesRead = 0;
-        static uint32_t expectedSize = 0;
-        
         const int byteVal = g_cameraSerial.read();
         if (byteVal < 0) return;
         
-        switch (state) {
+        switch (g_frameState) {
             case WAIT_HEADER1:
-                if (byteVal == 0xAA) state = WAIT_HEADER2;
+                if (byteVal == 0xAA) g_frameState = WAIT_HEADER2;
                 break;
             case WAIT_HEADER2:
                 if (byteVal == 0x55) {
-                    state = READ_SIZE;
-                    sizeBytesRead = 0;
+                    g_frameState = READ_SIZE;
+                    g_sizeBytesRead = 0;
                 } else if (byteVal == 0xAA) {
                     // 连续 0xAA，继续等待 0x55
                 } else {
-                    state = WAIT_HEADER1;
+                    g_frameState = WAIT_HEADER1;
                 }
                 break;
             case READ_SIZE:
-                sizeBytes[sizeBytesRead++] = static_cast<uint8_t>(byteVal);
-                if (sizeBytesRead >= 4) {
-                    expectedSize = (static_cast<uint32_t>(sizeBytes[0])) |
-                                   (static_cast<uint32_t>(sizeBytes[1]) << 8) |
-                                   (static_cast<uint32_t>(sizeBytes[2]) << 16) |
-                                   (static_cast<uint32_t>(sizeBytes[3]) << 24);
-                    if (expectedSize == 0 || expectedSize > SoftSerialConfig::FRAME_BUFFER_SIZE) {
+                g_sizeBytes[g_sizeBytesRead++] = static_cast<uint8_t>(byteVal);
+                if (g_sizeBytesRead >= 4) {
+                    g_expectedSize = (static_cast<uint32_t>(g_sizeBytes[0])) |
+                                     (static_cast<uint32_t>(g_sizeBytes[1]) << 8) |
+                                     (static_cast<uint32_t>(g_sizeBytes[2]) << 16) |
+                                     (static_cast<uint32_t>(g_sizeBytes[3]) << 24);
+                    if (g_expectedSize == 0 || g_expectedSize > SoftSerialConfig::FRAME_BUFFER_SIZE) {
                         // 帧大小异常，重置状态
-                        state = WAIT_HEADER1;
+                        g_frameState = WAIT_HEADER1;
                     } else {
                         g_cameraFrameSize = 0;
-                        state = READ_DATA;
+                        g_frameState = READ_DATA;
                     }
                 }
                 break;
             case READ_DATA:
-                if (g_cameraFrameSize < expectedSize) {
+                if (g_cameraFrameSize < g_expectedSize) {
                     g_cameraFrameBuffer[g_cameraFrameSize++] = static_cast<uint8_t>(byteVal);
-                    if (g_cameraFrameSize >= expectedSize) {
+                    if (g_cameraFrameSize >= g_expectedSize) {
                         // 完整帧接收完成
                         g_cameraFrameReady = true;
-                        state = WAIT_HEADER1;
+                        g_frameState = WAIT_HEADER1;
                     }
                 }
                 break;

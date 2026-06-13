@@ -43,7 +43,8 @@ void setup() {
     }
     
     // 初始化串口1（与车载控制器通信）
-    Serial1.begin(921600, SERIAL_8N1, -1, -1);
+    // ESP32-S3 的 Serial1 使用默认引脚，只需指定波特率
+    Serial1.begin(921600);
     delay(100);
     Serial.println("[初始化] 串口1初始化完成（与车载控制器通信）");
     

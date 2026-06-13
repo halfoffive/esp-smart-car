@@ -251,6 +251,11 @@ cargo clippy       # 静态分析检查
 
 ## 版本历史
 
+- v1.8.1 - 2026-06-13
+  - 修复 camera_module.ino Serial1.begin 参数错误（`SERIAL_8N1` 被误作 `rxPin`）
+  - 修复 receiver_dongle.ino BLEDevice::init 重复调用（改为 setup() 中初始化一次）
+  - 修复 car_controller.ino 视频帧接收/转发竞态（帧就绪时暂停接收）
+
 - v1.8.0 - 2026-06-13
   - 硬件重构：移除 SG90 舵机（云台），ESP32-S3 与 C6 改为软串口直连（GPIO 14/15），接收器新增 BLE 扫描
   - 固件：car_controller 移除舵机代码新增软串口视频帧接收/转发，camera_module 改为 Serial1 发送，receiver_dongle 新增 BLE 扫描

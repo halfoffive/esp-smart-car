@@ -352,7 +352,8 @@ void performBleScan() {
 
     BleScanResult scanResult;
 
-    BLEDevice::init("");
+    // BLEDevice::init 只需执行一次，在 setup() 中已完成初始化
+    // 重复调用可能导致资源泄漏或状态异常
     BLEScan* pBLEScan = BLEDevice::getScan();
     MyBLEScanCallback callback(scanResult);
     pBLEScan->setScanCallbacks(&callback);
@@ -538,6 +539,9 @@ void setup() {
     if (esp_now_register_recv_cb(onReceiverDataRecv) != ESP_OK) {
         Serial.println("[无线通信] 注册接收回调失败");
     }
+    
+    // 初始化 BLE（扫描前只需初始化一次）
+    BLEDevice::init("");
     
     // 初始化视频缓冲区
     initVideoBuffer();

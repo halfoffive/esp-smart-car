@@ -140,6 +140,15 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-13 - 代码审计修复 v10（3项修复）
+- **范围**: 嵌入式固件
+- **P1 高优先级修复（1项）**:
+  - `camera_module.ino` — `Serial1.begin(921600, SERIAL_8N1, -1, -1)` 改为 `Serial1.begin(921600)`。ESP32 Arduino core 没有 `(baud, config)` 的 2 参数重载，`SERIAL_8N1`（值 0x8000010）被当作 `rxPin` 参数导致串口初始化失败，摄像头视频帧无法发送到 car_controller
+- **P2 中优先级修复（2项）**:
+  - `receiver_dongle.ino` — `BLEDevice::init("")` 从 `performBleScan()` 移到 `setup()`，避免每次扫描重复初始化导致资源泄漏
+  - `car_controller.ino` — `receiveCameraFrame()` 添加 `g_cameraFrameReady` 检查，帧就绪时暂停接收；状态机变量从局部 static 提升为全局 static，防止 `forwardCameraFrame()` 发送期间缓冲区被覆盖
+- **验证**: 无需编译验证（固件修改，仅替换函数调用和添加条件检查）
+
 ### 2026-06-13 - 硬件重构：砍掉舵机 + 软串口连接 + BLE 扫描
 - **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 全面重构
 - **硬件变更**:
