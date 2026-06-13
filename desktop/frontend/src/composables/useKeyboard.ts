@@ -18,11 +18,6 @@
  * - E: 原地右转
  * - 空格: 停止
  * - 1-9: 速度设置
- * - U: 云台上
- * - J: 云台下
- * - H: 云台左
- * - K: 云台右
- * - C: 云台居中
  */
 
 import { ref, onMounted, onUnmounted } from 'vue'
@@ -30,7 +25,6 @@ import { ref, onMounted, onUnmounted } from 'vue'
 /** 有效的控制键集合 */
 const VALID_KEYS = new Set([
   'W', 'A', 'S', 'D', 'Q', 'E', ' ',
-  'U', 'J', 'H', 'K', 'C',
   '1', '2', '3', '4', '5', '6', '7', '8', '9'
 ])
 
@@ -39,9 +33,6 @@ const DIRECTION_KEYS = new Set(['W', 'A', 'S', 'D', 'Q', 'E'])
 
 /** 需要阻止默认行为的按键集合 */
 const PREVENT_DEFAULT_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '])
-
-/** 云台控制键集合 */
-const GIMBAL_KEYS = new Set(['U', 'J', 'H', 'K', 'C'])
 
 /**
  * 键盘控制组合式函数
@@ -104,10 +95,6 @@ export const useKeyboard = (sendCommand: (cmd: string) => void) => {
     }
     // 处理速度键
     else if (key >= '1' && key <= '9') {
-      sendCommand(key)
-    }
-    // 处理云台控制
-    else if (GIMBAL_KEYS.has(key)) {
       sendCommand(key)
     }
   }

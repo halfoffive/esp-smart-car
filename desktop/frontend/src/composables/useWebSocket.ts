@@ -35,6 +35,13 @@ export interface OdometryData {
   timestamp: number    // 时间戳
 }
 
+/** BLE 设备接口 */
+export interface BleDevice {
+  name: string
+  mac: string
+  rssi: number
+}
+
 /** WebSocket 实例接口 */
 interface WebSocketInstance {
   isConnected: Ref<boolean>
@@ -42,12 +49,14 @@ interface WebSocketInstance {
   videoFps: Ref<number>
   odometry: Ref<OdometryData>
   availablePorts: Ref<string[]>
+  bleDevices: Ref<BleDevice[]>
   connect: () => Promise<void>
   disconnect: () => void
   sendCommand: (command: string) => boolean
   sendSpeed: (speed: number) => boolean
   sendDriveMode: (mode: number) => boolean
   sendMacConfig: (mac: string) => boolean
+  sendBleScan: () => boolean
 }
 
 /**
@@ -67,6 +76,7 @@ function createWebSocket() {
     timestamp: 0
   })
   const availablePorts = ref<string[]>([])
+  const bleDevices = ref<BleDevice[]>([])
 
   // 内部可变状态
   const ws = ref<WebSocket | null>(null)
@@ -187,6 +197,17 @@ function createWebSocket() {
               }
               break
 
+            case 'ble_devices':
+              // 接收 BLE 设备列表
+              if (Array.isArray(message.devices)) {
+                bleDevices.value = message.devices.filter((d: unknown): d is BleDevice => {
+                  if (typeof d !== 'object' || d === null) return false
+                  const dev = d as Record<string, unknown>
+                  return typeof dev.name === 'string' && typeof dev.mac === 'string' && typeof dev.rssi === 'number'
+                })
+              }
+              break
+
             default:
               break
           }
@@ -243,6 +264,7 @@ function createWebSocket() {
 
     isConnected.value = false
     videoFrame.value = null
+    bleDevices.value = []
   }
 
   /** 发送命令 */
@@ -329,18 +351,40 @@ function createWebSocket() {
     }
   }
 
+  /** 发送 BLE 扫描命令 */
+  const sendBleScan = (): boolean => {
+    if (ws.value?.readyState !== WebSocket.OPEN) {
+      return false
+    }
+
+    const message = {
+      type: 'ble_scan',
+      timestamp: Date.now()
+    }
+
+    try {
+      ws.value.send(JSON.stringify(message))
+      return true
+    } catch (error) {
+      console.error('[WebSocket] 发送 BLE 扫描命令失败:', error)
+      return false
+    }
+  }
+
   return {
     isConnected,
     videoFrame,
     videoFps,
     odometry,
     availablePorts,
+    bleDevices,
     connect,
     disconnect,
     sendCommand,
     sendSpeed,
     sendDriveMode,
-    sendMacConfig
+    sendMacConfig,
+    sendBleScan
   }
 }
 
@@ -389,11 +433,13 @@ export const useWebSocket = (owner = false): WebSocketInstance => {
     videoFps: state.videoFps,
     odometry: state.odometry,
     availablePorts: state.availablePorts,
+    bleDevices: state.bleDevices,
     connect: safeConnect,
     disconnect: safeDisconnect,
     sendCommand: state.sendCommand,
     sendSpeed: state.sendSpeed,
     sendDriveMode: state.sendDriveMode,
-    sendMacConfig: state.sendMacConfig
+    sendMacConfig: state.sendMacConfig,
+    sendBleScan: state.sendBleScan
   }
 }

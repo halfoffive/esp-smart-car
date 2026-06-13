@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-06-13
+
+### 硬件变更
+- **移除舵机**：砍掉 SG90 水平/垂直舵机，简化硬件
+- **软串口连接**：ESP32-S3 摄像头与 ESP32-C6 车载控制器改为软串口直连（GPIO 14/15），替代 ESP-NOW 无线通信
+- **BLE 扫描**：接收器新增 BLE 扫描功能，电脑端可发现周围蓝牙设备
+
+### 固件
+- car_controller: 移除舵机代码，新增软串口视频帧接收/转发
+- camera_module: 移除 ESP-NOW，改为 Serial1 发送视频帧
+- receiver_dongle: 新增 BLE 扫描功能
+- wireless.h: 移除 SERVO/CAMERA 相关类型和函数
+
+### 后端
+- 新增 BleDevice 数据结构和 BLE 设备管理
+- 新增 GET /api/ble-devices 端点
+- 新增 ble_scan WebSocket 消息和 ble_devices 广播
+
+### 前端
+- 移除云台控制 UI 和 MAC 地址设置 UI
+- 新增 BLE 设备扫描按钮和设备列表
+
+### Breaking Changes
+- CommandType::SERVO 从无线协议中移除
+- DeviceRole::CAMERA 从无线协议中移除
+- 云台控制命令（U/J/H/K/C）不再有效
+- 摄像头模块不再独立运行 ESP-NOW
+
 ## [1.7.4] - 2026-06-13
 
 ### Fixed
@@ -497,7 +525,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-[Unreleased]: https://github.com/halfoffive/esp-smart-car/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/halfoffive/esp-smart-car/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/halfoffive/esp-smart-car/compare/v1.7.4...v1.8.0
+[1.7.4]: https://github.com/halfoffive/esp-smart-car/compare/v1.3.0...v1.7.4
 [1.3.0]: https://github.com/halfoffive/esp-smart-car/compare/v1.2.2...v1.3.0
 [1.2.2]: https://github.com/halfoffive/esp-smart-car/compare/v1.2.1...v1.2.2
 [1.2.1]: https://github.com/halfoffive/esp-smart-car/compare/v1.2.0...v1.2.1

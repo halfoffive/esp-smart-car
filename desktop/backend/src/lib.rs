@@ -8,6 +8,17 @@ pub mod websocket;
 
 pub use serial::OdometryData;
 
+/// BLE 设备信息
+#[derive(Debug, Clone)]
+pub struct BleDevice {
+    /// 设备名称
+    pub name: String,
+    /// MAC 地址
+    pub mac: String,
+    /// 信号强度
+    pub rssi: i16,
+}
+
 use std::sync::atomic::AtomicU8;
 use std::sync::Arc;
 
@@ -35,6 +46,8 @@ pub struct AppState {
     pub available_ports: Arc<tokio::sync::Mutex<Vec<String>>>,
     /// 上一次扫描到的串口列表（使用 std::sync::Mutex，不跨 .await 持锁）
     pub last_ports: Arc<std::sync::Mutex<Vec<String>>>,
+    /// BLE 设备列表（使用 std::sync::Mutex，不跨 .await 持锁）
+    pub ble_devices: Arc<std::sync::Mutex<Vec<BleDevice>>>,
 }
 
 impl Default for AppState {
@@ -58,6 +71,7 @@ impl AppState {
             started_at: std::time::Instant::now(),
             available_ports: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             last_ports: Arc::new(std::sync::Mutex::new(Vec::new())),
+            ble_devices: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 }

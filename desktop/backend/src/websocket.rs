@@ -150,6 +150,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         let mut last_odometry_send = Instant::now();
         let mut last_ports: Vec<String> = Vec::new();
         let mut last_port_check = Instant::now();
+        let mut last_ble_send = Instant::now();
 
         loop {
             // 检查取消信号
@@ -259,6 +260,42 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     .await
                 {
                     debug!("测速数据发送失败: {}", e);
+                }
+            }
+
+            // BLE 设备列表广播（5秒节流，非空时发送）
+            if last_ble_send.elapsed() >= std::time::Duration::from_secs(5) {
+                let ble_data: Vec<serde_json::Value> = {
+                    let devices =
+                        video_state.ble_devices.lock().expect("ble_devices lock poisoned");
+                    if devices.is_empty() {
+                        Vec::new()
+                    } else {
+                        devices
+                            .iter()
+                            .map(|d| {
+                                serde_json::json!({
+                                    "name": d.name,
+                                    "mac": d.mac,
+                                    "rssi": d.rssi
+                                })
+                            })
+                            .collect()
+                    }
+                }; // devices 锁在此处释放
+
+                if !ble_data.is_empty() {
+                    last_ble_send = Instant::now();
+                    let ble_message = serde_json::json!({
+                        "type": "ble_devices",
+                        "devices": ble_data
+                    });
+                    if let Err(e) = video_tx
+                        .send(Message::Text(ble_message.to_string().into()))
+                        .await
+                    {
+                        debug!("BLE 设备列表发送失败: {}", e);
+                    }
                 }
             }
 
@@ -431,6 +468,18 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
                     warn!("无效的MAC地址格式: {}", mac_str);
                 }
             }
+        }
+        "ble_scan" => {
+            // 触发接收器 BLE 扫描：通过串口发送 'B' 命令
+            {
+                let mut manager =
+                    state.serial_manager.lock().expect("serial_manager lock poisoned");
+                if let Err(e) = manager.send_command(b'B') {
+                    warn!("BLE 扫描命令发送失败: {}", e);
+                    return Err(anyhow::anyhow!("BLE 扫描命令发送失败: {}", e));
+                }
+            }
+            info!("已触发 BLE 扫描");
         }
         _ => {
             warn!("未知消息类型: {}", msg_type);
@@ -748,6 +797,20 @@ mod tests {
         assert!(
             result.is_ok(),
             "handle_message 处理无效 mac_config 时不应返回错误: {:?}",
+            result
+        );
+    }
+
+    /// 测试 handle_message 处理 ble_scan 消息（无串口连接时返回错误）
+    #[tokio::test]
+    async fn test_handle_message_ble_scan() {
+        let state = create_test_state();
+        let msg = r#"{"type":"ble_scan"}"#;
+
+        let result = handle_message(msg, &state).await;
+        assert!(
+            result.is_err(),
+            "无串口连接时 handle_message 处理 ble_scan 应返回错误: {:?}",
             result
         );
     }

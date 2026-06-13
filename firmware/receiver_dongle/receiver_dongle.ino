@@ -15,7 +15,6 @@
  * 通信协议：
  * 电脑 -> 接收器: 串口命令 (WASD等)
  * 接收器 -> 车载: ESP-NOW
- * 接收器 -> 摄像头: ESP-NOW
  * 摄像头 -> 接收器: ESP-NOW (视频帧)
  * 接收器 -> 电脑: USB 串口 (视频帧)
  * 
@@ -24,6 +23,8 @@
  */
 
 #include "../libraries/wireless_protocol/src/wireless.h"
+#include <BLEDevice.h>
+#include <BLEScan.h>
 
 // ============================================
 // 常量定义
@@ -66,11 +67,34 @@ struct VideoFrameBuffer {
                          frameId(0), packetsReceived(0), totalPackets(0), isComplete(false) {}
 };
 
+/**
+ * BLE 设备信息
+ */
+struct BleDeviceInfo {
+    char name[32];          // 设备名称
+    uint8_t mac[6];         // MAC 地址
+    int8_t rssi;            // 信号强度
+    bool isValid;           // 是否有效
+};
+
+/**
+ * BLE 扫描结果
+ */
+struct BleScanResult {
+    BleDeviceInfo devices[20];  // 最多存储 20 个设备
+    uint8_t count;              // 设备数量
+
+    BleScanResult() : count(0) {}
+};
+
 // ============================================
 // 全局状态
 // ============================================
 VideoFrameBuffer g_videoBuffer;
 uint32_t g_lastHeartbeat = 0;
+
+/// BLE 扫描是否正在进行
+bool g_bleScanning = false;
 
 // ============================================
 // 纯函数：串口命令解析
@@ -83,11 +107,9 @@ uint32_t g_lastHeartbeat = 0;
  * 
  * 命令格式：
  * - W/A/S/D: 运动控制
- * - U/D/L/R: 云台控制
  * - Q/E: 原地旋转
  * - 空格: 停止
  * - 1-9: 速度设置
- * - C: 云台居中
  */
 inline SerialCommand parseSerialCommand(const char input) {
     switch (input) {
@@ -99,15 +121,11 @@ inline SerialCommand parseSerialCommand(const char input) {
         case 'E': case 'e':
         case ' ':  // 停止
             return SerialCommand(input, 0, true);
-        case 'U': case 'u':
-        case 'J': case 'j':  // 云台下（与前端 'J' 对齐）
-        case 'H': case 'h':  // 云台左（与前端 'H' 对齐）
-        case 'K': case 'k':  // 云台右（与前端 'K' 对齐）
-        case 'C': case 'c':
-            return SerialCommand(input, 0, true);
         case 'M': case 'm':
             return SerialCommand(input, 0, true);
         case 'T': case 't':  // 行走模式切换（专属命令字节，与 MAC_CONFIG 的 'M' 不冲突）
+            return SerialCommand(input, 0, true);
+        case 'B': case 'b':  // BLE 扫描
             return SerialCommand(input, 0, true);
         case '1': case '2': case '3':
         case '4': case '5': case '6':
@@ -131,12 +149,6 @@ inline CommandType getCommandType(const char cmd) {
         case 'E': case 'e':
         case ' ':
             return CommandType::MOVE;
-        case 'U': case 'u':
-        case 'J': case 'j':      // 云台下（与前端 'J' 对齐）
-        case 'H': case 'h':      // 云台左（与前端 'H' 对齐）
-        case 'K': case 'k':      // 云台右（与前端 'K' 对齐）
-        case 'C': case 'c':
-            return CommandType::SERVO;
         case '1': case '2': case '3':
         case '4': case '5': case '6':
         case '7': case '8': case '9':
@@ -265,8 +277,6 @@ inline void forwardToCar(const SerialCommand& cmd) {
 
     if (type == CommandType::MOVE) {
         packet = createMovePacket(cmd.cmd, 0);
-    } else if (type == CommandType::SERVO) {
-        packet = createServoPacket(cmd.cmd, 0);
     } else if (type == CommandType::SPEED) {
         packet = createCommandPacket(CommandType::SPEED, 0, cmd.speed);
     } else {
@@ -276,15 +286,95 @@ inline void forwardToCar(const SerialCommand& cmd) {
     sendToCar(packet);
 }
 
+// ============================================
+// BLE 扫描
+// ============================================
+
 /**
- * 转发命令到摄像头
+ * BLE 扫描回调类
+ * 收集发现的设备信息，按 MAC 地址去重
  */
-inline void forwardToCamera(const SerialCommand& cmd) {
-    const CommandType type = getCommandType(cmd.cmd);
-    if (type == CommandType::SERVO) {
-        const WirelessPacket packet = createServoPacket(cmd.cmd, 0);
-        sendToCamera(packet);
+class MyBLEScanCallback : public BLEScanCallbacks {
+private:
+    BleScanResult& result_;
+
+public:
+    MyBLEScanCallback(BleScanResult& result) : result_(result) {}
+
+    void onResult(BLEAdvertisedDevice* advertisedDevice) override {
+        if (result_.count >= 20) return;  // 缓冲区已满
+
+        // 获取 MAC 地址
+        BLEAddress addr = advertisedDevice->getAddress();
+        const uint8_t* mac = addr.getNative();
+
+        // 按 MAC 去重
+        for (uint8_t i = 0; i < result_.count; i++) {
+            if (memcmp(result_.devices[i].mac, mac, 6) == 0) {
+                // 更新 RSSI（取更强的信号）
+                if (advertisedDevice->getRSSI() > result_.devices[i].rssi) {
+                    result_.devices[i].rssi = advertisedDevice->getRSSI();
+                }
+                return;
+            }
+        }
+
+        // 新设备
+        BleDeviceInfo& dev = result_.devices[result_.count];
+        memcpy(dev.mac, mac, 6);
+        dev.rssi = advertisedDevice->getRSSI();
+        dev.isValid = true;
+
+        // 获取设备名称
+        if (advertisedDevice->haveName()) {
+            strncpy(dev.name, advertisedDevice->getName().c_str(), sizeof(dev.name) - 1);
+            dev.name[sizeof(dev.name) - 1] = '\0';
+        } else {
+            strncpy(dev.name, "Unknown", sizeof(dev.name) - 1);
+        }
+
+        result_.count++;
     }
+};
+
+/**
+ * 执行 BLE 扫描
+ * 扫描 10 秒后输出结果到串口
+ */
+void performBleScan() {
+    if (g_bleScanning) {
+        Serial.println("{\"t\":\"ble\",\"error\":\"scan_in_progress\"}");
+        return;
+    }
+
+    g_bleScanning = true;
+    Serial.println("[BLE] 开始扫描...");
+
+    BleScanResult scanResult;
+
+    BLEDevice::init("");
+    BLEScan* pBLEScan = BLEDevice::getScan();
+    MyBLEScanCallback callback(scanResult);
+    pBLEScan->setScanCallbacks(&callback);
+    pBLEScan->setActiveScan(true);
+    pBLEScan->start(10);  // 扫描 10 秒
+
+    // 输出 JSON 格式结果
+    // 格式: {"t":"ble","devices":[{"name":"xxx","mac":"AA:BB:CC:DD:EE:FF","rssi":-42},...]}
+    Serial.print("{\"t\":\"ble\",\"devices\":[");
+    for (uint8_t i = 0; i < scanResult.count; i++) {
+        if (i > 0) Serial.print(",");
+        const BleDeviceInfo& dev = scanResult.devices[i];
+        Serial.printf("{\"name\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"rssi\":%d}",
+                      dev.name,
+                      dev.mac[0], dev.mac[1], dev.mac[2],
+                      dev.mac[3], dev.mac[4], dev.mac[5],
+                      dev.rssi);
+    }
+    Serial.println("]}");
+
+    Serial.printf("[BLE] 扫描完成，发现 %d 个设备\n", scanResult.count);
+    g_bleScanning = false;
 }
 
 // ============================================
@@ -453,7 +543,7 @@ void setup() {
     initVideoBuffer();
     
     Serial.println("[初始化] 接收器就绪，等待命令...");
-    Serial.println("[命令格式] WASD:移动, U/J/H/K/C:云台, 1-9:速度, 空格:停止");
+    Serial.println("[命令格式] WASD:移动, 1-9:速度, 空格:停止, B:蓝牙扫描");
 }
 
 // ============================================
@@ -468,13 +558,14 @@ void loop() {
         const SerialCommand cmd = parseSerialCommand(static_cast<char>(input));
         
         if (cmd.isValid) {
+            // BLE 扫描命令：直接执行扫描，不转发到车载端
+            if (cmd.cmd == 'B' || cmd.cmd == 'b') {
+                performBleScan();
+                return;  // 不转发到车载端
+            }
+
             // 转发到车载控制器
             forwardToCar(cmd);
-            
-            // 如果是云台命令，同时转发到摄像头
-            if (getCommandType(cmd.cmd) == CommandType::SERVO) {
-                forwardToCamera(cmd);
-            }
         }
     }
     

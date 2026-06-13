@@ -80,7 +80,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/status", get(api::get_status))
         .route("/api/connect", post(api::connect_serial))
         .route("/api/disconnect", post(api::disconnect_serial))
-        .route("/api/ports", get(api::list_ports));
+        .route("/api/ports", get(api::list_ports))
+        .route("/api/ble-devices", get(api::get_ble_devices));
 
     info!("前端资源已嵌入二进制");
 

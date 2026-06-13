@@ -41,26 +41,7 @@
         </button>
       </div>
 
-      <!-- MAC地址设置 -->
-      <div class="flex gap-2 items-center">
-        <input
-          v-model="macAddress"
-          type="text"
-          placeholder="AA:BB:CC:DD:EE:FF"
-          aria-label="车载MAC地址"
-          class="flex-1 min-w-0 bg-dark-800 border border-dark-600 rounded-lg px-2 py-1.5 text-xs text-dark-100 focus:outline-none focus:border-primary-500 font-mono"
-          :class="{ 'border-red-500': macError }"
-        />
-        <button
-          @click="setMacAddress"
-          class="px-2 py-1.5 text-xs bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg border border-dark-600 transition-colors shrink-0"
-          :disabled="!serialConnected || macError !== ''"
-          aria-label="设置车载MAC地址"
-        >
-          设置MAC
-        </button>
-      </div>
-      <p v-if="macError" class="text-[10px] text-red-400">{{ macError }}</p>
+
     </div>
     
     <!-- 速度控制 -->
@@ -159,68 +140,6 @@
       </div>
     </div>
     
-    <!-- 云台控制 -->
-    <div>
-      <h3 class="text-xs font-medium text-dark-300 mb-1.5">云台控制</h3>
-      <div class="grid grid-cols-3 gap-1.5 max-w-[140px] mx-auto">
-        <div></div>
-        <button
-          @mousedown="sendCommand('U')"
-          @mouseup="sendCommand(' ')"
-          @mouseleave="sendCommand(' ')"
-          class="control-key-sm"
-          title="上"
-          aria-label="云台向上"
-        >
-          ↑
-        </button>
-        <div></div>
-
-        <button
-          @mousedown="sendCommand('H')"
-          @mouseup="sendCommand(' ')"
-          @mouseleave="sendCommand(' ')"
-          class="control-key-sm"
-          title="左"
-          aria-label="云台向左"
-        >
-          ←
-        </button>
-        <button
-          @mousedown="sendCommand('C')"
-          @mouseup="sendCommand(' ')"
-          class="control-key-sm text-xs"
-          title="居中"
-          aria-label="云台居中"
-        >
-          C
-        </button>
-        <button
-          @mousedown="sendCommand('K')"
-          @mouseup="sendCommand(' ')"
-          @mouseleave="sendCommand(' ')"
-          class="control-key-sm"
-          title="右"
-          aria-label="云台向右"
-        >
-          →
-        </button>
-
-        <div></div>
-        <button
-          @mousedown="sendCommand('J')"
-          @mouseup="sendCommand(' ')"
-          @mouseleave="sendCommand(' ')"
-          class="control-key-sm"
-          title="下"
-          aria-label="云台向下"
-        >
-          ↓
-        </button>
-        <div></div>
-      </div>
-    </div>
-    
     <!-- 行走模式选择 -->
     <div>
       <div class="flex items-center justify-between mb-1.5">
@@ -256,7 +175,36 @@
         {{ driveModeDesc }}
       </p>
     </div>
-    
+
+    <!-- 蓝牙设备扫描 -->
+    <div>
+      <div class="flex items-center justify-between mb-1.5">
+        <h3 class="text-xs font-medium text-dark-300">蓝牙设备</h3>
+        <button
+          @click="scanBleDevices"
+          class="px-2 py-0.5 text-[10px] bg-dark-700 hover:bg-dark-600 text-dark-200 rounded border border-dark-600 transition-colors"
+          :disabled="isBleScanning || !isConnected"
+          :aria-label="isBleScanning ? '扫描中' : '扫描蓝牙设备'"
+        >
+          {{ isBleScanning ? '扫描中...' : '扫描' }}
+        </button>
+      </div>
+      <div v-if="bleDevices.length > 0" class="space-y-1 max-h-[120px] overflow-y-auto">
+        <div
+          v-for="device in bleDevices"
+          :key="device.mac"
+          class="flex items-center justify-between bg-dark-800 rounded px-2 py-1 text-[10px]"
+        >
+          <span class="text-dark-200 truncate flex-1 min-w-0">{{ device.name }}</span>
+          <span class="text-dark-500 font-mono ml-2 shrink-0">{{ device.mac }}</span>
+          <span :class="device.rssi > -50 ? 'text-green-400' : device.rssi > -70 ? 'text-yellow-400' : 'text-red-400'" class="ml-2 shrink-0">
+            {{ device.rssi }}dBm
+          </span>
+        </div>
+      </div>
+      <p v-else class="text-[9px] text-dark-600">点击扫描发现周围蓝牙设备</p>
+    </div>
+
     <!-- 紧急停止 -->
     <button 
       @click="emergencyStop"
@@ -286,7 +234,7 @@ import { useKeyboard } from '../composables/useKeyboard'
 import { useApi } from '../composables/useApi'
 import { useStatus } from '../composables/useStatus'
 
-const { sendCommand: wsSendCommand, sendSpeed, isConnected, sendDriveMode, availablePorts: wsAvailablePorts, sendMacConfig, connect: wsConnect, disconnect: wsDisconnect } = useWebSocket(true)
+const { sendCommand: wsSendCommand, sendSpeed, isConnected, sendDriveMode, availablePorts: wsAvailablePorts, connect: wsConnect, disconnect: wsDisconnect, bleDevices, sendBleScan } = useWebSocket(true)
 const { post, get } = useApi()
 const { status } = useStatus()
 
@@ -307,14 +255,27 @@ let speedDebounceTimer: number | null = null
 const driveMode = ref(0)
 const logs = ref<{ id: number, time: string, message: string, color: string }[]>([])
 
-/** MAC地址输入值 */
-const macAddress = ref('')
-/** MAC地址格式错误提示 */
-const macError = ref('')
+/** BLE 扫描进行中状态 */
+const isBleScanning = ref(false)
 
-/** MAC地址格式正则：支持 AA:BB:CC:DD:EE:FF 或 AABBCCDDEEFF */
-const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/
-
+/** 扫描蓝牙设备 */
+const scanBleDevices = async () => {
+  if (!isConnected.value) {
+    addLog('未连接，无法扫描蓝牙设备', 'warning')
+    return
+  }
+  isBleScanning.value = true
+  const success = sendBleScan()
+  if (!success) {
+    addLog('蓝牙扫描命令发送失败', 'error')
+  } else {
+    addLog('蓝牙扫描已触发，等待结果...', 'info')
+  }
+  // BLE 扫描约 10 秒，12 秒后自动取消扫描状态
+  setTimeout(() => {
+    isBleScanning.value = false
+  }, 12000)
+}
 const speedPercent = computed(() => Math.round((currentSpeed.value / 9) * 100))
 
 const sliderBackground = computed(() => {
@@ -448,23 +409,6 @@ const emergencyStop = () => {
   addLog('紧急停止！', 'error')
 }
 
-/** 设置MAC地址：验证格式并发送 */
-const setMacAddress = () => {
-  const mac = macAddress.value.trim()
-  if (!MAC_REGEX.test(mac)) {
-    macError.value = '格式错误，请使用 AA:BB:CC:DD:EE:FF'
-    return
-  }
-  macError.value = ''
-  const success = sendMacConfig(mac)
-  if (success) {
-    localStorage.setItem('esp_car_mac', mac)
-    addLog(`MAC地址已设置: ${mac}`, 'info')
-  } else {
-    addLog('MAC地址设置失败: WebSocket未连接', 'error')
-  }
-}
-
 /** 扫描可用串口：调用 /api/ports 获取列表并填充下拉框（兜底手动扫描） */
 const scanPorts = async () => {
   isScanning.value = true
@@ -484,11 +428,7 @@ const scanPorts = async () => {
 }
 
 onMounted(() => {
-  // 从 localStorage 恢复 MAC 地址
-  const savedMac = localStorage.getItem('esp_car_mac')
-  if (savedMac) {
-    macAddress.value = savedMac
-  }
+  // 页面加载时无需恢复 MAC 地址（已移除 MAC 地址设置功能）
 })
 
 /** 当 WebSocket 推送的可用串口列表变化时，如果当前选中的串口已不在列表中则清除 */

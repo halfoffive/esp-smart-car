@@ -13,16 +13,15 @@ esp-smart-car/
 │   │           └── wireless.h   # 共享头文件
 │   ├── car_controller/          # 车载控制器（ESP32-C6）
 │   │   ├── motor_control.h      # 电机控制（函数式编程，差速支持）
-│   │   ├── servo_control.h      # 舵机控制（函数式编程）
 │   │   ├── odometer.h           # 编码器测速模块
 │   │   ├── pid_control.h        # PID控制器（直线修正+航向锁定）
-│   │   └── car_controller.ino   # 主程序
+│   │   └── car_controller.ino   # 主程序（含软串口视频帧接收）
 │   ├── camera_module/           # 摄像头模块（ESP32-S3 CAM）
 │   │   ├── camera_config.h      # 摄像头配置
-│   │   ├── video_stream.h       # 视频流传输
+│   │   ├── video_stream.h       # 视频流传输（Serial1 发送）
 │   │   └── camera_module.ino    # 主程序
 │   └── receiver_dongle/         # 电脑端接收器（ESP32-C6）
-│       └── receiver_dongle.ino  # 主程序（含测速数据转发）
+│       └── receiver_dongle.ino  # 主程序（含测速数据转发、BLE 扫描）
 ├── desktop/                     # 桌面端控制界面
 │   ├── backend/                 # Rust 后端
 │   │   ├── Cargo.toml
@@ -56,22 +55,17 @@ esp-smart-car/
 
 ### 主控板
 - **ESP32-C6 开发板** x2
-  - 1个：车载控制器（连接电机、舵机）
-  - 1个：电脑端接收器（USB 连接电脑）
-  
-- **ESP32-S3 CAM** x2
-  - 摄像头模块（视频传输）
-  - 可选：第二路摄像头
+  - 1个：车载控制器（连接电机、软串口摄像头）
+  - 1个：电脑端接收器（USB 连接电脑，支持 BLE 扫描）
+
+- **ESP32-S3 CAM** x1
+  - 摄像头模块（通过软串口连接车载控制器）
 
 ### 驱动模块
 - **L298N 电机驱动模块** x2
   - 控制 4 个直流电机
   - 支持正转、反转、停止
   - PWM 调速
-
-- **SG90 舵机** x2
-  - 水平舵机：摄像头左右旋转
-  - 垂直舵机：摄像头上下旋转
 
 - **霍尔编码器/红外编码器** x2
   - 左轮编码器：每圈20脉冲
@@ -97,6 +91,16 @@ esp-smart-car/
 - 延迟：< 10ms
 - 距离：~100m
 
+#### 软串口（摄像头通信）
+- 引脚：GPIO 14 (RX) / GPIO 15 (TX)
+- 波特率：921600
+- 帧格式：[0xAA][0x55][帧大小4字节][帧数据]
+
+#### BLE 扫描
+- 接收器支持 BLE 设备扫描
+- 通过 'B' 命令触发扫描
+- 扫描结果通过 WebSocket 推送到前端
+
 #### 数据包格式
 ```
 [魔术字 1字节] [版本 1字节] [类型 1字节] [数据 1字节] [速度 1字节] [序列号 2字节] [校验和 1字节]
@@ -119,13 +123,8 @@ esp-smart-car/
 | E | 原地右转 | - |
 | 空格 | 停止 | - |
 | 1-9 | 速度设置 | 1-9 |
-| U | 云台上 | - |
-| J | 云台下 | - |
-| H | 云台左 | - |
-| K | 云台右 | - |
-| C | 云台居中 | - |
-| M | MAC地址配置 | 6字节MAC |
 | T | 行走模式切换 | 1字节模式值(0/1/2) |
+| B | BLE 扫描 | - |
 
 ## 安装说明
 
@@ -217,7 +216,7 @@ void applyVehicleMotion(const VehicleMotion& motion) {
 - 键盘：WASD 控制方向
 - 鼠标：点击控制面板按钮
 - 速度：数字键 1-9 或滑块
-- 云台：方向键或控制面板
+- BLE：扫描周围蓝牙设备
 
 ## 测试
 
@@ -234,10 +233,16 @@ cargo clippy       # 静态分析检查
 - 确认信道一致
 - 检查距离和干扰
 
+### 摄像头串口通信失败
+- 检查 GPIO 14/15 接线（RX/TX 交叉连接）
+- 确认波特率一致（921600）
+- 确保线长不超过 30cm
+- 检查共地连接
+
 ### 视频传输卡顿
 - 降低分辨率
 - 降低帧率
-- 检查 WiFi 信号
+- 检查软串口连接质量
 
 ### 电机不转
 - 检查电源电压
@@ -245,6 +250,13 @@ cargo clippy       # 静态分析检查
 - 检查 PWM 信号
 
 ## 版本历史
+
+- v1.8.0 - 2026-06-13
+  - 硬件重构：移除 SG90 舵机（云台），ESP32-S3 与 C6 改为软串口直连（GPIO 14/15），接收器新增 BLE 扫描
+  - 固件：car_controller 移除舵机代码新增软串口视频帧接收/转发，camera_module 改为 Serial1 发送，receiver_dongle 新增 BLE 扫描
+  - 后端：新增 BleDevice 数据结构、GET /api/ble-devices 端点、ble_scan WebSocket 消息
+  - 前端：移除云台/MAC UI，新增 BLE 设备扫描 UI
+  - Breaking: CommandType::SERVO 和 DeviceRole::CAMERA 从无线协议中移除，云台命令不再有效
 
 - v1.7.4 - 2026-06-13
   - 综合代码审计 v9：修复 36 项问题（1 P1 + 4 P2 + 2 Serious + 3 High + 26 P3/Low）

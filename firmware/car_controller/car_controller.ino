@@ -5,28 +5,35 @@
  * 功能：
  * 1. 接收ESP-NOW无线命令（来自接收器）
  * 2. 控制L298N驱动4个电机
- * 3. 控制SG90舵机云台
- * 4. 测速模块：编码器读取+速度计算
- * 5. PID控制：直线修正+精确方向
- * 6. 发送状态反馈（含测速数据）
- * 
+ * 3. 测速模块：编码器读取+速度计算
+ * 4. PID控制：直线修正+精确方向
+ * 5. 发送状态反馈（含测速数据）
+ * 6. 接收摄像头视频帧并转发到接收器
+ *
  * 硬件接线：
  * - L298N #1: IN1->GPIO4, IN2->GPIO5, EN->GPIO6 (控制左侧电机)
  * - L298N #2: IN1->GPIO7, IN2->GPIO8, EN->GPIO9 (控制右侧电机)
- * - SG90水平: GPIO14
- * - SG90垂直: GPIO15
  * - 左编码器: GPIO0
  * - 右编码器: GPIO1
+ * - 软串口: GPIO14(RX) / GPIO15(TX) -> ESP32-S3 UART（与摄像头模块通信）
  * 
  * 作者：智能车项目团队
- * 版本：1.2.0
+ * 版本：1.3.0
  */
 
 #include "motor_control.h"
-#include "servo_control.h"
 #include "../libraries/wireless_protocol/src/wireless.h"
 #include "odometer.h"
 #include "pid_control.h"
+#include <SoftwareSerial.h>
+
+// 软串口配置：与 ESP32-S3 摄像头模块通信
+namespace SoftSerialConfig {
+    constexpr uint8_t RX_PIN = 14;       // 软串口接收引脚（原舵机水平引脚）
+    constexpr uint8_t TX_PIN = 15;       // 软串口发送引脚（原舵机垂直引脚）
+    constexpr uint32_t BAUD_RATE = 921600; // 波特率（高速传输视频帧）
+    constexpr size_t FRAME_BUFFER_SIZE = 32768; // 视频帧缓冲区大小（32KB）
+}
 
 // ============================================
 // 调试配置（条件编译开关）
@@ -34,7 +41,6 @@
 // 生产环境应全部设为 0 以减少串口占用和CPU开销
 // ============================================
 #define DEBUG_MOTOR 0      // 电机调试日志
-#define DEBUG_SERVO 0      // 舵机调试日志
 #define DEBUG_WIRELESS 0   // 无线调试日志
 #define DEBUG_ODOMETRY 0   // 测速调试日志
 #define DEBUG_PID 0        // PID调试日志
@@ -43,16 +49,19 @@
 // 全局状态（可变状态，在主循环中更新）
 // ============================================
 
+/// 软串口实例（与摄像头模块通信）
+SoftwareSerial g_cameraSerial(SoftSerialConfig::RX_PIN, SoftSerialConfig::TX_PIN);
+
+/// 视频帧缓冲区（从摄像头接收的帧数据）
+uint8_t g_cameraFrameBuffer[SoftSerialConfig::FRAME_BUFFER_SIZE];
+size_t g_cameraFrameSize = 0;
+bool g_cameraFrameReady = false;
+
 /**
  * 当前车辆运动状态
  * 每次命令更新时创建新状态
  */
 VehicleMotion g_currentMotion = createStopState();
-
-/**
- * 当前云台状态
- */
-GimbalState g_currentGimbal = createInitialGimbalState();
 
 /**
  * 当前速度值（0-255）
@@ -129,22 +138,6 @@ void handleMoveCommand(const char cmd) {
     Serial.printf("[运动命令] 执行: %c, 速度: %d, 智能修正: %s\n", 
                   cmd, g_currentSpeed, 
                   g_smartDriveEnabled ? "ON" : "OFF");
-#endif
-}
-
-/**
- * 处理舵机命令
- * 输入：云台命令字符
- * 效果：更新云台状态
- */
-void handleServoCommand(const char cmd) {
-    g_currentGimbal = parseGimbalCommand(g_currentGimbal, cmd);
-    g_lastCmdTime = millis();  // 更新时间戳，防止超时自动停止
-#if DEBUG_SERVO
-    Serial.printf("[舵机命令] 执行: %c, 目标角度 H:%d V:%d\n", 
-                  cmd, 
-                  g_currentGimbal.horizontal.targetAngle,
-                  g_currentGimbal.vertical.targetAngle);
 #endif
 }
 
@@ -273,6 +266,125 @@ void sendOdometryData() {
 }
 
 // ============================================
+// 摄像头视频帧接收与转发
+// ============================================
+
+/**
+ * 从软串口接收摄像头视频帧
+ * 帧格式: [0xAA][0x55][帧大小4字节][帧数据]
+ * 接收完整帧后标记为待转发
+ */
+void receiveCameraFrame() {
+    while (g_cameraSerial.available()) {
+        static enum { WAIT_HEADER1, WAIT_HEADER2, READ_SIZE, READ_DATA } state = WAIT_HEADER1;
+        static uint8_t sizeBytes[4];
+        static size_t sizeBytesRead = 0;
+        static uint32_t expectedSize = 0;
+        
+        const int byteVal = g_cameraSerial.read();
+        if (byteVal < 0) return;
+        
+        switch (state) {
+            case WAIT_HEADER1:
+                if (byteVal == 0xAA) state = WAIT_HEADER2;
+                break;
+            case WAIT_HEADER2:
+                if (byteVal == 0x55) {
+                    state = READ_SIZE;
+                    sizeBytesRead = 0;
+                } else if (byteVal == 0xAA) {
+                    // 连续 0xAA，继续等待 0x55
+                } else {
+                    state = WAIT_HEADER1;
+                }
+                break;
+            case READ_SIZE:
+                sizeBytes[sizeBytesRead++] = static_cast<uint8_t>(byteVal);
+                if (sizeBytesRead >= 4) {
+                    expectedSize = (static_cast<uint32_t>(sizeBytes[0])) |
+                                   (static_cast<uint32_t>(sizeBytes[1]) << 8) |
+                                   (static_cast<uint32_t>(sizeBytes[2]) << 16) |
+                                   (static_cast<uint32_t>(sizeBytes[3]) << 24);
+                    if (expectedSize == 0 || expectedSize > SoftSerialConfig::FRAME_BUFFER_SIZE) {
+                        // 帧大小异常，重置状态
+                        state = WAIT_HEADER1;
+                    } else {
+                        g_cameraFrameSize = 0;
+                        state = READ_DATA;
+                    }
+                }
+                break;
+            case READ_DATA:
+                if (g_cameraFrameSize < expectedSize) {
+                    g_cameraFrameBuffer[g_cameraFrameSize++] = static_cast<uint8_t>(byteVal);
+                    if (g_cameraFrameSize >= expectedSize) {
+                        // 完整帧接收完成
+                        g_cameraFrameReady = true;
+                        state = WAIT_HEADER1;
+                    }
+                }
+                break;
+        }
+    }
+}
+
+/**
+ * 将摄像头视频帧通过 ESP-NOW 转发到接收器
+ * 使用 VideoPacket 分包传输（与原 video_stream.h 相同的协议）
+ */
+void forwardCameraFrame() {
+    if (!g_cameraFrameReady) return;
+    g_cameraFrameReady = false;
+    
+    const uint8_t* data = g_cameraFrameBuffer;
+    const size_t totalLen = g_cameraFrameSize;
+    const uint16_t totalPackets = (totalLen + StreamConfig::MAX_PACKET_SIZE - 1) / 
+                                   StreamConfig::MAX_PACKET_SIZE;
+    
+    static uint16_t forwardFrameId = 0;
+    forwardFrameId++;
+    
+    for (uint16_t i = 0; i < totalPackets; i++) {
+        const size_t offset = i * StreamConfig::MAX_PACKET_SIZE;
+        const uint16_t packetLen = min(
+            static_cast<size_t>(StreamConfig::MAX_PACKET_SIZE),
+            totalLen - offset
+        );
+        
+        // 构建视频包
+        VideoPacket packet = {};
+        packet.magic = StreamConfig::VIDEO_MAGIC;
+        packet.version = StreamConfig::PROTOCOL_VERSION;
+        packet.frameId = forwardFrameId;
+        packet.packetId = i;
+        packet.totalPackets = totalPackets;
+        packet.dataLen = packetLen;
+        memcpy(packet.data, data + offset, packetLen);
+        
+        // 计算实际发送大小：10字节头部 + packetLen字节数据 + 1字节校验和
+        const size_t sendSize = 10 + packetLen + 1;
+        
+        // 计算校验和：覆盖发送范围内除校验和字节外的所有字节
+        uint8_t sum = 0;
+        const uint8_t* packetData = reinterpret_cast<const uint8_t*>(&packet);
+        for (size_t j = 0; j < sendSize - 1; j++) {
+            sum += packetData[j];
+        }
+        
+        // 校验和写入实际发送的最后一个字节位置
+        packet.data[packetLen] = sum;
+        
+        // 通过 ESP-NOW 发送到接收器
+        sendRawPacket(WirelessConfig::RECEIVER_MAC,
+                     reinterpret_cast<const uint8_t*>(&packet),
+                     sendSize);
+        
+        // 短暂延迟避免拥塞
+        delayMicroseconds(50);
+    }
+}
+
+// ============================================
 // ESP-NOW 接收回调
 // ============================================
 
@@ -300,9 +412,6 @@ void onDataRecv(const esp_now_recv_info* info, const uint8_t* incomingData, int 
         case CommandType::MOVE:
             g_emergencyStop = false;  // 运动命令显式解除紧急停止
             handleMoveCommand(static_cast<char>(packet->data));
-            break;
-        case CommandType::SERVO:
-            handleServoCommand(static_cast<char>(packet->data));
             break;
         case CommandType::SPEED:
             handleSpeedCommand(packet->speed);
@@ -338,15 +447,16 @@ void setup() {
     
     Serial.println("\n================================");
     Serial.println("智能车控制系统 - ESP32-C6");
-    Serial.println("版本: 1.2.0 (含测速+PID)");
+    Serial.println("版本: 1.3.0 (含测速+PID+视频转发)");
     Serial.println("================================\n");
+    
+    // 初始化软串口（与摄像头模块通信）
+    g_cameraSerial.begin(SoftSerialConfig::BAUD_RATE);
+    delay(100);
+    Serial.println("[初始化] 软串口初始化完成 (GPIO14 RX, GPIO15 TX)");
     
     // 初始化电机引脚
     initializeMotorPins();
-    delay(100);
-    
-    // 初始化舵机引脚
-    initializeServoPins();
     delay(100);
     
     // 初始化测速模块
@@ -371,7 +481,6 @@ void setup() {
     
     // 初始化状态
     g_currentMotion = createStopState();
-    g_currentGimbal = createInitialGimbalState();
     g_currentSpeed = 28;
     g_emergencyStop = false;
     // g_smartDriveEnabled 保持全局声明时的初始值 false，匹配前端默认 OFF
@@ -380,7 +489,6 @@ void setup() {
     Serial.println("[命令说明]");
     Serial.println("  WASD: 移动控制");
     Serial.println("  Q/E: 原地旋转");
-    Serial.println("  U/J/H/K/C: 云台控制");
     Serial.println("  空格: 停止");
     Serial.println("  1-9: 速度设置");
     Serial.println("  智能修正: 默认关闭");
@@ -393,17 +501,20 @@ void setup() {
 void loop() {
     const uint32_t currentTime = millis();
     
-    // 1. 更新云台（平滑移动）
-    g_currentGimbal = updateGimbal(g_currentGimbal);
+    // 1. 从摄像头接收视频帧
+    receiveCameraFrame();
     
-    // 2. 定期更新测速数据并发送（与采样周期对齐，避免无效调用）
+    // 2. 转发视频帧到接收器
+    forwardCameraFrame();
+    
+    // 3. 定期更新测速数据并发送（与采样周期对齐，避免无效调用）
     if (currentTime - g_lastOdomReportTime >= ODOMETRY_REPORT_INTERVAL_MS) {
         updateOdometer();
         sendOdometryData();
         g_lastOdomReportTime = currentTime;
     }
     
-    // 3. 检查通信超时
+    // 4. 检查通信超时
     if (!g_emergencyStop && (currentTime - g_lastCmdTime) > 1000) {
         // 超过1秒未收到命令，自动停止
         if (g_currentMotion.frontLeft.direction != MotorDirection::STOP) {
@@ -415,6 +526,6 @@ void loop() {
         }
     }
 
-    // 4. 小延迟，避免占用过多CPU
+    // 5. 小延迟，避免占用过多CPU
     delay(1);
 }

@@ -290,6 +290,26 @@ pub async fn disconnect_serial(
     )
 }
 
+/// 获取 BLE 设备列表
+pub async fn get_ble_devices(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let devices = state.ble_devices.lock().expect("ble_devices lock poisoned");
+    let device_list: Vec<serde_json::Value> = devices
+        .iter()
+        .map(|d| {
+            serde_json::json!({
+                "name": d.name,
+                "mac": d.mac,
+                "rssi": d.rssi
+            })
+        })
+        .collect();
+
+    Json(serde_json::json!({
+        "success": true,
+        "devices": device_list
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

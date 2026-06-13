@@ -250,6 +250,27 @@ impl SerialManager {
         })
     }
 
+    /// 解析 BLE 设备 JSON 行
+    /// 格式: {"t":"ble","devices":[{"name":"xxx","mac":"AA:BB:CC:DD:EE:FF","rssi":-42},...]}
+    pub fn parse_ble_line(line: &str) -> Option<Vec<crate::BleDevice>> {
+        if !line.contains("\"t\":\"ble\"") {
+            return None;
+        }
+
+        let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+        let devices_array = parsed.get("devices")?.as_array()?;
+
+        let mut devices = Vec::new();
+        for dev in devices_array {
+            let name = dev.get("name")?.as_str()?.to_string();
+            let mac = dev.get("mac")?.as_str()?.to_string();
+            let rssi = dev.get("rssi")?.as_i64()? as i16;
+            devices.push(crate::BleDevice { name, mac, rssi });
+        }
+
+        Some(devices)
+    }
+
     /// 流对齐恢复：跳过字节直到找到下一个 0xAA 0x55 帧头
     fn resync_stream(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<()> {
         let start = std::time::Instant::now();
@@ -452,7 +473,7 @@ impl SerialManager {
 enum SerialTaskResult {
     /// 读取到视频帧
     VideoFrame(Vec<u8>),
-    /// 读取到测速数据行
+    /// 读取到测速数据行（可能是测速或 BLE 设备数据）
     OdometryLine(String),
     /// 无数据
     NoData,
@@ -538,8 +559,14 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                     }
                 }
                 Ok(SerialTaskResult::OdometryLine(line)) => {
-                    // serial_manager 锁已释放，单独获取 odometry 锁
-                    if let Some(odom_data) = SerialManager::parse_odometry_line(&line) {
+                    // 先尝试解析为 BLE 设备列表
+                    if let Some(ble_devs) = SerialManager::parse_ble_line(&line) {
+                        let mut devices =
+                            state.ble_devices.lock().expect("ble_devices lock poisoned");
+                        *devices = ble_devs;
+                        info!("BLE 设备列表已更新: {} 个设备", devices.len());
+                    } else if let Some(odom_data) = SerialManager::parse_odometry_line(&line) {
+                        // serial_manager 锁已释放，单独获取 odometry 锁
                         let mut odom = state.odometry.lock().expect("odometry lock poisoned");
                         *odom = odom_data;
                         debug!(
@@ -694,5 +721,47 @@ mod tests {
         assert!(available.is_empty(), "初始可用串口列表应为空");
         let last = state.last_ports.lock().expect("last_ports lock poisoned");
         assert!(last.is_empty(), "初始 last_ports 应为空");
+    }
+
+    /// 测试 BLE 设备 JSON 行解析 - 有效数据
+    #[test]
+    fn test_parse_ble_line_valid() {
+        let line = r#"{"t":"ble","devices":[{"name":"ESP32-C6","mac":"AA:BB:CC:DD:EE:01","rssi":-42},{"name":"Unknown","mac":"AA:BB:CC:DD:EE:02","rssi":-85}]}"#;
+        let devices =
+            SerialManager::parse_ble_line(line).expect("解析有效 BLE JSON 失败");
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].name, "ESP32-C6");
+        assert_eq!(devices[0].mac, "AA:BB:CC:DD:EE:01");
+        assert_eq!(devices[0].rssi, -42);
+        assert_eq!(devices[1].name, "Unknown");
+        assert_eq!(devices[1].rssi, -85);
+    }
+
+    /// 测试 BLE 设备 JSON 行解析 - 非 ble 消息
+    #[test]
+    fn test_parse_ble_line_not_ble() {
+        let line = r#"{"t":"odom","ls":100}"#;
+        assert!(SerialManager::parse_ble_line(line).is_none());
+    }
+
+    /// 测试 BLE 设备 JSON 行解析 - 空设备列表
+    #[test]
+    fn test_parse_ble_line_empty() {
+        let line = r#"{"t":"ble","devices":[]}"#;
+        let devices = SerialManager::parse_ble_line(line).expect("解析空 BLE 列表失败");
+        assert!(devices.is_empty());
+    }
+
+    /// 测试 BLE 设备 JSON 行解析 - 无效 JSON
+    #[test]
+    fn test_parse_ble_line_invalid_json() {
+        assert!(SerialManager::parse_ble_line("not json").is_none());
+    }
+
+    /// 测试 BLE 设备 JSON 行解析 - 缺少 devices 字段
+    #[test]
+    fn test_parse_ble_line_missing_devices() {
+        let line = r#"{"t":"ble"}"#;
+        assert!(SerialManager::parse_ble_line(line).is_none());
     }
 }

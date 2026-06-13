@@ -27,16 +27,15 @@
 enum class CommandType : uint8_t {
     NONE = 0,        // 无命令
     MOVE = 1,        // 运动控制
-    SERVO = 2,       // 舵机控制
-    SPEED = 3,       // 速度设置
-    LIGHT = 4,       // 车灯控制
-    HORN = 5,        // 喇叭
-    STOP = 6,        // 紧急停止
-    STATUS = 7,      // 状态查询
-    ODOMETRY = 8,    // 测速数据上报
-    CALIBRATE = 9,   // 校准命令
-    DRIVE_MODE = 10, // 行走模式切换
-    MAC_CONFIG = 11  // MAC地址配置
+    SPEED = 2,       // 速度设置
+    LIGHT = 3,       // 车灯控制
+    HORN = 4,        // 喇叭
+    STOP = 5,        // 紧急停止
+    STATUS = 6,      // 状态查询
+    ODOMETRY = 7,    // 测速数据上报
+    CALIBRATE = 8,   // 校准命令
+    DRIVE_MODE = 9,  // 行走模式切换
+    MAC_CONFIG = 10  // MAC地址配置
 };
 
 /**
@@ -105,8 +104,7 @@ struct __attribute__((packed)) VideoPacket {
  */
 enum class DeviceRole : uint8_t {
     CAR = 0,        // 车载端
-    RECEIVER = 1,   // 接收器端
-    CAMERA = 2      // 摄像头端
+    RECEIVER = 1    // 接收器端
 };
 
 /**
@@ -134,8 +132,6 @@ namespace WirelessConfig {
     inline uint8_t RECEIVER_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
     // 车载端MAC地址（非 const，支持运行时修改）
     inline uint8_t CAR_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02};
-    // 摄像头MAC地址（非 const，支持运行时修改）
-    inline uint8_t CAMERA_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x03};
 }
 
 namespace StreamConfig {
@@ -226,13 +222,6 @@ inline WirelessPacket createMovePacket(uint8_t wasdCmd, uint8_t speed) {
 }
 
 /**
- * 纯函数：创建舵机命令包
- */
-inline WirelessPacket createServoPacket(uint8_t servoCmd, uint8_t speed) {
-    return createCommandPacket(CommandType::SERVO, servoCmd, speed);
-}
-
-/**
  * 纯函数：创建停止命令包
  */
 inline WirelessPacket createStopPacket() {
@@ -296,10 +285,6 @@ inline bool initializeWireless(DeviceRole role) {
             // 接收器配对车载端
             memcpy(g_peerInfo.peer_addr, WirelessConfig::CAR_MAC, 6);
             break;
-        case DeviceRole::CAMERA:
-            // 摄像头配对接收器
-            memcpy(g_peerInfo.peer_addr, WirelessConfig::RECEIVER_MAC, 6);
-            break;
     }
     
     g_peerInfo.channel = WirelessConfig::CHANNEL;
@@ -308,20 +293,6 @@ inline bool initializeWireless(DeviceRole role) {
     if (esp_now_add_peer(&g_peerInfo) != ESP_OK) {
         Serial.println("[无线通信] 添加配对设备失败");
         return false;
-    }
-    
-    // 接收器需要额外配对摄像头，用于转发云台控制等命令
-    if (role == DeviceRole::RECEIVER) {
-        memset(&g_peerInfo, 0, sizeof(g_peerInfo));
-        memcpy(g_peerInfo.peer_addr, WirelessConfig::CAMERA_MAC, 6);
-        g_peerInfo.channel = WirelessConfig::CHANNEL;
-        g_peerInfo.encrypt = false;
-        
-        if (esp_now_add_peer(&g_peerInfo) != ESP_OK) {
-            Serial.println("[无线通信] 添加摄像头配对设备失败");
-            return false;
-        }
-        Serial.println("[无线通信] 摄像头配对设备添加成功");
     }
     
     Serial.println("[无线通信] ESP-NOW 初始化成功");
@@ -374,13 +345,6 @@ inline bool sendToCar(const WirelessPacket& packet) {
 }
 
 /**
- * 发送命令到摄像头
- */
-inline bool sendToCamera(const WirelessPacket& packet) {
-    return sendPacket(WirelessConfig::CAMERA_MAC, packet);
-}
-
-/**
  * 设置目标车载端MAC地址
  * 输入：6字节MAC地址指针
  */
@@ -412,40 +376,6 @@ inline void setTargetCarMac(const uint8_t* newMac) {
 
     memcpy(WirelessConfig::CAR_MAC, newMac, 6);
     Serial.println("[无线通信] 车载端MAC更新成功");
-}
-
-/**
- * 设置目标摄像头MAC地址
- * 输入：6字节MAC地址指针
- */
-inline void setTargetCameraMac(const uint8_t* newMac) {
-    // 如果新MAC与当前MAC相同，跳过操作避免不必要的删除+重新添加
-    if (memcmp(WirelessConfig::CAMERA_MAC, newMac, 6) == 0) {
-        Serial.println("[无线通信] 摄像头MAC未变化，跳过更新");
-        return;
-    }
-
-    // 保存旧 MAC，删除旧 peer，再添加新 peer
-    // esp_now_mod_peer 按 peer_addr 查找，用新 MAC 查不到旧 peer，需先删后加
-    uint8_t oldMac[6];
-    memcpy(oldMac, WirelessConfig::CAMERA_MAC, 6);
-
-    if (esp_now_del_peer(oldMac) != ESP_OK) {
-        Serial.println("[无线通信] 删除旧摄像头配对信息失败");
-    }
-
-    esp_now_peer_info_t peerInfo = {};
-    memcpy(peerInfo.peer_addr, newMac, 6);
-    peerInfo.channel = WirelessConfig::CHANNEL;
-    peerInfo.encrypt = false;
-
-    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-        Serial.println("[无线通信] 添加新摄像头配对信息失败，MAC未更新");
-        return;  // 失败时不更新全局 MAC，避免指向未注册的 peer
-    }
-
-    memcpy(WirelessConfig::CAMERA_MAC, newMac, 6);
-    Serial.println("[无线通信] 摄像头MAC更新成功");
 }
 
 #endif // WIRELESS_H
