@@ -70,15 +70,15 @@ enum class ImageQuality : uint8_t {
  * 摄像头配置结构体
  */
 struct CameraConfiguration {
-    const Resolution resolution;      // 分辨率
-    const ImageQuality quality;       // 图像质量
-    const int8_t brightness;          // 亮度（-2到2）
-    const int8_t contrast;            // 对比度（-2到2）
-    const int8_t saturation;          // 饱和度（-2到2）
-    const bool verticalFlip;          // 垂直翻转
-    const bool horizontalMirror;      // 水平镜像
-    const uint8_t fps;                // 目标帧率
-    
+    Resolution resolution;      // 分辨率
+    ImageQuality quality;       // 图像质量
+    int8_t brightness;          // 亮度（-2到2）
+    int8_t contrast;            // 对比度（-2到2）
+    int8_t saturation;          // 饱和度（-2到2）
+    bool verticalFlip;          // 垂直翻转
+    bool horizontalMirror;      // 水平镜像
+    uint8_t fps;                // 目标帧率
+
     constexpr CameraConfiguration(
         Resolution res, ImageQuality q,
         int8_t bri, int8_t con, int8_t sat,

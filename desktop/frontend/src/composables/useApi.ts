@@ -29,16 +29,21 @@ export function useApi() {
    * @throws 网络错误或 JSON 解析错误时抛出异常
    */
   const request = async <T = ApiResponse>(url: string, options?: RequestInit): Promise<T> => {
-    // 仅在有请求体时设置 Content-Type（GET 请求无需此头部）
-    const headers: Record<string, string> = {}
+    // 默认 headers：仅在有请求体时设置 Content-Type
+    const defaultHeaders: Record<string, string> = {}
     if (options?.body) {
-      headers['Content-Type'] = 'application/json'
+      defaultHeaders['Content-Type'] = 'application/json'
     }
 
-    // 合并 headers：如果调用方传入了 options.headers，则会覆盖默认的 headers
+    // 深度合并 headers：默认 headers 在前，调用方 headers 在后（可覆盖）
+    const mergedHeaders: Record<string, string> = {
+      ...defaultHeaders,
+      ...(options?.headers as Record<string, string> | undefined),
+    }
+
     const response = await fetch(url, {
-      headers,
       ...options,
+      headers: mergedHeaders,
     })
 
     // 检查 HTTP 状态码，避免对非 JSON 响应体调用 json() 导致 SyntaxError

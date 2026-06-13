@@ -248,7 +248,15 @@ inline float calculateAngularVelocity(float leftMmps, float rightMmps) {
  * 输出：新航向(弧度)
  */
 inline float updateHeading(float heading, float angularVelocity, float dtSec) {
-    return heading + angularVelocity * dtSec;
+    // 更新航向角并归一化到 [0, 2π)，防止持续累加导致 int16_t 溢出
+    float newHeading = heading + angularVelocity * dtSec;
+    const float TWO_PI = 2.0f * M_PI;
+    // fmod 处理负数时结果可能为负，需要额外调整
+    newHeading = fmod(newHeading, TWO_PI);
+    if (newHeading < 0.0f) {
+        newHeading += TWO_PI;
+    }
+    return newHeading;
 }
 
 // ============================================

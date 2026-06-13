@@ -12,6 +12,9 @@ use esp_smart_car_backend::{api, serial, websocket, AppState};
 /// 主函数
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // 加载环境变量（必须在日志初始化之前，否则 .env 中的 RUST_LOG 不生效）
+    dotenvy::dotenv().ok();
+
     // 初始化日志
     tracing_subscriber::fmt()
         .with_env_filter("info,esp_smart_car_backend=debug")
@@ -20,18 +23,27 @@ async fn main() -> anyhow::Result<()> {
     info!("智能车桌面端后端启动");
     info!("版本: 1.2.0");
 
-    // 加载环境变量
-    dotenvy::dotenv().ok();
-
     // 创建应用状态
     let state = Arc::new(AppState::new());
 
-    // 启动串口通信任务
+    // 启动串口通信任务（退出后自动重启，防止"假死"）
     let serial_state = state.clone();
     tokio::spawn(async move {
-        if let Err(e) = serial::run_serial_task(serial_state).await {
-            warn!("串口任务错误: {}", e);
+        loop {
+            if let Err(e) = serial::run_serial_task(serial_state.clone()).await {
+                warn!("串口任务错误: {}, 3秒后重启", e);
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+            } else {
+                // 正常退出（如断开连接），短暂等待后重启
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+            }
         }
+    });
+
+    // 启动串口扫描任务
+    let port_scan_state = state.clone();
+    tokio::spawn(async move {
+        serial::run_port_scan_task(port_scan_state).await;
     });
 
     // 构建路由

@@ -35,7 +35,8 @@ enum class CommandType : uint8_t {
     STATUS = 7,      // 状态查询
     ODOMETRY = 8,    // 测速数据上报
     CALIBRATE = 9,   // 校准命令
-    DRIVE_MODE = 10  // 行走模式切换
+    DRIVE_MODE = 10, // 行走模式切换
+    MAC_CONFIG = 11  // MAC地址配置
 };
 
 /**
@@ -139,11 +140,11 @@ namespace WirelessConfig {
     constexpr uint8_t CHANNEL = 1;            // 通信信道
     
     // 接收器MAC地址（需与接收器固件一致）
-    constexpr uint8_t RECEIVER_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
-    // 车载端MAC地址
-    constexpr uint8_t CAR_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02};
-    // 摄像头MAC地址
-    constexpr uint8_t CAMERA_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x03};
+    inline uint8_t RECEIVER_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
+    // 车载端MAC地址（非 const，支持运行时修改）
+    inline uint8_t CAR_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02};
+    // 摄像头MAC地址（非 const，支持运行时修改）
+    inline uint8_t CAMERA_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x03};
 }
 
 namespace StreamConfig {
@@ -330,6 +331,20 @@ inline bool initializeWireless(DeviceRole role) {
         return false;
     }
     
+    // 接收器需要额外配对摄像头，用于转发云台控制等命令
+    if (role == DeviceRole::RECEIVER) {
+        memset(&g_peerInfo, 0, sizeof(g_peerInfo));
+        memcpy(g_peerInfo.peer_addr, WirelessConfig::CAMERA_MAC, 6);
+        g_peerInfo.channel = WirelessConfig::CHANNEL;
+        g_peerInfo.encrypt = false;
+        
+        if (esp_now_add_peer(&g_peerInfo) != ESP_OK) {
+            Serial.println("[无线通信] 添加摄像头配对设备失败");
+            return false;
+        }
+        Serial.println("[无线通信] 摄像头配对设备添加成功");
+    }
+    
     Serial.println("[无线通信] ESP-NOW 初始化成功");
     return true;
 }
@@ -384,6 +399,38 @@ inline bool sendToCar(const WirelessPacket& packet) {
  */
 inline bool sendToCamera(const WirelessPacket& packet) {
     return sendPacket(WirelessConfig::CAMERA_MAC, packet);
+}
+
+/**
+ * 设置目标车载端MAC地址
+ * 输入：6字节MAC地址指针
+ */
+inline void setTargetCarMac(const uint8_t* newMac) {
+    memcpy(WirelessConfig::CAR_MAC, newMac, 6);
+    // 更新 ESP-NOW 配对表，使运行时修改 MAC 后发送生效
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, newMac, 6);
+    peerInfo.channel = WirelessConfig::CHANNEL;
+    peerInfo.encrypt = false;
+    if (esp_now_mod_peer(&peerInfo) != ESP_OK) {
+        Serial.println("[无线通信] 更新车载端配对信息失败");
+    }
+}
+
+/**
+ * 设置目标摄像头MAC地址
+ * 输入：6字节MAC地址指针
+ */
+inline void setTargetCameraMac(const uint8_t* newMac) {
+    memcpy(WirelessConfig::CAMERA_MAC, newMac, 6);
+    // 更新 ESP-NOW 配对表，使运行时修改 MAC 后发送生效
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, newMac, 6);
+    peerInfo.channel = WirelessConfig::CHANNEL;
+    peerInfo.encrypt = false;
+    if (esp_now_mod_peer(&peerInfo) != ESP_OK) {
+        Serial.println("[无线通信] 更新摄像头配对信息失败");
+    }
 }
 
 #endif // WIRELESS_H

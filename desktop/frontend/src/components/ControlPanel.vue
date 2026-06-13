@@ -5,39 +5,62 @@
     </div>
     
     <!-- 连接设置 -->
-    <div class="flex gap-2 items-center">
-      <select
-        v-model="selectedPort"
-        aria-label="串口选择"
-        class="flex-1 min-w-0 bg-dark-800 border border-dark-600 rounded-lg px-2 py-1.5 text-xs text-dark-100 focus:outline-none focus:border-primary-500"
-      >
-        <option value="">选择串口</option>
-        <option v-for="port in availablePorts" :key="port" :value="port">
-          {{ port }}
-        </option>
-      </select>
+    <div class="flex flex-col gap-2">
+      <div class="flex gap-2 items-center">
+        <select
+          v-model="selectedPort"
+          aria-label="串口选择"
+          class="flex-1 min-w-0 bg-dark-800 border border-dark-600 rounded-lg px-2 py-1.5 text-xs text-dark-100 focus:outline-none focus:border-primary-500"
+        >
+          <option value="">选择串口</option>
+          <option v-for="port in wsAvailablePorts" :key="port" :value="port">
+            {{ port }}
+          </option>
+        </select>
 
-      <button
-        @click="scanPorts"
-        class="px-2 py-1.5 text-xs bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg border border-dark-600 transition-colors shrink-0"
-        :disabled="isScanning"
-        :aria-label="isScanning ? '扫描中' : '扫描可用串口'"
-      >
-        {{ isScanning ? '扫描中...' : '扫描' }}
-      </button>
+        <button
+          @click="scanPorts"
+          class="px-2 py-1.5 text-xs bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg border border-dark-600 transition-colors shrink-0"
+          :disabled="isScanning"
+          :aria-label="isScanning ? '扫描中' : '扫描可用串口'"
+        >
+          {{ isScanning ? '扫描中...' : '扫描' }}
+        </button>
 
-      <button
-        @click="isConnected ? disconnect() : connect()"
-        :class="[
-          isConnected ? 'btn-danger' : 'btn-primary',
-          { 'opacity-50 cursor-not-allowed': isConnecting }
-        ]"
-        class="px-3 py-1.5 text-xs shrink-0"
-        :disabled="isConnecting"
-        :aria-label="isConnecting ? '连接中' : (isConnected ? '断开串口连接' : '连接串口')"
-      >
-        {{ isConnecting ? '连接中...' : (isConnected ? '断开' : '连接') }}
-      </button>
+        <button
+          @click="isConnected ? disconnect() : connect()"
+          :class="[
+            isConnected ? 'btn-danger' : 'btn-primary',
+            { 'opacity-50 cursor-not-allowed': isConnecting }
+          ]"
+          class="px-3 py-1.5 text-xs shrink-0"
+          :disabled="isConnecting"
+          :aria-label="isConnecting ? '连接中' : (isConnected ? '断开串口连接' : '连接串口')"
+        >
+          {{ isConnecting ? '连接中...' : (isConnected ? '断开' : '连接') }}
+        </button>
+      </div>
+
+      <!-- MAC地址设置 -->
+      <div class="flex gap-2 items-center">
+        <input
+          v-model="macAddress"
+          type="text"
+          placeholder="AA:BB:CC:DD:EE:FF"
+          aria-label="车载MAC地址"
+          class="flex-1 min-w-0 bg-dark-800 border border-dark-600 rounded-lg px-2 py-1.5 text-xs text-dark-100 focus:outline-none focus:border-primary-500 font-mono"
+          :class="{ 'border-red-500': macError }"
+        />
+        <button
+          @click="setMacAddress"
+          class="px-2 py-1.5 text-xs bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg border border-dark-600 transition-colors shrink-0"
+          :disabled="!isConnected || macError !== ''"
+          aria-label="设置车载MAC地址"
+        >
+          设置MAC
+        </button>
+      </div>
+      <p v-if="macError" class="text-[10px] text-red-400">{{ macError }}</p>
     </div>
     
     <!-- 速度控制 -->
@@ -261,11 +284,10 @@ import { useWebSocket } from '../composables/useWebSocket'
 import { useKeyboard } from '../composables/useKeyboard'
 import { useApi } from '../composables/useApi'
 
-const { sendCommand: wsSendCommand, isConnected, sendDriveMode } = useWebSocket()
+const { sendCommand: wsSendCommand, isConnected, sendDriveMode, availablePorts: wsAvailablePorts, sendMacConfig, connect: wsConnect, disconnect: wsDisconnect } = useWebSocket(true)
 const { post, get } = useApi()
 
 const selectedPort = ref('')
-const availablePorts = ref<string[]>([])
 const currentSpeed = ref(5)
 /** 连接进行中状态标志 */
 const isConnecting = ref(false)
@@ -276,6 +298,14 @@ const isScanning = ref(false)
 let speedDebounceTimer: number | null = null
 const smartDriveOn = ref(false)
 const logs = ref<{ id: number, time: string, message: string, color: string }[]>([])
+
+/** MAC地址输入值 */
+const macAddress = ref('')
+/** MAC地址格式错误提示 */
+const macError = ref('')
+
+/** MAC地址格式正则：支持 AA:BB:CC:DD:EE:FF 或 AABBCCDDEEFF */
+const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/
 
 const speedPercent = computed(() => Math.round((currentSpeed.value / 9) * 100))
 
@@ -334,6 +364,10 @@ const handleSpeedInput = () => {
 }
 
 const setSpeed = () => {
+  if (!isConnected.value) {
+    addLog('WebSocket 未连接，无法设置速度', 'warning')
+    return
+  }
   const speed = Math.round(currentSpeed.value).toString()
   wsSendCommand(speed)
 }
@@ -354,6 +388,8 @@ const connect = async () => {
     
     if (result.success) {
       addLog('串口连接成功', 'info')
+      // 串口连接成功后自动连接 WebSocket
+      wsConnect()
     } else {
       addLog(`连接失败: ${result.message}`, 'error')
     }
@@ -374,6 +410,8 @@ const disconnect = async () => {
   } catch (e) {
     addLog(`断开错误: ${e instanceof Error ? e.message : String(e)}`, 'error')
   }
+  // 串口断开时同时断开 WebSocket
+  wsDisconnect()
 }
 
 const emergencyStop = () => {
@@ -381,17 +419,32 @@ const emergencyStop = () => {
   addLog('紧急停止！', 'error')
 }
 
-/** 扫描可用串口：调用 /api/ports 获取列表并填充下拉框 */
+/** 设置MAC地址：验证格式并发送 */
+const setMacAddress = () => {
+  const mac = macAddress.value.trim()
+  if (!MAC_REGEX.test(mac)) {
+    macError.value = '格式错误，请使用 AA:BB:CC:DD:EE:FF'
+    return
+  }
+  macError.value = ''
+  const success = sendMacConfig(mac)
+  if (success) {
+    localStorage.setItem('esp_car_mac', mac)
+    addLog(`MAC地址已设置: ${mac}`, 'info')
+  } else {
+    addLog('MAC地址设置失败: WebSocket未连接', 'error')
+  }
+}
+
+/** 扫描可用串口：调用 /api/ports 获取列表并填充下拉框（兜底手动扫描） */
 const scanPorts = async () => {
   isScanning.value = true
   try {
     const result = await get<{ success: boolean; ports: string[] }>('/api/ports')
 
     if (result.success && result.ports.length > 0) {
-      availablePorts.value = result.ports
       addLog(`发现 ${result.ports.length} 个串口: ${result.ports.join(', ')}`, 'info')
     } else {
-      availablePorts.value = []
       addLog('未找到可用串口', 'warning')
     }
   } catch (e) {
@@ -402,7 +455,11 @@ const scanPorts = async () => {
 }
 
 onMounted(() => {
-  scanPorts()
+  // 从 localStorage 恢复 MAC 地址
+  const savedMac = localStorage.getItem('esp_car_mac')
+  if (savedMac) {
+    macAddress.value = savedMac
+  }
 })
 
 onUnmounted(() => {

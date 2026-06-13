@@ -140,19 +140,40 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // 创建取消令牌，用于优雅关闭视频广播任务
     let cancel_token = CancellationToken::new();
 
-    // 视频任务：通过 mpsc tx 发送视频帧
+    // 视频任务：通过 mpsc tx 发送视频帧、测速数据、串口列表
     let video_tx = tx.clone();
     let video_state = state.clone();
     let video_cancel = cancel_token.clone();
     let video_task = tokio::spawn(async move {
         let mut last_frame_hash: Option<u64> = None;
         let mut last_odometry_send = Instant::now();
+        let mut last_ports: Vec<String> = Vec::new();
 
         loop {
             // 检查取消信号
             if video_cancel.is_cancelled() {
                 debug!("视频广播任务收到取消信号，优雅退出");
                 break;
+            }
+
+            // 检查串口列表变化，变化时广播 port_list
+            let current_ports = {
+                let ports = video_state.available_ports.lock().await;
+                ports.clone()
+            };
+            if current_ports != last_ports {
+                last_ports = current_ports.clone();
+                let port_message = serde_json::json!({
+                    "type": "port_list",
+                    "ports": current_ports,
+                    "timestamp": chrono::Utc::now().timestamp_millis()
+                });
+                if let Err(e) = video_tx
+                    .send(Message::Text(port_message.to_string().into()))
+                    .await
+                {
+                    debug!("串口列表发送失败: {}", e);
+                }
             }
 
             // 获取视频帧（使用 Arc::clone 共享引用，避免 clone 整帧数据）
@@ -308,10 +329,10 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
                 {
                     let mut manager = state.serial_manager.lock().unwrap();
                     if let Err(e) = manager.send_command(cmd_byte) {
-                        warn!("发送命令失败: {}", e);
-                    } else {
-                        debug!("转发命令: {}", data);
+                        warn!("命令发送失败: {}", e);
+                        return Err(anyhow::anyhow!("命令发送失败: {}", e));
                     }
+                    debug!("转发命令: {}", data);
                 } // 显式释放 serial_manager 锁
 
                 // 如果是速度等级命令(1-9)，同步更新 current_speed
@@ -335,24 +356,56 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             *last = std::time::Instant::now();
         }
         "drive_mode" => {
-            // 行走模式切换：发送 DRIVE_MODE 命令类型 + 模式值
-            // 车端 handleDriveModeCommand 接收 packet->data 作为模式值
-            // 协议：先发 'M'/'L'/'B' 标识类型，再发模式值 0/1/2
+            // 行走模式切换：发送 'T' 标识 + 模式值
+            // 'T' 是 DRIVE_MODE 专属命令字节，与 MAC_CONFIG 的 'M' 不冲突
             if let Some(mode) = message["mode"].as_u64() {
                 {
                     let mut manager = state.serial_manager.lock().unwrap();
-                    // 发送模式标识字符
-                    let mode_char = match mode {
-                        0 => 'M', // 普通模式
-                        1 => 'L', // 直线修正模式
-                        2 => 'B', // 航向锁定模式
-                        _ => 'L',
-                    };
-                    let _ = manager.send_command(mode_char as u8);
-                    // 发送模式数值（0/1/2），车端通过 DRIVE_MODE 类型解析
-                    let _ = manager.send_command(mode as u8);
+                    // 发送 DRIVE_MODE 标识字符 'T'
+                    if let Err(e) = manager.send_command(b'T') {
+                        warn!("命令发送失败: {}", e);
+                        return Err(anyhow::anyhow!("命令发送失败: {}", e));
+                    }
+                    // 发送模式数值（0=普通, 1=直线修正, 2=航向锁定）
+                    if let Err(e) = manager.send_command(mode as u8) {
+                        warn!("命令发送失败: {}", e);
+                        return Err(anyhow::anyhow!("命令发送失败: {}", e));
+                    }
                 }
                 info!("切换行走模式: {}", mode);
+            }
+        }
+        "mac_config" => {
+            // MAC地址配置：解析MAC字符串并转发到串口
+            if let Some(mac_str) = message["mac"].as_str() {
+                if let Ok(mac_bytes) = parse_mac_address(mac_str) {
+                    {
+                        let mut manager = state.serial_manager.lock().unwrap();
+                        // MAC 配置帧格式：'M' + 0xFF 帧边界标识 + 长度字节(6) + 6字节MAC
+                        // 防止 MAC 字节恰好匹配控制字符导致接收器误动作
+                        if let Err(e) = manager.send_command(b'M') {
+                            warn!("MAC配置发送失败: {}", e);
+                            return Err(anyhow::anyhow!("MAC配置发送失败: {}", e));
+                        }
+                        if let Err(e) = manager.send_command(0xFF) {
+                            warn!("MAC配置发送失败: {}", e);
+                            return Err(anyhow::anyhow!("MAC配置发送失败: {}", e));
+                        }
+                        if let Err(e) = manager.send_command(mac_bytes.len() as u8) {
+                            warn!("MAC配置发送失败: {}", e);
+                            return Err(anyhow::anyhow!("MAC配置发送失败: {}", e));
+                        }
+                        for byte in &mac_bytes {
+                            if let Err(e) = manager.send_command(*byte) {
+                                warn!("MAC配置发送失败: {}", e);
+                                return Err(anyhow::anyhow!("MAC配置发送失败: {}", e));
+                            }
+                        }
+                    }
+                    info!("MAC地址配置已转发: {}", mac_str);
+                } else {
+                    warn!("无效的MAC地址格式: {}", mac_str);
+                }
             }
         }
         _ => {
@@ -366,6 +419,21 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
 /// Base64编码
 fn base64_encode(data: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+/// 解析MAC地址字符串（格式：AA:BB:CC:DD:EE:FF 或 AABBCCDDEEFF）
+fn parse_mac_address(mac_str: &str) -> anyhow::Result<[u8; 6]> {
+    let hex_only: String = mac_str.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    if hex_only.len() != 12 {
+        return Err(anyhow::anyhow!("MAC地址必须是6字节（12个十六进制字符）"));
+    }
+    let mut mac = [0u8; 6];
+    for i in 0..6 {
+        let byte_str = &hex_only[i * 2..i * 2 + 2];
+        mac[i] = u8::from_str_radix(byte_str, 16)
+            .map_err(|_| anyhow::anyhow!("MAC地址包含无效的十六进制字符"))?;
+    }
+    Ok(mac)
 }
 
 #[cfg(test)]
@@ -421,36 +489,33 @@ mod tests {
         assert_eq!(encoded, "AAEC");
     }
 
-    /// 测试 handle_message 处理命令消息（无串口连接时不 panic，函数正常返回）
+    /// 测试 handle_message 处理命令消息（无串口连接时返回错误）
     #[tokio::test]
     async fn test_handle_message_command() {
         let state = create_test_state();
         let msg = r#"{"type":"command","data":"W"}"#;
 
-        // 无串口连接时，send_command 会失败但 handle_message 本身应正常返回 Ok
+        // 无串口连接时，send_command 会失败，handle_message 应返回错误
         let result = handle_message(msg, &state).await;
         assert!(
-            result.is_ok(),
-            "handle_message 处理命令消息时不应返回错误: {:?}",
+            result.is_err(),
+            "无串口连接时 handle_message 处理命令消息应返回错误: {:?}",
             result
         );
     }
 
-    /// 测试 handle_message 处理速度等级命令（'1'-'9'），验证 current_speed 被更新
+    /// 测试 handle_message 处理速度等级命令（'1'-'9'），无串口时返回错误
     #[tokio::test]
     async fn test_handle_message_speed_command_updates_state() {
         let state = create_test_state();
         let msg = r#"{"type":"command","data":"7"}"#;
 
         let result = handle_message(msg, &state).await;
-        assert!(result.is_ok(), "处理速度命令不应返回错误: {:?}", result);
-
-        // 验证速度已更新为 7
-        let speed = state.current_speed.load(Ordering::Relaxed);
-        assert_eq!(speed, 7, "速度等级应更新为 7");
+        // 无串口连接时，send_command 失败，handle_message 返回错误
+        assert!(result.is_err(), "无串口连接时处理速度命令应返回错误: {:?}", result);
     }
 
-    /// 测试 handle_message 处理行走模式切换消息（无串口连接时不 panic）
+    /// 测试 handle_message 处理行走模式切换消息（无串口连接时返回错误）
     #[tokio::test]
     async fn test_handle_message_drive_mode() {
         let state = create_test_state();
@@ -459,8 +524,8 @@ mod tests {
         let msg = r#"{"type":"drive_mode","mode":0}"#;
         let result = handle_message(msg, &state).await;
         assert!(
-            result.is_ok(),
-            "handle_message 处理行走模式消息时不应返回错误: {:?}",
+            result.is_err(),
+            "无串口连接时 handle_message 处理行走模式消息应返回错误: {:?}",
             result
         );
 
@@ -468,8 +533,8 @@ mod tests {
         let msg = r#"{"type":"drive_mode","mode":1}"#;
         let result = handle_message(msg, &state).await;
         assert!(
-            result.is_ok(),
-            "handle_message 处理直线修正模式时不应返回错误: {:?}",
+            result.is_err(),
+            "无串口连接时 handle_message 处理直线修正模式应返回错误: {:?}",
             result
         );
 
@@ -477,8 +542,8 @@ mod tests {
         let msg = r#"{"type":"drive_mode","mode":2}"#;
         let result = handle_message(msg, &state).await;
         assert!(
-            result.is_ok(),
-            "handle_message 处理航向锁定模式时不应返回错误: {:?}",
+            result.is_err(),
+            "无串口连接时 handle_message 处理航向锁定模式应返回错误: {:?}",
             result
         );
     }
@@ -594,5 +659,76 @@ mod tests {
         // 验证剩余客户端数
         let m = manager.lock().await;
         assert_eq!(m.client_count(), 2, "移除 3 个后应剩余 2 个客户端");
+    }
+
+    /// 测试 parse_mac_address 解析标准格式 MAC
+    #[test]
+    fn test_parse_mac_address_standard() {
+        let mac = parse_mac_address("AA:BB:CC:DD:EE:FF").expect("标准格式MAC应解析成功");
+        assert_eq!(mac, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+    }
+
+    /// 测试 parse_mac_address 解析无分隔符格式
+    #[test]
+    fn test_parse_mac_address_no_separator() {
+        let mac = parse_mac_address("AABBCCDDEEFF").expect("无分隔符MAC应解析成功");
+        assert_eq!(mac, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+    }
+
+    /// 测试 parse_mac_address 解析小写格式
+    #[test]
+    fn test_parse_mac_address_lowercase() {
+        let mac = parse_mac_address("aa:bb:cc:dd:ee:ff").expect("小写MAC应解析成功");
+        assert_eq!(mac, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
+    }
+
+    /// 测试 parse_mac_address 无效长度应失败
+    #[test]
+    fn test_parse_mac_address_invalid_length() {
+        assert!(
+            parse_mac_address("AA:BB:CC:DD:EE").is_err(),
+            "5字节MAC应解析失败"
+        );
+        assert!(
+            parse_mac_address("AA:BB:CC:DD:EE:FF:00").is_err(),
+            "7字节MAC应解析失败"
+        );
+    }
+
+    /// 测试 parse_mac_address 包含无效字符应失败
+    #[test]
+    fn test_parse_mac_address_invalid_chars() {
+        assert!(
+            parse_mac_address("GG:BB:CC:DD:EE:FF").is_err(),
+            "包含G的MAC应解析失败"
+        );
+    }
+
+    /// 测试 handle_message 处理 mac_config 消息（无串口连接时返回错误）
+    #[tokio::test]
+    async fn test_handle_message_mac_config() {
+        let state = create_test_state();
+        let msg = r#"{"type":"mac_config","mac":"AA:BB:CC:DD:EE:FF"}"#;
+
+        let result = handle_message(msg, &state).await;
+        assert!(
+            result.is_err(),
+            "无串口连接时 handle_message 处理 mac_config 应返回错误: {:?}",
+            result
+        );
+    }
+
+    /// 测试 handle_message 处理无效 mac_config 格式
+    #[tokio::test]
+    async fn test_handle_message_mac_config_invalid() {
+        let state = create_test_state();
+        let msg = r#"{"type":"mac_config","mac":"invalid"}"#;
+
+        let result = handle_message(msg, &state).await;
+        assert!(
+            result.is_ok(),
+            "handle_message 处理无效 mac_config 时不应返回错误: {:?}",
+            result
+        );
     }
 }

@@ -40,14 +40,14 @@ const POLL_INTERVAL = 1000 // 1 秒轮询间隔
 function createStatusPoller() {
   const { get } = useApi()
 
-  // 响应式状态
+  // 响应式状态（初始值将在首次 fetchStatus 时从后端覆盖）
   const status: Ref<StatusData> = ref({
     serial_status: '未连接',
     port_name: null,
     baud_rate: null,
     frame_count: 0,
     bytes_sent: 0,
-    current_speed: 5,
+    current_speed: 0,
     ws_clients: 0,
     uptime: 0,
     version: '',

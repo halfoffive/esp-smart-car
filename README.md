@@ -124,9 +124,8 @@ esp-smart-car/
 | H | 云台左 | - |
 | K | 云台右 | - |
 | C | 云台居中 | - |
-| M | 普通模式（无修正） | mode=0 |
-| L | 直线修正模式 | mode=1 |
-| B | 航向锁定模式 | mode=2 |
+| M | MAC地址配置 | 6字节MAC |
+| T | 行走模式切换 | 1字节模式值(0/1/2) |
 
 ## 安装说明
 
@@ -183,7 +182,8 @@ bun run build
 3. 连接电脑端接收器（ESP32-C6）到电脑 USB
 4. 启动 Rust 后端（自动提供前端页面）
 5. 在浏览器中打开 `http://localhost:8080`
-6. 在 Web UI 中连接串口
+6. 在 Web UI 中连接串口（串口列表会自动通过 WebSocket 实时推送）
+7. （可选）在控制面板中设置车载 ESP32-C6 的 MAC 地址，支持动态配对
 
 ## 开发说明
 
@@ -223,7 +223,7 @@ void applyVehicleMotion(const VehicleMotion& motion) {
 
 ```bash
 cd desktop/backend
-cargo test         # 运行所有 35 个 Rust 测试（无需硬件连接）
+cargo test         # 运行所有 43 个 Rust 测试（无需硬件连接）
 cargo clippy       # 静态分析检查
 ```
 
@@ -245,6 +245,12 @@ cargo clippy       # 静态分析检查
 - 检查 PWM 信号
 
 ## 版本历史
+
+- v1.6.0 - 2026-06-12
+  - 自动串口扫描：后端每秒扫描可用串口，变化时通过 WebSocket 主动推送给前端
+  - MAC 地址动态配置：前端可输入车载 ESP32-C6 的 MAC 地址，通过 WebSocket 下发到接收器，支持 `localStorage` 持久化
+  - 固件支持运行时修改目标 MAC 地址，`wireless.h` 中 MAC 数组从 `constexpr` 改为可变
+  - 后端新增 7 个测试，总计 43 个测试全部通过
 
 - v1.5.2 - 2026-06-12
   - 添加串口扫描功能：ControlPanel.vue 新增"扫描"按钮，调用 `GET /api/ports` 获取可用串口列表，页面加载时自动扫描

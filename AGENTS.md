@@ -139,6 +139,15 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-13 - DRIVE_MODE 协议重构：消除 'M' 命令字节冲突
+- **范围**: 后端 Rust + 嵌入式固件，修复 DRIVE_MODE 与 MAC_CONFIG 共用 'M' 命令字节的冲突
+- **修复**:
+  - `websocket.rs` — `drive_mode` 处理从发送 'M'/'L'/'B' + 模式值改为发送 'T' + 模式值，'T' 为 DRIVE_MODE 专属命令字节
+  - `receiver_dongle.ino` — `parseSerialCommand` 新增 'T'/'t' case；`getCommandType` 新增 'T'/'t' → `CommandType::DRIVE_MODE` 映射；`forwardToCar` 新增 DRIVE_MODE 分支：读取1字节模式值，构建 WirelessPacket 发送到 CAR_MAC
+  - `car_controller.ino` — 无线命令处理 DRIVE_MODE case 添加 `g_lastCmdTime = millis()`，防止行走模式切换后1秒超时自动停止
+  - `serial.rs` — 修复 `read_frame_data` 双重可变借用编译错误：移除 `&mut self` 和 `frame_count` 参数，改为独立函数，帧计数在调用方更新
+- **验证**: `cargo clippy` 0 errors；`bun run build` 成功；`cargo test` 因 Rust 1.96.0 ICE 无法运行
+
 ### 2026-06-12 - 串口扫描功能
 - **范围**: 前端 ControlPanel.vue 串口连接体验优化
 - **修复**:
@@ -183,6 +192,30 @@ Key connections:
   - 控制按钮激活态添加 cyan glow 阴影微交互
   - 视频区域添加半透明扫描线纹理，增强科技感
 - **验证**: `bun run build` 成功；`cargo test`/`cargo clippy` 因 Rust 1.96.0 编译器 ICE（已知 bug）暂无法运行
+
+### 2026-06-12 - 自动串口扫描与MAC地址设置
+- **范围**: 后端 Rust + 前端 Vue + 嵌入式固件三部分，新增自动串口扫描和MAC地址动态配置
+- **新增功能**:
+  - `lib.rs` — `AppState` 新增 `available_ports`（`tokio::sync::Mutex<Vec<String>>`）和 `last_ports`（`std::sync::Mutex<Vec<String>>`）字段，存储可用串口列表
+  - `serial.rs` — 新增 `run_port_scan_task` 后台任务，每秒扫描可用串口，列表变化时更新 `available_ports`
+  - `main.rs` — 启动串口扫描任务 `tokio::spawn(serial::run_port_scan_task(state.clone()))`
+  - `websocket.rs` — `video_task` 中新增串口列表变化检测，变化时广播 `{"type":"port_list","ports":[...]}` 消息给所有前端客户端
+  - `websocket.rs` — 新增 `mac_config` 消息处理分支，解析MAC地址并通过串口转发（先发送 'M' 标识，再发送6字节MAC）
+  - `websocket.rs` — 新增 `parse_mac_address` 辅助函数，支持 `AA:BB:CC:DD:EE:FF` 和 `AABBCCDDEEFF` 两种格式
+  - `useWebSocket.ts` — 新增 `availablePorts: Ref<string[]>` 状态，处理 `port_list` 消息自动更新串口列表
+  - `useWebSocket.ts` — 新增 `sendMacConfig(mac: string): boolean` 函数，发送 `mac_config` WebSocket消息
+  - `ControlPanel.vue` — 串口下拉框改为使用 `wsAvailablePorts`（WebSocket推送），保留手动扫描按钮作为兜底
+  - `ControlPanel.vue` — 新增MAC地址输入框（格式 `AA:BB:CC:DD:EE:FF`）和"设置MAC"按钮，支持 `localStorage` 持久化
+  - `wireless.h` — `RECEIVER_MAC`/`CAR_MAC`/`CAMERA_MAC` 从 `constexpr` 改为 `inline uint8_t` 数组，支持运行时修改
+  - `wireless.h` — 新增 `CommandType::MAC_CONFIG = 11` 和 `setTargetCarMac`/`setTargetCameraMac` 函数
+  - `receiver_dongle.ino` — `parseSerialCommand` 和 `getCommandType` 新增 'M' 命令支持
+  - `receiver_dongle.ino` — 新增 `readMacBytes` 函数，从串口读取6字节MAC地址（带100ms超时）
+  - `receiver_dongle.ino` — `forwardToCar` 中处理 `MAC_CONFIG` 类型，读取MAC并调用 `setTargetCarMac`
+- **测试**:
+  - `websocket.rs` — 新增 6 个测试：`parse_mac_address` 标准格式/无分隔符/小写/无效长度/无效字符；`handle_message` mac_config 有效/无效格式
+  - `serial.rs` — 新增 1 个测试：`test_app_state_ports_initially_empty`
+  - 总计 43 个测试全部通过（37 unit + 1 main + 5 integration）
+- **验证**: `bun run build` 成功；`cargo test` 43 测试全过；`cargo clippy` 0 errors
 
 ### 2026-06-09 - P0 固件编译错误修复（5项严重错误）
 - **范围**: 嵌入式固件全面编译错误修复，重构 wireless.h 为 Arduino 库

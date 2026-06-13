@@ -131,13 +131,18 @@ namespace PIDControllerState {
     // PID 状态
     PIDState g_straightPidState = PIDState(0, 0, 0, 0, 0, 0, 0, 0);
     PIDState g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, 0, 0);
-    
+
     // 行走模式
     DriveMode g_driveMode = DriveMode::STRAIGHT_LINE;
-    
+
     // 目标航向（锁定航向模式下使用）
     float g_targetHeading = 0.0f;
-    
+
+    // 航向锁定目标角度（进入锁定模式时捕获当前航向）
+    float g_headingLockTarget = 0.0f;
+    // 航向锁定目标是否已初始化
+    bool g_headingLockTargetInitialized = false;
+
     // 直线模式使能
     bool g_straightLineEnabled = true;
 }
@@ -281,37 +286,70 @@ inline SmartMotorOutput updateSmartControl(
     MotorDirection rightDir
 ) {
     const uint32_t now = millis();
-    
-    // 如果直线模式未启用或电机停止，直接输出基础PWM
-    if (!PIDControllerState::g_straightLineEnabled || 
-        leftDir == MotorDirection::STOP) {
+
+    // 如果电机停止，直接输出基础PWM
+    if (leftDir == MotorDirection::STOP) {
         return SmartMotorOutput(
             basePwm, basePwm, leftDir, rightDir, 0.0f, false
         );
     }
-    
+
+    const DriveMode currentMode = PIDControllerState::g_driveMode;
+
+    if (currentMode == DriveMode::NORMAL) {
+        // 普通模式：无修正
+        return SmartMotorOutput(
+            basePwm, basePwm, leftDir, rightDir, 0.0f, false
+        );
+    }
+
     // 获取当前速度数据
     const float leftSpeed = OdometerState::g_leftSpeedMmps;
     const float rightSpeed = OdometerState::g_rightSpeedMmps;
-    
-    // 计算速度差（目标：左右轮速度相等，即差值为0）
-    const float speedDiff = rightSpeed - leftSpeed;
-    
-    // PID 计算：目标是速度差为0
-    PIDControllerState::g_straightPidState = computePID(
-        PIDDefaults::STRAIGHT_PID,
-        PIDControllerState::g_straightPidState,
-        speedDiff,    // 输入：速度差
-        0.0f,         // 目标值：速度差为0
-        now
-    );
-    
-    // 应用修正
-    const float correction = PIDControllerState::g_straightPidState.output;
-    
-    return applyStraightCorrection(
-        basePwm, leftDir, rightDir,
-        leftSpeed, rightSpeed, correction
+
+    if (currentMode == DriveMode::STRAIGHT_LINE) {
+        // 直线修正模式：使用速度差 PID
+        const float speedDiff = rightSpeed - leftSpeed;
+        PIDControllerState::g_straightPidState = computePID(
+            PIDDefaults::STRAIGHT_PID,
+            PIDControllerState::g_straightPidState,
+            speedDiff,
+            0.0f,
+            now
+        );
+        const float correction = PIDControllerState::g_straightPidState.output;
+        return applyStraightCorrection(
+            basePwm, leftDir, rightDir,
+            leftSpeed, rightSpeed, correction
+        );
+    }
+
+    if (currentMode == DriveMode::HEADING_LOCK) {
+        // 航向锁定模式：使用航向 PID，锁定当前航向角
+        // 目标航向为进入锁定模式时的航向
+        if (!PIDControllerState::g_headingLockTargetInitialized) {
+            PIDControllerState::g_headingLockTarget = OdometerState::g_heading;
+            PIDControllerState::g_headingLockTargetInitialized = true;
+        }
+
+        const float headingError = OdometerState::g_heading - PIDControllerState::g_headingLockTarget;
+        PIDControllerState::g_straightPidState = computePID(
+            PIDDefaults::STRAIGHT_PID,
+            PIDControllerState::g_straightPidState,
+            headingError,
+            0.0f,
+            now
+        );
+        const float correction = PIDControllerState::g_straightPidState.output;
+        return applyStraightCorrection(
+            basePwm, leftDir, rightDir,
+            leftSpeed, rightSpeed, correction
+        );
+    }
+
+    // 默认：无修正
+    return SmartMotorOutput(
+        basePwm, basePwm, leftDir, rightDir, 0.0f, false
     );
 }
 
@@ -319,13 +357,20 @@ inline SmartMotorOutput updateSmartControl(
  * 切换行走模式
  */
 inline void setDriveMode(DriveMode mode) {
-    PIDControllerState::g_driveMode = mode;
-    
-    // 切换到锁定航向模式时，锁定当前航向
-    if (mode == DriveMode::HEADING_LOCK) {
-        PIDControllerState::g_targetHeading = OdometerState::g_heading;
+    // 切换离开航向锁定模式时，重置锁定目标
+    if (PIDControllerState::g_driveMode == DriveMode::HEADING_LOCK &&
+        mode != DriveMode::HEADING_LOCK) {
+        PIDControllerState::g_headingLockTargetInitialized = false;
     }
-    
+
+    PIDControllerState::g_driveMode = mode;
+
+    // 切换到锁定航向模式时，重置标志以便捕获当前航向
+    if (mode == DriveMode::HEADING_LOCK) {
+        PIDControllerState::g_headingLockTargetInitialized = false;
+        PIDControllerState::g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, 0, millis());
+    }
+
     const char* modeName = "";
     switch (mode) {
         case DriveMode::NORMAL: modeName = "普通模式"; break;

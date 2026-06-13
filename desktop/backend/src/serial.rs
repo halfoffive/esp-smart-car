@@ -13,7 +13,7 @@
  * 发送：单字节命令（W/A/S/D/1-9/空格等）
  * 接收：[0xAA][0x55][帧大小(4字节)][帧数据]
  */
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -70,10 +70,20 @@ pub enum SerialConnectionState {
     Error(String),
 }
 
+/// 串口读取结果（统一缓冲状态机）
+pub enum SerialReadResult {
+    /// 读取到视频帧
+    VideoFrame(Vec<u8>),
+    /// 读取到测速数据行
+    OdometryLine(String),
+    /// 无数据（超时）
+    NoData,
+}
+
 /// 串口管理器
 pub struct SerialManager {
-    /// 当前串口连接
-    port: Option<Box<dyn SerialPort>>,
+    /// 当前串口连接（使用 BufReader 缓冲读取，解决帧头重叠遗漏问题）
+    port: Option<BufReader<Box<dyn SerialPort>>>,
     /// 连接状态
     pub state: SerialConnectionState,
     /// 已接收的帧数
@@ -82,8 +92,6 @@ pub struct SerialManager {
     pub bytes_sent: u64,
     /// 已发送的命令数
     pub command_count: u64,
-    /// 行缓冲区（用于解析测速JSON行）
-    line_buffer: Vec<u8>,
 }
 
 impl Default for SerialManager {
@@ -101,7 +109,6 @@ impl SerialManager {
             frame_count: 0,
             bytes_sent: 0,
             command_count: 0,
-            line_buffer: Vec::new(),
         }
     }
 
@@ -161,7 +168,7 @@ impl SerialManager {
             }
         };
 
-        self.port = Some(port);
+        self.port = Some(BufReader::new(port));
         self.state = SerialConnectionState::Connected {
             port_name: port_name.to_string(),
             baud_rate,
@@ -183,8 +190,8 @@ impl SerialManager {
     /// 发送命令
     pub fn send_command(&mut self, cmd: u8) -> Result<()> {
         if let Some(ref mut port) = self.port {
-            port.write_all(&[cmd])?;
-            port.flush()?;
+            port.get_mut().write_all(&[cmd])?;
+            port.get_mut().flush()?;
             self.bytes_sent += 1;
             self.command_count += 1;
             debug!("发送命令: 0x{:02X} ('{}')", cmd, cmd as char);
@@ -192,49 +199,6 @@ impl SerialManager {
         } else {
             Err(anyhow::anyhow!("串口未连接"))
         }
-    }
-
-    /// 读取串口行数据（非视频帧，测速JSON行）
-    /// 返回完整行（去除换行符）
-    pub fn read_line(&mut self) -> Option<String> {
-        if let Some(ref mut port) = self.port {
-            let mut byte = [0u8; 1];
-            loop {
-                match port.read_exact(&mut byte) {
-                    Ok(()) => {
-                        self.line_buffer.push(byte[0]);
-                        // 检测换行符
-                        if byte[0] == b'\n' {
-                            // 去除可能的 \r\n
-                            while self.line_buffer.last() == Some(&b'\n')
-                                || self.line_buffer.last() == Some(&b'\r')
-                            {
-                                self.line_buffer.pop();
-                            }
-                            if !self.line_buffer.is_empty() {
-                                // 使用 String::from_utf8 严格检查，非 UTF-8 时记录日志并丢弃
-                                match String::from_utf8(self.line_buffer.clone()) {
-                                    Ok(line) => {
-                                        self.line_buffer.clear();
-                                        return Some(line);
-                                    }
-                                    Err(e) => {
-                                        warn!("非 UTF-8 数据，已丢弃: {:?}", e.utf8_error());
-                                        self.line_buffer.clear();
-                                        return None;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        // 超时或错误，返回当前缓冲区
-                        return None;
-                    }
-                }
-            }
-        }
-        None
     }
 
     /// 解析测速JSON行
@@ -260,74 +224,173 @@ impl SerialManager {
         })
     }
 
-    /// 读取视频帧
-    pub fn read_video_frame(&mut self, buffer: &mut Vec<u8>) -> Result<bool> {
-        if let Some(ref mut port) = self.port {
-            let mut header = [0u8; 2];
+    /// 读取视频帧（帧头已确认后读取帧大小和数据）
+    /// 独立函数，仅接收 port 参数，避免与 self.port 的可变借用冲突
+    fn read_frame_data(
+        port: &mut BufReader<Box<dyn SerialPort>>,
+    ) -> Result<SerialReadResult> {
+        let mut size_bytes = [0u8; 4];
+        port.read_exact(&mut size_bytes)?;
+        let frame_size = u32::from_le_bytes(size_bytes) as usize;
+        if frame_size > 256 * 1024 || frame_size == 0 {
+            warn!("帧大小异常: {} 字节", frame_size);
+            return Ok(SerialReadResult::NoData);
+        }
+        let mut frame_data = vec![0u8; frame_size];
+        port.read_exact(&mut frame_data)?;
+        debug!("接收帧: {} 字节", frame_size);
+        Ok(SerialReadResult::VideoFrame(frame_data))
+    }
 
-            // 查找帧头（添加总超时限制 5 秒）
+    /// 统一读取方法：同时处理视频帧和测速JSON行
+    /// 解决帧头重叠遗漏和视频/测速数据互斥吞没问题
+    pub fn read_next(&mut self) -> Result<SerialReadResult> {
+        if let Some(ref mut port) = self.port {
+            // 策略：逐字节读取，维护一个行缓冲区
+            // - 遇到 0xAA 时尝试匹配帧头 0xAA 0x55
+            // - 如果 0xAA 后不是 0x55，只丢弃第一个 0xAA，保留第二个字节重新检查
+            // - 遇到 \n 时，将行缓冲区内容作为测速数据返回
+            // - 设置5秒总超时
+
             let start = std::time::Instant::now();
-            let mut found = false;
+            let mut line_buf: Vec<u8> = Vec::new();
+
             while start.elapsed() < Duration::from_secs(5) {
-                if let Ok(()) = port.read_exact(&mut header[0..1]) {
-                    if header[0] == FRAME_HEADER[0] {
-                        if let Ok(()) = port.read_exact(&mut header[1..2]) {
-                            if header[1] == FRAME_HEADER[1] {
-                                found = true;
-                                break;
+                let mut byte = [0u8; 1];
+                match port.read(&mut byte) {
+                    Ok(0) => continue,
+                    Ok(_) => {
+                        let b = byte[0];
+
+                        if b == FRAME_HEADER[0] {
+                            // 可能是帧头起始，尝试读取第二个字节
+                            let mut second = [0u8; 1];
+                            match port.read(&mut second) {
+                                Ok(0) => {
+                                    // 只读到一个 0xAA，后面没有更多数据
+                                    // 将 0xAA 加入行缓冲区（可能是测速数据的一部分）
+                                    line_buf.push(b);
+                                    continue;
+                                }
+                                Ok(_) => {
+                                    if second[0] == FRAME_HEADER[1] {
+                                        // 找到帧头 0xAA 0x55
+                                        let result = Self::read_frame_data(port);
+                                        self.frame_count += 1;
+                                        return result;
+                                    } else {
+                                        // 0xAA 后不是 0x55，只丢弃第一个 0xAA
+                                        // 将第二个字节重新检查（可能是下一个 0xAA）
+                                        // 关键修复：不丢弃第二个字节
+                                        line_buf.push(b); // 丢弃第一个 0xAA（加入行缓冲）
+                                        // 重新处理第二个字节
+                                        if second[0] == FRAME_HEADER[0] {
+                                            // 第二个字节也是 0xAA，可能是帧头的开始
+                                            // 尝试读取第三个字节
+                                            let mut third = [0u8; 1];
+                                            match port.read(&mut third) {
+                                                Ok(0) => {
+                                                    line_buf.push(second[0]);
+                                                    continue;
+                                                }
+                                                Ok(_) => {
+                                                    if third[0] == FRAME_HEADER[1] {
+                                                        // 找到 0xAA 0x55 帧头！
+                                                        let result = Self::read_frame_data(port);
+                                                        self.frame_count += 1;
+                                                        return result;
+                                                    } else {
+                                                        // 0xAA 0xAA 0xXX (XX != 0x55)
+                                                        line_buf.push(second[0]);
+                                                        line_buf.push(third[0]);
+                                                        continue;
+                                                    }
+                                                }
+                                                Err(ref e)
+                                                    if e.kind()
+                                                        == std::io::ErrorKind::TimedOut =>
+                                                {
+                                                    line_buf.push(second[0]);
+                                                    continue;
+                                                }
+                                                Err(e) => {
+                                                    return Err(anyhow::anyhow!(
+                                                        "串口读取错误: {}",
+                                                        e
+                                                    ));
+                                                }
+                                            }
+                                        } else {
+                                            line_buf.push(second[0]);
+                                            continue;
+                                        }
+                                    }
+                                }
+                                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                                    // 读取超时，0xAA 后面没有更多数据
+                                    line_buf.push(b);
+                                    continue;
+                                }
+                                Err(e) => {
+                                    return Err(anyhow::anyhow!("串口读取错误: {}", e));
+                                }
                             }
+                        } else if b == b'\n' {
+                            // 行结束，尝试解析为测速JSON
+                            if !line_buf.is_empty() {
+                                match String::from_utf8(line_buf.clone()) {
+                                    Ok(line) => {
+                                        line_buf.clear();
+                                        return Ok(SerialReadResult::OdometryLine(line));
+                                    }
+                                    Err(_) => {
+                                        // 非 UTF-8 数据，丢弃
+                                        line_buf.clear();
+                                        continue;
+                                    }
+                                }
+                            }
+                        } else {
+                            line_buf.push(b);
                         }
+                    }
+                    Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
+                        // 读取超时，检查行缓冲区是否有数据
+                        if !line_buf.is_empty() {
+                            // 没有完整行，继续等待
+                            continue;
+                        }
+                        return Ok(SerialReadResult::NoData);
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("串口读取错误: {}", e));
                     }
                 }
             }
 
-            if !found {
-                return Ok(false);
-            }
-
-            // 读取帧大小（4字节）
-            let mut size_bytes = [0u8; 4];
-            port.read_exact(&mut size_bytes)?;
-            let frame_size = u32::from_le_bytes(size_bytes) as usize;
-
-            // 检查帧大小是否合理（上限 256KB）
-            if frame_size > 256 * 1024 || frame_size == 0 {
-                warn!("帧大小异常: {} 字节", frame_size);
-                return Ok(false);
-            }
-
-            // 读取帧数据
-            buffer.resize(frame_size, 0);
-            port.read_exact(buffer)?;
-
-            self.frame_count += 1;
-            debug!("接收帧 #{}: {} 字节", self.frame_count, frame_size);
-
-            Ok(true)
+            // 超时
+            Ok(SerialReadResult::NoData)
         } else {
-            Ok(false)
+            Ok(SerialReadResult::NoData)
         }
     }
 }
 
 /// 串口任务结果（用于 spawn_blocking 与 async 上下文间传递数据）
-/// 所有变体都携带 buffer，确保帧缓冲区在非视频路径上也能恢复复用
 enum SerialTaskResult {
     /// 读取到视频帧
     VideoFrame(Vec<u8>),
-    /// 读取到测速数据行（buffer 未被消费，需恢复）
-    OdometryLine { line: String, buffer: Vec<u8> },
-    /// 无数据（buffer 未被消费，需恢复）
-    NoData(Vec<u8>),
-    /// 错误（buffer 未被消费，需恢复）
-    Error { msg: String, buffer: Vec<u8> },
+    /// 读取到测速数据行
+    OdometryLine(String),
+    /// 无数据
+    NoData,
+    /// 错误
+    Error { msg: String },
 }
 
 /// 串口通信任务（在独立线程中运行）
 pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
     info!("串口通信任务启动");
-
-    let mut frame_buffer = Vec::new();
 
     loop {
         // 检查串口是否连接
@@ -338,30 +401,23 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
 
         if is_connected {
             let state_clone = Arc::clone(&state);
-            // 使用 std::mem::take 获取所有权，避免不必要的 clone
-            let mut local_buffer = std::mem::take(&mut frame_buffer);
 
             // 在 spawn_blocking 中执行阻塞 I/O，避免阻塞 Tokio 运行时
             let result = tokio::task::spawn_blocking(move || {
                 let mut manager = state_clone.serial_manager.lock().unwrap();
 
-                // 读取视频帧
-                match manager.read_video_frame(&mut local_buffer) {
-                    Ok(true) => SerialTaskResult::VideoFrame(local_buffer),
-                    Ok(false) => {
-                        // 尝试读取测速数据行
-                        if let Some(line) = manager.read_line() {
-                            SerialTaskResult::OdometryLine {
-                                line,
-                                buffer: local_buffer,
-                            }
-                        } else {
-                            SerialTaskResult::NoData(local_buffer)
-                        }
+                // 统一读取：同时处理视频帧和测速JSON行
+                let result = manager.read_next();
+                match result {
+                    Ok(SerialReadResult::VideoFrame(data)) => {
+                        SerialTaskResult::VideoFrame(data)
                     }
+                    Ok(SerialReadResult::OdometryLine(line)) => {
+                        SerialTaskResult::OdometryLine(line)
+                    }
+                    Ok(SerialReadResult::NoData) => SerialTaskResult::NoData,
                     Err(e) => SerialTaskResult::Error {
                         msg: e.to_string(),
-                        buffer: local_buffer,
                     },
                 }
             })
@@ -374,12 +430,8 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                         let mut video = state.video_frame.lock().unwrap();
                         *video = Some(Arc::new(buffer));
                     }
-                    // 恢复帧缓冲区以复用（无需 take，因为视频帧已通过 Arc 共享）
-                    frame_buffer = Vec::new();
                 }
-                Ok(SerialTaskResult::OdometryLine { line, buffer }) => {
-                    // 恢复帧缓冲区以复用（避免每次重新分配）
-                    frame_buffer = buffer;
+                Ok(SerialTaskResult::OdometryLine(line)) => {
                     // serial_manager 锁已释放，单独获取 odometry 锁
                     if let Some(odom_data) = SerialManager::parse_odometry_line(&line) {
                         let mut odom = state.odometry.lock().await;
@@ -392,15 +444,11 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                         );
                     }
                 }
-                Ok(SerialTaskResult::NoData(buffer)) => {
-                    // 恢复帧缓冲区以复用
-                    frame_buffer = buffer;
+                Ok(SerialTaskResult::NoData) => {
                     // 无数据，短暂等待
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
-                Ok(SerialTaskResult::Error { msg, buffer }) => {
-                    // 恢复帧缓冲区以复用
-                    frame_buffer = buffer;
+                Ok(SerialTaskResult::Error { msg }) => {
                     error!("串口读取错误: {}", msg);
                     let mut manager = state.serial_manager.lock().unwrap();
                     manager.disconnect();
@@ -424,6 +472,39 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
             // 未连接，等待
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+    }
+}
+
+/// 串口扫描任务（每 1 秒扫描一次可用串口，变化时更新状态）
+pub async fn run_port_scan_task(state: std::sync::Arc<AppState>) {
+    info!("串口扫描任务启动");
+
+    loop {
+        // 获取当前可用串口列表（仅提取端口名称）
+        let new_ports: Vec<String> = SerialManager::list_ports()
+            .into_iter()
+            .map(|(name, _info)| name)
+            .collect();
+
+        // 与上次扫描结果比较
+        let changed = {
+            let last = state.last_ports.lock().unwrap();
+            last.as_slice() != new_ports.as_slice()
+        };
+
+        if changed {
+            // 更新可用串口列表（async 锁）
+            let mut available = state.available_ports.lock().await;
+            *available = new_ports.clone();
+            drop(available);
+
+            // 更新上次扫描结果（sync 锁）
+            let mut last = state.last_ports.lock().unwrap();
+            *last = new_ports;
+            info!("可用串口列表已更新");
+        }
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
 
@@ -497,5 +578,15 @@ mod tests {
         assert!((odom.right_speed_mmps - 0.0).abs() < f32::EPSILON);
         assert!((odom.heading - 0.0).abs() < f32::EPSILON);
         assert!((odom.total_distance_mm - 0.0).abs() < f32::EPSILON);
+    }
+
+    /// 测试 AppState 初始串口列表为空
+    #[test]
+    fn test_app_state_ports_initially_empty() {
+        let state = crate::AppState::new();
+        let available = state.available_ports.blocking_lock();
+        assert!(available.is_empty(), "初始可用串口列表应为空");
+        let last = state.last_ports.lock().unwrap();
+        assert!(last.is_empty(), "初始 last_ports 应为空");
     }
 }

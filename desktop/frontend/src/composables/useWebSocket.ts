@@ -41,11 +41,13 @@ interface WebSocketInstance {
   videoFrame: Ref<string | null>
   videoFps: Ref<number>
   odometry: Ref<OdometryData>
+  availablePorts: Ref<string[]>
   connect: () => void
   disconnect: () => void
   sendCommand: (command: string) => boolean
   sendSpeed: (speed: number) => boolean
   sendDriveMode: (mode: number) => boolean
+  sendMacConfig: (mac: string) => boolean
 }
 
 /**
@@ -64,6 +66,7 @@ function createWebSocket() {
     distance: 0,
     timestamp: 0
   })
+  const availablePorts = ref<string[]>([])
 
   // 内部可变状态
   const ws = ref<WebSocket | null>(null)
@@ -100,6 +103,9 @@ function createWebSocket() {
 
   /** 连接 WebSocket */
   const connect = () => {
+    // 关闭已有连接前先清理心跳定时器，防止定时器累积
+    stopHeartbeat()
+
     // 关闭已有连接（包括 CONNECTING/OPEN/CLOSING 状态），防止旧连接的回调干扰
     if (ws.value && ws.value.readyState !== WebSocket.CLOSED) {
       shouldReconnect = false
@@ -154,6 +160,13 @@ function createWebSocket() {
               break
 
             case 'status':
+              break
+
+            case 'port_list':
+              // 接收串口列表推送
+              if (Array.isArray(message.ports)) {
+                availablePorts.value = message.ports as string[]
+              }
               break
 
             default:
@@ -277,16 +290,39 @@ function createWebSocket() {
     }
   }
 
+  /** 发送MAC地址配置命令 */
+  const sendMacConfig = (mac: string): boolean => {
+    if (ws.value?.readyState !== WebSocket.OPEN) {
+      return false
+    }
+
+    const message = {
+      type: 'mac_config',
+      mac,
+      timestamp: Date.now()
+    }
+
+    try {
+      ws.value.send(JSON.stringify(message))
+      return true
+    } catch (error) {
+      console.error('[WebSocket] 发送MAC配置失败:', error)
+      return false
+    }
+  }
+
   return {
     isConnected,
     videoFrame,
     videoFps,
     odometry,
+    availablePorts,
     connect,
     disconnect,
     sendCommand,
     sendSpeed,
-    sendDriveMode
+    sendDriveMode,
+    sendMacConfig
   }
 }
 
@@ -328,10 +364,12 @@ export const useWebSocket = (owner = false): WebSocketInstance => {
     videoFrame: state.videoFrame,
     videoFps: state.videoFps,
     odometry: state.odometry,
+    availablePorts: state.availablePorts,
     connect: safeConnect,
     disconnect: safeDisconnect,
     sendCommand: state.sendCommand,
     sendSpeed: state.sendSpeed,
-    sendDriveMode: state.sendDriveMode
+    sendDriveMode: state.sendDriveMode,
+    sendMacConfig: state.sendMacConfig
   }
 }

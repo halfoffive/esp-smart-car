@@ -292,6 +292,7 @@ void onDataRecv(const esp_now_recv_info* info, const uint8_t* incomingData, int 
         // 处理命令
         switch (packet->type) {
             case CommandType::MOVE:
+                g_emergencyStop = false;  // 运动命令显式解除紧急停止
                 handleMoveCommand(static_cast<char>(packet->data));
                 break;
             case CommandType::SERVO:
@@ -311,6 +312,7 @@ void onDataRecv(const esp_now_recv_info* info, const uint8_t* incomingData, int 
                 break;
             case CommandType::DRIVE_MODE:
                 handleDriveModeCommand(packet->data);
+                g_lastCmdTime = millis();
                 break;
             default:
                 break;
@@ -404,11 +406,7 @@ void loop() {
         }
     }
     
-    // 4. 检查紧急停止恢复
-    if (g_emergencyStop && (currentTime - g_lastCmdTime) < 500) {
-        g_emergencyStop = false;
-    }
-    
+
     // 5. 小延迟，避免占用过多CPU
     delay(10);
 }

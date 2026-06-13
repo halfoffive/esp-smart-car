@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **DRIVE_MODE 与 MAC_CONFIG 命令字节冲突** — 行走模式切换命令从 'M'/'L'/'B' 改为专属字节 'T'，消除与 MAC_CONFIG 的 'M' 冲突。协议：先发 'T' 标识，再发模式值（0/1/2）
+- **receiver_dongle.ino 缺少 DRIVE_MODE 转发** — `parseSerialCommand`/`getCommandType` 新增 'T' 识别，`forwardToCar` 新增 DRIVE_MODE 分支读取1字节模式值并构建 WirelessPacket 发送
+- **car_controller.ino DRIVE_MODE 超时未更新** — 无线命令处理中 DRIVE_MODE case 添加 `g_lastCmdTime = millis()`，防止行走模式切换后1秒超时自动停止
+- **serial.rs 双重可变借用编译错误** — `read_frame_data` 移除 `&mut self` 和 `frame_count` 参数，改为独立函数；帧计数在调用方更新，消除 `self.port` 与 `self.frame_count` 同时可变借用冲突
+
+### Added
+- **后端自动串口扫描** — `serial.rs` 新增 `run_port_scan_task` 后台任务，每秒扫描可用串口，列表变化时更新状态
+- **WebSocket 串口列表广播** — `websocket.rs` `video_task` 中检测串口列表变化，自动广播 `{"type":"port_list","ports":[...]}` 给所有前端客户端
+- **前端被动接收串口列表** — `useWebSocket.ts` 新增 `availablePorts` 状态，处理 `port_list` 消息；`ControlPanel.vue` 下拉框优先使用 WebSocket 推送的列表
+- **MAC 地址动态配置** — 前端新增 MAC 地址输入框（格式 `AA:BB:CC:DD:EE:FF`）和"设置MAC"按钮，支持 `localStorage` 持久化
+- **WebSocket mac_config 协议** — `useWebSocket.ts` 新增 `sendMacConfig`，后端 `websocket.rs` 解析并通过串口转发（'M' + 6字节MAC）
+- **固件 MAC 地址运行时配置** — `wireless.h` MAC 地址从 `constexpr` 改为可变数组，新增 `setTargetCarMac`/`setTargetCameraMac`；`receiver_dongle.ino` 新增 'M' 命令读取6字节MAC并更新目标地址
+- **MAC 地址解析辅助函数** — `websocket.rs` 新增 `parse_mac_address`，支持冒号分隔和无分隔符两种格式
+- **后端测试** — 新增 7 个测试（`parse_mac_address` 5个 + `mac_config` 2个 + `AppState` 初始串口列表1个），总计 43 个测试全部通过
+
 ### Added
 - **ControlPanel.vue 串口扫描** — 添加"扫描"按钮调用 `GET /api/ports`，页面加载时自动扫描一次，解决此前只能手动输入串口名称的问题
 

@@ -74,7 +74,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
 import { useStatus } from '../composables/useStatus'
 
@@ -132,10 +132,9 @@ watch(odometry, (newOdom) => {
   avgSpeedMms.value = sum / speedSamples.value.length
 })
 
-// 运行时长
+// 运行时长（基于后端 uptime）
 const commandCount = computed(() => status.value.command_count || 0)
-const runStartTime = ref<number>(Date.now())
-const runTimeSeconds = ref(0)
+const runTimeSeconds = computed(() => status.value.uptime || 0)
 
 const displayRunTime = computed(() => {
   const s = runTimeSeconds.value
@@ -151,30 +150,11 @@ const runTimeUnit = computed(() => {
   return '小时'
 })
 
-// 定期更新运行时长
-let timeInterval: ReturnType<typeof setInterval> | null = null
-
-const updateRunTime = () => {
-  runTimeSeconds.value = Math.floor((Date.now() - runStartTime.value) / 1000)
-}
-
 const resetMaxSpeed = () => {
   maxSpeedMms.value = 0
   speedSamples.value = []
   avgSpeedMms.value = 0
 }
-
-onMounted(() => {
-  runStartTime.value = Date.now()
-  timeInterval = setInterval(updateRunTime, 1000)
-})
-
-onUnmounted(() => {
-  if (timeInterval !== null) {
-    clearInterval(timeInterval)
-    timeInterval = null
-  }
-})
 
 defineExpose({ resetMaxSpeed })
 </script>

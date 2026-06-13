@@ -30,7 +30,7 @@
 // ============================================
 namespace ReceiverConfig {
     constexpr uint32_t SERIAL_BAUD = 921600;   // 串口波特率（高速传输）
-    constexpr uint32_t BUFFER_SIZE = 4096;     // 缓冲区大小
+    constexpr uint32_t BUFFER_SIZE = 32768;    // 缓冲区大小（32KB，匹配后端帧上限）
     constexpr uint32_t HEARTBEAT_INTERVAL = 1000; // 心跳间隔
 }
 
@@ -104,9 +104,11 @@ inline SerialCommand parseSerialCommand(const char input) {
         case 'J': case 'j':  // 云台下（与前端 'J' 对齐）
         case 'H': case 'h':  // 云台左（与前端 'H' 对齐）
         case 'K': case 'k':  // 云台右（与前端 'K' 对齐）
-        case 'L': case 'l':
-        case 'R': case 'r':
         case 'C': case 'c':
+            return SerialCommand(input, 0, true);
+        case 'M': case 'm':
+            return SerialCommand(input, 0, true);
+        case 'T': case 't':  // 行走模式切换（专属命令字节，与 MAC_CONFIG 的 'M' 不冲突）
             return SerialCommand(input, 0, true);
         case '1': case '2': case '3':
         case '4': case '5': case '6':
@@ -134,14 +136,16 @@ inline CommandType getCommandType(const char cmd) {
         case 'J': case 'j':      // 云台下（与前端 'J' 对齐）
         case 'H': case 'h':      // 云台左（与前端 'H' 对齐）
         case 'K': case 'k':      // 云台右（与前端 'K' 对齐）
-        case 'L': case 'l':
-        case 'R': case 'r':
         case 'C': case 'c':
             return CommandType::SERVO;
         case '1': case '2': case '3':
         case '4': case '5': case '6':
         case '7': case '8': case '9':
             return CommandType::SPEED;
+        case 'M': case 'm':
+            return CommandType::MAC_CONFIG;
+        case 'T': case 't':  // 行走模式切换（专属命令字节，与 MAC_CONFIG 的 'M' 不冲突）
+            return CommandType::DRIVE_MODE;
         default:
             return CommandType::NONE;
     }
@@ -152,14 +156,104 @@ inline CommandType getCommandType(const char cmd) {
 // ============================================
 
 /**
+ * 从串口读取MAC地址（新帧格式：0xFF帧边界 + 长度字节 + MAC字节）
+ * 输入：目标缓冲区（至少6字节）
+ * 输出：是否成功在超时内读取完毕
+ *
+ * 帧格式：'M' + 0xFF + 长度(6) + 6字节MAC
+ * 防止 MAC 字节恰好匹配控制字符导致误动作
+ */
+inline bool readMacBytes(uint8_t* macBuffer) {
+    constexpr uint32_t MAC_READ_TIMEOUT_MS = 100;
+    const uint32_t startTime = millis();
+
+    // 读取帧边界标识 0xFF
+    while (millis() - startTime < MAC_READ_TIMEOUT_MS) {
+        if (Serial.available()) {
+            int marker = Serial.read();
+            if (marker == 0xFF) {
+                break;
+            }
+            // 非 0xFF 字节，忽略（可能是残留数据）
+        }
+    }
+    if (millis() - startTime >= MAC_READ_TIMEOUT_MS) {
+        Serial.println("[接收器] MAC帧边界标识超时");
+        return false;
+    }
+
+    // 读取长度字节
+    while (millis() - startTime < MAC_READ_TIMEOUT_MS) {
+        if (Serial.available()) {
+            int len = Serial.read();
+            if (len != 6) {
+                Serial.printf("[接收器] MAC长度异常: %d（期望6）\n", len);
+                return false;
+            }
+            break;
+        }
+    }
+    if (millis() - startTime >= MAC_READ_TIMEOUT_MS) {
+        Serial.println("[接收器] MAC长度字节超时");
+        return false;
+    }
+
+    // 读取6字节MAC地址
+    for (uint8_t i = 0; i < 6; i++) {
+        const uint32_t byteStart = millis();
+        while (millis() - byteStart < MAC_READ_TIMEOUT_MS) {
+            if (Serial.available()) {
+                macBuffer[i] = static_cast<uint8_t>(Serial.read());
+                break;
+            }
+        }
+        if (millis() - byteStart >= MAC_READ_TIMEOUT_MS) {
+            Serial.printf("[接收器] MAC字节%d读取超时\n", i);
+            return false;
+        }
+    }
+    return true;
+}
+
+/**
  * 转发命令到车载控制器
  */
 inline void forwardToCar(const SerialCommand& cmd) {
     const CommandType type = getCommandType(cmd.cmd);
     if (type == CommandType::NONE) return;
-    
+
+    // MAC地址配置命令：读取后续6字节并更新目标MAC
+    if (type == CommandType::MAC_CONFIG) {
+        uint8_t mac[6];
+        if (readMacBytes(mac)) {
+            setTargetCarMac(mac);
+            Serial.print("[MAC配置] 车载端MAC已更新: ");
+            for (int i = 0; i < 6; i++) {
+                if (i > 0) Serial.print(':');
+                Serial.printf("%02X", mac[i]);
+            }
+            Serial.println();
+        } else {
+            Serial.println("[MAC配置] 读取MAC地址超时");
+        }
+        return;
+    }
+
+    // 行走模式切换命令：读取后续1字节模式值并转发
+    if (type == CommandType::DRIVE_MODE) {
+        // 读取模式值（1字节：0=普通, 1=直线修正, 2=航向锁定）
+        int modeVal = Serial.read();
+        if (modeVal >= 0) {
+            WirelessPacket pkt = {};
+            pkt.type = static_cast<uint8_t>(CommandType::DRIVE_MODE);
+            pkt.data = static_cast<uint8_t>(modeVal);
+            sendPacket(WirelessConfig::CAR_MAC, pkt);
+        }
+        return;
+    }
+
     WirelessPacket packet;
-    
+
     if (type == CommandType::MOVE) {
         packet = createMovePacket(cmd.cmd, 0);
     } else if (type == CommandType::SERVO) {
@@ -169,7 +263,7 @@ inline void forwardToCar(const SerialCommand& cmd) {
     } else {
         return;
     }
-    
+
     sendToCar(packet);
 }
 

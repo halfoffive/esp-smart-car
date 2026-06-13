@@ -39,8 +39,16 @@ fn main() {
             .metadata()
             .and_then(|m| m.modified())
             .ok();
+        // bun 使用 bun.lockb 或 bun.lock 作为锁文件（而非 npm 的 .package-lock.json）
+        let lock_file_path = if std::path::Path::new(&format!("{}/bun.lockb", frontend_dir)).exists() {
+            format!("{}/bun.lockb", frontend_dir)
+        } else if std::path::Path::new(&format!("{}/bun.lock", frontend_dir)).exists() {
+            format!("{}/bun.lock", frontend_dir)
+        } else {
+            format!("{}/node_modules/.package-lock.json", frontend_dir)
+        };
         let node_modules_mtime =
-            std::path::Path::new(&format!("{}/node_modules/.package-lock.json", frontend_dir))
+            std::path::Path::new(&lock_file_path)
                 .metadata()
                 .and_then(|m| m.modified())
                 .ok();

@@ -29,6 +29,10 @@ pub struct AppState {
     pub last_heartbeat: Arc<std::sync::Mutex<std::time::Instant>>,
     /// 服务器启动时间（用于计算运行时长）
     pub started_at: std::time::Instant,
+    /// 可用串口列表（使用 tokio::sync::Mutex，供 async 端点读取）
+    pub available_ports: Arc<tokio::sync::Mutex<Vec<String>>>,
+    /// 上一次扫描到的串口列表（使用 std::sync::Mutex，不跨 .await 持锁）
+    pub last_ports: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl Default for AppState {
@@ -49,6 +53,8 @@ impl AppState {
             odometry: Arc::new(tokio::sync::Mutex::new(OdometryData::default())),
             last_heartbeat: Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
             started_at: std::time::Instant::now(),
+            available_ports: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            last_ports: Arc::new(std::sync::Mutex::new(Vec::new())),
         }
     }
 }
