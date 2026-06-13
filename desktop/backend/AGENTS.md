@@ -84,6 +84,7 @@ cargo build --release  # 优化编译
 ## Notes
 
 - **前端嵌入**：前端资源通过 `rust-embed` 编译进二进制，`exe` 可在任意位置运行，无需 `frontend/dist` 目录伴随
+- **配置文件**：`.env` 文件是可选的。`exe` 移动到其他位置时，使用内置默认值（`RUST_LOG=info`）；仅在开发目录中放置 `.env` 可覆盖默认配置
 - **端口**：HTTP 服务器监听 8080，WebSocket 在 `/ws`
 - **串口**：默认 921600 波特率，支持动态连接/断开
 - **视频帧**：通过 WebSocket 发送 Base64 编码的 JPEG

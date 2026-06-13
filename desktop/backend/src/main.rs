@@ -22,11 +22,14 @@ struct Assets;
 /// 主函数
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 加载环境变量（必须在日志初始化之前，否则 .env 中的 RUST_LOG 不生效）
-    if let Err(e) = dotenvy::dotenv() {
-        // .env 文件中可能不存在（开发环境），这并非致命错误
-        eprintln!("加载 .env 文件失败: {}（将使用默认配置）", e);
+    // 设置默认日志级别（系统环境或 .env 都未设置时，默认使用 info）
+    if std::env::var("RUST_LOG").is_err() {
+        std::env::set_var("RUST_LOG", "info");
     }
+
+    // 尝试加载 .env 文件（仅在开发目录中有效；exe 移动到其他位置运行时使用上述默认值）
+    // dotenvy::dotenv() 从当前工作目录向上查找 .env，不存在时静默返回 Err —— 这不影响正常启动
+    let _ = dotenvy::dotenv();
 
     // 初始化日志
     tracing_subscriber::fmt()

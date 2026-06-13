@@ -140,6 +140,13 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-13 - .env 文件可选化（单文件部署修复）
+- **范围**: 后端 Rust `main.rs` + `.env`
+- **修复**:
+  - `main.rs` — `dotenvy::dotenv()` 从 `eprintln!` 报错改为静默跳过，`RUST_LOG` 默认设为 `info`（`std::env::set_var`），确保 exe 移动到其他位置时无需 `.env` 文件即可正常启动
+  - `.env` — 移除未被任何代码读取的死配置值 `DEFAULT_BAUD_RATE` / `WS_HEARTBEAT_INTERVAL`
+- **验证**: `cargo check` 通过；`cargo test` 42 测试全过；`cargo clippy` 0 issues；手动 QA — exe 拷贝到临时目录运行，STDERR 无报错，所有 INFO 日志正常输出
+
 ### 2026-06-14 - 综合代码审计修复 v8（9项修复）
 - **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 全面审查，修复 2 项 P2、7 项 P3
 - **P2（2项）**:
