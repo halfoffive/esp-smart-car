@@ -259,7 +259,6 @@ inline void initializePIDController() {
     PIDControllerState::g_straightPidState = PIDState(0, 0, 0, 0, 0, 0, 0, millis());
     PIDControllerState::g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, 0, millis());
     PIDControllerState::g_driveMode = DriveMode::NORMAL;
-    PIDControllerState::g_targetHeading = 0.0f;
     
     Serial.println("[PID控制器] 初始化完成");
     Serial.printf("  直线PID: Kp=%.2f, Ki=%.3f, Kd=%.2f\n",
