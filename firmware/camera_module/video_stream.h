@@ -158,16 +158,22 @@ inline void sendVideoFrame(const FrameState& frame) {
         packet.dataLen = packetLen;
         memcpy(packet.data, data + offset, packetLen);
 
-        // 计算实际发送大小（不含 data 数组的未使用尾部）
-        const size_t sendSize = sizeof(VideoPacket) - StreamConfig::MAX_PACKET_SIZE + packetLen;
+        // 计算实际发送大小：10字节头部 + packetLen字节数据 + 1字节校验和
+        // 与 sizeof(VideoPacket)-128+packetLen 相比多出校验和的1字节，
+        // 确保非满载包（packetLen<128）的校验和也包含在发送范围内
+        const size_t sendSize = 10 + packetLen + 1;  // header(10) + data + checksum(1)
 
-        // 计算校验和：仅覆盖实际发送的字节（不含 checksum 字段本身）
+        // 计算校验和：覆盖发送范围内除校验和字节外的所有字节（0 到 sendSize-2）
         uint8_t sum = 0;
         const uint8_t* packetData = reinterpret_cast<const uint8_t*>(&packet);
-        for (size_t j = 0; j < sendSize - 1; j++) {  // -1 排除 checksum 字段
+        for (size_t j = 0; j < sendSize - 1; j++) {
             sum += packetData[j];
         }
-        packet.checksum = sum;
+
+        // 校验和写入实际发送的最后一个字节位置
+        // packetLen<128 时写入 data[packetLen]（data 数组内偏移），
+        // packetLen=128 时写入 packet.checksum（结构体尾部字段）
+        const_cast<uint8_t*>(packetData)[10 + packetLen] = sum;
 
         // 发送到接收器（指定 MAC 地址，避免广播给车载端造成误解析）
         sendRawPacket(WirelessConfig::RECEIVER_MAC,

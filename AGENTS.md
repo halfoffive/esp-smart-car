@@ -139,6 +139,23 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-14 - 综合代码审计修复 v7（9项修复）
+- **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 全面审查，修复 2 项 P0、2 项 P1、3 项 P2、2 项 P3
+- **P0（2项）**:
+  - `video_stream.h` — 视频包校验和写入位置从 `packet.checksum`（偏移138）改为 `packetData[10+packetLen]`（实际发送末字节），`sendSize` 增加校验和的 1 字节；修复非满载包（packetLen<128）校验和从未实际传输的严重bug，每帧最后一个分包此前必然丢失
+  - `receiver_dongle.ino` — 视频包校验和读取从 `packet->checksum`（非满载包越界 UB）改为 `data[len-1]`，与发送端对齐
+- **P1（2项）**:
+  - `useWebSocket.ts` — `videoFps` ref 添加实际更新逻辑：视频帧到达时按秒统计帧数更新，StatusBar FPS 指示器恢复正常
+  - `car_controller.ino` — `loop()` 中 `delay(10)` → `delay(1)`，舵机平滑更新粒度从 ~100Hz 提升至 ~1000Hz，命令响应延迟降低
+- **P2（3项）**:
+  - `websocket.rs` — `speed` 消息类型现在也通过串口发送速度等级字符，消除 `sendSpeed()` API 死代码
+  - `car_controller.ino` + `receiver_dongle.ino` — setup() 注释中云台按键从 `U/D/L/R/C` 修正为 `U/J/H/K/C`
+  - `pid_control.h` — `g_driveMode` 静态初始值从 `STRAIGHT_LINE` → `NORMAL`，与 `initializePIDController()` 运行时赋值一致
+- **P3（2项）**:
+  - `useWebSocket.ts` — 非 owner 组件调用 connect/disconnect 时 DEV 环境下输出 `console.warn`
+  - `car_controller.ino` — 清理 `loop()` 中超时检查块后的残留空白行
+- **验证**: `cargo clippy` 0 warnings；`bun run build` 成功
+
 ### 2026-06-13 - 综合代码审计修复 v6（46项修复）
 - **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 全面审查，修复 1 项 P0、6 项 P1、12 项 P2、27 项 P3
 - **P0（1项）**: `receiver_dongle.ino` — DRIVE_MODE 命令包改用 `createCommandPacket()` 构造

@@ -132,8 +132,8 @@ namespace PIDControllerState {
     PIDState g_straightPidState = PIDState(0, 0, 0, 0, 0, 0, 0, 0);
     PIDState g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, 0, 0);
 
-    // 行走模式
-    DriveMode g_driveMode = DriveMode::STRAIGHT_LINE;
+    // 行走模式（默认普通模式，与 car_controller.ino 中 g_smartDriveEnabled=false 一致）
+    DriveMode g_driveMode = DriveMode::NORMAL;
 
     // 目标航向（锁定航向模式下使用）
     float g_targetHeading = 0.0f;

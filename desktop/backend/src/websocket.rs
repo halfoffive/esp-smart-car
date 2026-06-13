@@ -344,11 +344,21 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             }
         }
         "speed" => {
-            // 设置速度
+            // 速度等级命令（1-9）：同步更新内存状态并通过串口发送
+            // 与 command 消息中的 '1'-'9' 行为一致，确保 sendSpeed() API 可用
             if let Ok(speed) = data.parse::<u8>() {
                 if !(1..=9).contains(&speed) {
                     warn!("速度值无效: {} (有效范围 1-9)", speed);
                     return Ok(());
+                }
+                // 向串口发送速度等级字符
+                {
+                    let mut manager = state.serial_manager.lock().expect("serial_manager lock poisoned");
+                    // 速度等级字符：1-9 映射为 '1'-'9'
+                    if let Err(e) = manager.send_command(b'0' + speed) {
+                        warn!("速度命令发送失败: {}", e);
+                        return Err(anyhow::anyhow!("速度命令发送失败: {}", e));
+                    }
                 }
                 state.current_speed.store(speed, Ordering::Relaxed);
                 info!("设置速度: {}", speed);

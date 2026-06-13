@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **P0: 视频包校验和传输修复** — `video_stream.h` 校验和写入位置从 `packet.checksum`（偏移138）改为实际发送末字节，`sendSize` 增加校验和 1 字节；`receiver_dongle.ino` 读取改为 `data[len-1]`，修复非满载包校验和从未传输 & 越界读取 UB，视频帧最后一个分包不再丢失
+- **P1: videoFps 死状态修复** — `useWebSocket.ts` videoFps 添加实际每秒帧率统计更新逻辑，StatusBar FPS 指示器恢复正常
+- **P1: 主循环延迟优化** — `car_controller.ino` loop() 中 delay(10) → delay(1)，舵机更新粒度提升10倍，命令响应延迟降低
+- **P2: speed 死代码消除** — `websocket.rs` speed 消息类型现在也通过串口发送速度等级字符，sendSpeed() API 已可用
+- **P2: 注释修正** — `car_controller.ino` + `receiver_dongle.ino` setup() 云台按键注释从 U/D/L/R/C 修正为 U/J/H/K/C
+- **P2: 静态初始值修正** — `pid_control.h` g_driveMode 静态初始值从 STRAIGHT_LINE 改为 NORMAL，与运行时一致
+- **P3: 非owner调用警告** — `useWebSocket.ts` 非管理员组件调用 connect/disconnect 时 DEV 模式输出 console.warn
+- **P3: 代码整洁** — `car_controller.ino` 清理 loop() 中残留空白行
+- 验证: `cargo clippy` 0 warnings；`bun run build` 成功
+
+### Fixed
 - **v6 综合代码审计修复（46项）** — 修复 1 项 P0、6 项 P1、12 项 P2、27 项 P3
 - **P0**: `receiver_dongle.ino` DRIVE_MODE 命令包改用 `createCommandPacket()` 构造，修复 magic/version/checksum 缺失
 - **P1**: MAC 动态配置 peer 先删后加、测速校准系数去重、摄像头日志防重入、串口断开竞态修复、串口按钮状态独立

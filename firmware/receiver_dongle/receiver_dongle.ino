@@ -374,12 +374,15 @@ void onReceiverDataRecv(const esp_now_recv_info* info, const uint8_t* data, int 
         if (packet->magic == StreamConfig::VIDEO_MAGIC &&
             packet->version == StreamConfig::PROTOCOL_VERSION) {
             // 验证校验和（防止传输错误导致花屏）
-            // 发送端按实际发送字节数计算校验和，接收端需用 len 而非 sizeof(VideoPacket)
+            // 发送端将校验和置于实际发送数据的最后一字节位置（data[len-1]），
+            // 而非 VideoPacket::checksum 字段（该字段在非满载包时不在发送范围内）。
+            // 因此必须从 data[len-1] 读取接收到的校验和，而非 packet->checksum。
             uint8_t sum = 0;
-            for (int j = 0; j < len - 1; j++) {  // -1 排除 checksum 字段
+            for (int j = 0; j < len - 1; j++) {  // -1 排除校验和字节
                 sum += data[j];
             }
-            if (sum != packet->checksum) {
+            const uint8_t receivedChecksum = data[len - 1];
+            if (sum != receivedChecksum) {
                 // 校验和不匹配，丢弃损坏的包
                 return;
             }
@@ -449,7 +452,7 @@ void setup() {
     initVideoBuffer();
     
     Serial.println("[初始化] 接收器就绪，等待命令...");
-    Serial.println("[命令格式] WASD:移动, U/D/L/R:云台, 1-9:速度, 空格:停止");
+    Serial.println("[命令格式] WASD:移动, U/J/H/K/C:云台, 1-9:速度, 空格:停止");
 }
 
 // ============================================

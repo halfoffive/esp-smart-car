@@ -74,6 +74,9 @@ function createWebSocket() {
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let shouldReconnect = true
   let retryCount = 0
+  // FPS 计算：基于视频帧到达频率（供 StatusBar 等组件消费）
+  let frameCount = 0
+  let lastFpsUpdate = Date.now()
 
   /** 启动心跳 */
   const startHeartbeat = () => {
@@ -150,6 +153,14 @@ function createWebSocket() {
               // 接收视频帧
               if (message.data) {
                 videoFrame.value = `data:image/jpeg;base64,${message.data}`
+                // 更新 videoFps：每秒统计接收到的视频帧数
+                frameCount++
+                const now = Date.now()
+                if (now - lastFpsUpdate >= 1000) {
+                  videoFps.value = frameCount
+                  frameCount = 0
+                  lastFpsUpdate = now
+                }
               }
               break
 
@@ -358,12 +369,18 @@ export const useWebSocket = (owner = false): WebSocketInstance => {
     ? state.connect
     : async () => {
         // 非管理员组件无法调用 connect()
+        if (import.meta.env.DEV) {
+          console.warn('[useWebSocket] 非管理员组件尝试调用 connect()，已忽略。请使用 useWebSocket(true) 作为管理员。')
+        }
       }
 
   const safeDisconnect = owner
     ? state.disconnect
     : () => {
         // 非管理员组件无法调用 disconnect()
+        if (import.meta.env.DEV) {
+          console.warn('[useWebSocket] 非管理员组件尝试调用 disconnect()，已忽略。请使用 useWebSocket(true) 作为管理员。')
+        }
       }
 
   return {

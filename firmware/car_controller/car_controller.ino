@@ -378,7 +378,7 @@ void setup() {
     Serial.println("[命令说明]");
     Serial.println("  WASD: 移动控制");
     Serial.println("  Q/E: 原地旋转");
-    Serial.println("  U/D/L/R/C: 云台控制");
+    Serial.println("  U/J/H/K/C: 云台控制");
     Serial.println("  空格: 停止");
     Serial.println("  1-9: 速度设置");
     Serial.println("  智能修正: 默认关闭");
@@ -412,8 +412,7 @@ void loop() {
 #endif
         }
     }
-    
 
     // 4. 小延迟，避免占用过多CPU
-    delay(10);
+    delay(1);
 }
