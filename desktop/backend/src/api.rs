@@ -25,9 +25,6 @@ use crate::AppState;
 pub struct CommandRequest {
     /// 命令字符
     pub command: String,
-    /// 可选速度参数
-    #[allow(dead_code)]
-    pub speed: Option<u8>,
 }
 
 /// 状态响应
@@ -105,6 +102,7 @@ pub async fn handle_command(
     let cmd = match request.command.as_bytes().first().copied() {
         Some(c) => c,
         None => {
+            warn!("收到空命令请求");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(ApiResponse {
@@ -117,7 +115,7 @@ pub async fn handle_command(
 
     // 在独立作用域中发送命令，确保 std::sync::MutexGuard 在 .await 前释放
     let send_result = {
-        let mut manager = state.serial_manager.lock().unwrap();
+        let mut manager = state.serial_manager.lock().expect("serial_manager lock poisoned");
         manager.send_command(cmd)
     }; // manager 锁在此处释放
 
@@ -153,7 +151,7 @@ pub async fn handle_command(
 pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json<StatusResponse>) {
     // 逐把加锁，复制数据后立即释放，减少锁争用
     let (serial_status, port_name, baud_rate, frame_count, bytes_sent, command_count) = {
-        let manager = state.serial_manager.lock().unwrap();
+        let manager = state.serial_manager.lock().expect("serial_manager lock poisoned");
         let (serial_status, port_name, baud_rate) = match &manager.state {
             SerialConnectionState::Disconnected => ("未连接".to_string(), None, None),
             SerialConnectionState::Connecting => ("连接中".to_string(), None, None),
@@ -178,14 +176,14 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
     };
 
     let ws_clients = {
-        let ws_manager = state.ws_manager.lock().unwrap();
+        let ws_manager = state.ws_manager.lock().expect("ws_manager lock poisoned");
         ws_manager.client_count()
     };
 
     let current_speed = state.current_speed.load(Ordering::Relaxed);
 
     let (left_speed, right_speed, heading, total_distance) = {
-        let odom = state.odometry.lock().unwrap();
+        let odom = state.odometry.lock().expect("odometry lock poisoned");
         (
             odom.left_speed_mmps,
             odom.right_speed_mmps,
@@ -226,7 +224,7 @@ pub async fn connect_serial(
 
     // 先断开现有连接（在锁内）
     {
-        let mut manager = state.serial_manager.lock().unwrap();
+        let mut manager = state.serial_manager.lock().expect("serial_manager lock poisoned");
         manager.disconnect();
     } // 释放锁
 
@@ -234,7 +232,7 @@ pub async fn connect_serial(
     let state_clone = Arc::clone(&state);
     let port_name_clone = port_name.clone();
     let connect_result = tokio::task::spawn_blocking(move || {
-        let mut manager = state_clone.serial_manager.lock().unwrap();
+        let mut manager = state_clone.serial_manager.lock().expect("serial_manager lock poisoned");
         manager.connect(&port_name_clone, baud_rate)
     })
     .await;
@@ -278,7 +276,7 @@ pub async fn connect_serial(
 pub async fn disconnect_serial(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    let mut manager = state.serial_manager.lock().unwrap();
+    let mut manager = state.serial_manager.lock().expect("serial_manager lock poisoned");
     manager.disconnect();
 
     info!("串口已断开");
@@ -302,22 +300,12 @@ mod tests {
         Arc::new(AppState::new())
     }
 
-    /// 测试 CommandRequest 反序列化（含 speed）
+    /// 测试 CommandRequest 反序列化
     #[test]
-    fn test_command_request_with_speed() {
-        let json = r#"{"command":"W","speed":5}"#;
+    fn test_command_request_deserialize() {
+        let json = r#"{"command":"W"}"#;
         let req: CommandRequest = serde_json::from_str(json).expect("CommandRequest 反序列化失败");
         assert_eq!(req.command, "W");
-        assert_eq!(req.speed, Some(5));
-    }
-
-    /// 测试 CommandRequest 反序列化（无 speed）
-    #[test]
-    fn test_command_request_without_speed() {
-        let json = r#"{"command":"S"}"#;
-        let req: CommandRequest = serde_json::from_str(json).expect("CommandRequest 反序列化失败");
-        assert_eq!(req.command, "S");
-        assert_eq!(req.speed, None);
     }
 
     /// 测试 ConnectRequest 反序列化（含 baud_rate）
@@ -384,7 +372,6 @@ mod tests {
         let long_command = "W".repeat(256);
         let request = CommandRequest {
             command: long_command,
-            speed: None,
         };
 
         // 调用 handle_command（无串口连接时应返回 503）
@@ -407,7 +394,6 @@ mod tests {
         // 测试空格命令（空格是有效的停车命令）
         let request = CommandRequest {
             command: " ".to_string(),
-            speed: None,
         };
         let (status, _) = handle_command(State(state.clone()), Json(request)).await;
         assert_eq!(
@@ -419,7 +405,6 @@ mod tests {
         // 测试换行符命令
         let request = CommandRequest {
             command: "\n".to_string(),
-            speed: None,
         };
         let (status, _) = handle_command(State(state.clone()), Json(request)).await;
         assert_eq!(
@@ -431,7 +416,6 @@ mod tests {
         // 测试 Unicode 字符命令
         let request = CommandRequest {
             command: "你".to_string(),
-            speed: None,
         };
         let (status, _) = handle_command(State(state.clone()), Json(request)).await;
         assert_eq!(
@@ -443,7 +427,6 @@ mod tests {
         // 测试空命令（应返回 400 Bad Request）
         let request = CommandRequest {
             command: "".to_string(),
-            speed: None,
         };
         let (status, Json(resp)) = handle_command(State(state), Json(request)).await;
         assert_eq!(

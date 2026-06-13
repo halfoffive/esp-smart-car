@@ -42,7 +42,7 @@ interface WebSocketInstance {
   videoFps: Ref<number>
   odometry: Ref<OdometryData>
   availablePorts: Ref<string[]>
-  connect: () => void
+  connect: () => Promise<void>
   disconnect: () => void
   sendCommand: (command: string) => boolean
   sendSpeed: (speed: number) => boolean
@@ -102,7 +102,7 @@ function createWebSocket() {
   }
 
   /** 连接 WebSocket */
-  const connect = () => {
+  const connect = async () => {
     // 关闭已有连接前先清理心跳定时器，防止定时器累积
     stopHeartbeat()
 
@@ -114,12 +114,14 @@ function createWebSocket() {
       ws.value.onerror = null
       ws.value.onmessage = null
       ws.value.close()
-      // 等待一小段时间确保旧连接的 onclose 不会触发重连
       ws.value = null
+      // 等待一小段时间确保旧连接的 onclose 回调完成后再创建新连接
+      await new Promise(r => setTimeout(r, 50))
     }
 
     // 重置重连标志，允许自动重连
     shouldReconnect = true
+    retryCount = 0
 
     try {
       const socket = new WebSocket(WS_URL)
@@ -170,7 +172,7 @@ function createWebSocket() {
             case 'port_list':
               // 接收串口列表推送
               if (Array.isArray(message.ports)) {
-                availablePorts.value = message.ports as string[]
+                availablePorts.value = (message.ports as unknown[]).filter((p): p is string => typeof p === 'string')
               }
               break
 
@@ -354,7 +356,7 @@ export const useWebSocket = (owner = false): WebSocketInstance => {
   // 单管理员模式：只有 owner 才能执行连接管理操作
   const safeConnect = owner
     ? state.connect
-    : () => {
+    : async () => {
         // 非管理员组件无法调用 connect()
       }
 

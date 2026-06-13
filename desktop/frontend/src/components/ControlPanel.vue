@@ -28,16 +28,16 @@
         </button>
 
         <button
-          @click="isConnected ? disconnect() : connect()"
+          @click="serialConnected ? disconnect() : connect()"
           :class="[
-            isConnected ? 'btn-danger' : 'btn-primary',
-            { 'opacity-50 cursor-not-allowed': isConnecting }
+            serialConnected ? 'btn-danger' : 'btn-primary',
+            { 'opacity-50 cursor-not-allowed': isConnecting || serialConnecting }
           ]"
           class="px-3 py-1.5 text-xs shrink-0"
-          :disabled="isConnecting"
-          :aria-label="isConnecting ? '连接中' : (isConnected ? '断开串口连接' : '连接串口')"
+          :disabled="isConnecting || serialConnecting"
+          :aria-label="isConnecting || serialConnecting ? '连接中' : (serialConnected ? '断开串口连接' : '连接串口')"
         >
-          {{ isConnecting ? '连接中...' : (isConnected ? '断开' : '连接') }}
+          {{ isConnecting || serialConnecting ? '连接中...' : (serialConnected ? '断开' : '连接') }}
         </button>
       </div>
 
@@ -54,7 +54,7 @@
         <button
           @click="setMacAddress"
           class="px-2 py-1.5 text-xs bg-dark-700 hover:bg-dark-600 text-dark-200 rounded-lg border border-dark-600 transition-colors shrink-0"
-          :disabled="!isConnected || macError !== ''"
+          :disabled="!serialConnected || macError !== ''"
           aria-label="设置车载MAC地址"
         >
           设置MAC
@@ -283,18 +283,24 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
 import { useKeyboard } from '../composables/useKeyboard'
 import { useApi } from '../composables/useApi'
+import { useStatus } from '../composables/useStatus'
 
 const { sendCommand: wsSendCommand, isConnected, sendDriveMode, availablePorts: wsAvailablePorts, sendMacConfig, connect: wsConnect, disconnect: wsDisconnect } = useWebSocket(true)
 const { post, get } = useApi()
+const { status } = useStatus()
 
 const selectedPort = ref('')
 const currentSpeed = ref(5)
 /** 连接进行中状态标志 */
 const isConnecting = ref(false)
+/** 串口是否已连接（基于后端 /api/status 轮询，解决 WebSocket 断开时按钮状态不一致） */
+const serialConnected = computed(() => status.value.serial_status === '已连接')
+/** 串口是否正在连接中 */
+const serialConnecting = computed(() => status.value.serial_status === '连接中')
 /** 串口扫描进行中状态标志 */
 const isScanning = ref(false)
 
@@ -482,6 +488,13 @@ onMounted(() => {
   }
 })
 
+/** 当 WebSocket 推送的可用串口列表变化时，如果当前选中的串口已不在列表中则清除 */
+watch(wsAvailablePorts, (newPorts) => {
+  if (selectedPort.value && !newPorts.includes(selectedPort.value)) {
+    selectedPort.value = ''
+  }
+})
+
 onUnmounted(() => {
   // 清理速度防抖定时器
   if (speedDebounceTimer !== null) {
@@ -489,8 +502,8 @@ onUnmounted(() => {
     speedDebounceTimer = null
   }
   // 断开连接
-  if (isConnected.value) {
-    disconnect().catch(() => {})
+  if (serialConnected.value) {
+    disconnect().catch((e) => { if (import.meta.env.DEV) console.error('[ControlPanel] 卸载断开失败:', e) })
   }
 })
 </script>

@@ -109,7 +109,7 @@ const avgSpeedCm = computed(() => (avgSpeedMms.value / 10).toFixed(1))
 const avgSpeedBarPercent = computed(() => Math.min(100, Math.round((avgSpeedMms.value / MAX_SPEED_MMS) * 100)))
 
 // 平均速度增量计算（避免每次 reduce 遍历整个数组）
-let runningSum = 0
+const runningSum = ref(0)
 
 // 监听测速数据更新，追踪最高速度和平均速度
 watch(odometry, (newOdom) => {
@@ -125,20 +125,20 @@ watch(odometry, (newOdom) => {
   // 记录速度样本（取两轮绝对值平均值）
   const avg = (leftAbs + rightAbs) / 2
   speedSamples.value.push(avg)
-  runningSum += avg
+  runningSum.value += avg
 
   // 超过最大样本数时截断（比 shift() O(n) 更高效）
   if (speedSamples.value.length > MAX_SAMPLES) {
     // 移除最旧的样本，从 runningSum 中减去
     const removed = speedSamples.value.slice(0, speedSamples.value.length - MAX_SAMPLES)
     for (const v of removed) {
-      runningSum -= v
+      runningSum.value -= v
     }
     speedSamples.value = speedSamples.value.slice(-MAX_SAMPLES)
   }
 
   // 计算平均速度（增量求和，无需 reduce）
-  avgSpeedMms.value = runningSum / speedSamples.value.length
+  avgSpeedMms.value = runningSum.value / speedSamples.value.length
 })
 
 // 运行时长（基于后端 uptime）
@@ -162,7 +162,7 @@ const runTimeUnit = computed(() => {
 const resetMaxSpeed = () => {
   maxSpeedMms.value = 0
   speedSamples.value = []
-  runningSum = 0
+  runningSum.value = 0
   avgSpeedMms.value = 0
 }
 

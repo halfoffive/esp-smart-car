@@ -6,6 +6,7 @@ use axum::{
     Router,
 };
 use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
 
 use esp_smart_car_backend::{api, serial, websocket, AppState};
 
@@ -17,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 初始化日志
     tracing_subscriber::fmt()
-        .with_env_filter("info,esp_smart_car_backend=debug")
+        .with_env_filter(EnvFilter::from_default_env())
         .init();
 
     info!("智能车桌面端后端启动");
@@ -96,16 +97,16 @@ mod tests {
     use esp_smart_car_backend::AppState;
 
     /// 测试 AppState 初始状态
-    #[tokio::test]
-    async fn test_app_state_new() {
+    #[test]
+    fn test_app_state_new() {
         let state = AppState::new();
         let current_speed = state
             .current_speed
             .load(std::sync::atomic::Ordering::Relaxed);
         assert_eq!(current_speed, 5);
-        let video_frame = state.video_frame.lock().unwrap();
+        let video_frame = state.video_frame.lock().expect("video_frame lock poisoned");
         assert!(video_frame.is_none());
-        let video_frame_b64 = state.video_frame_b64.lock().unwrap();
+        let video_frame_b64 = state.video_frame_b64.lock().expect("video_frame_b64 lock poisoned");
         assert!(video_frame_b64.is_none());
     }
 }

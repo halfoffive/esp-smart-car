@@ -196,17 +196,14 @@ void handleDriveModeCommand(const uint8_t mode) {
         case 0:
             setDriveMode(DriveMode::NORMAL);
             g_smartDriveEnabled = false;
-            setStraightLineEnabled(false);
             break;
         case 1:
             setDriveMode(DriveMode::STRAIGHT_LINE);
             g_smartDriveEnabled = true;
-            setStraightLineEnabled(true);
             break;
         case 2:
             setDriveMode(DriveMode::HEADING_LOCK);
             g_smartDriveEnabled = true;
-            setStraightLineEnabled(true);
             break;
         default:
 #if DEBUG_MOTOR
@@ -224,12 +221,14 @@ void sendOdometryData() {
     const OdometryData odom = getCurrentOdometry();
     
     // 将浮点数据压缩为整数（有符号16位），使用 constrain 防止溢出
+    // 注意：odom.leftWheel.mmps 已在 updateOdometer() 中应用了校准系数，
+    //       此处直接使用，避免双重校准
     const int16_t leftSpeed = static_cast<int16_t>(constrain(
-        static_cast<long>(odom.leftWheel.mmps * OdometerState::g_calibration.leftCorrection),
+        static_cast<long>(odom.leftWheel.mmps),
         INT16_MIN, INT16_MAX
     ));
     const int16_t rightSpeed = static_cast<int16_t>(constrain(
-        static_cast<long>(odom.rightWheel.mmps * OdometerState::g_calibration.rightCorrection),
+        static_cast<long>(odom.rightWheel.mmps),
         INT16_MIN, INT16_MAX
     ));
     const int16_t headingX100 = static_cast<int16_t>(constrain(
@@ -415,6 +414,6 @@ void loop() {
     }
     
 
-    // 5. 小延迟，避免占用过多CPU
+    // 4. 小延迟，避免占用过多CPU
     delay(10);
 }

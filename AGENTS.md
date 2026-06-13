@@ -139,6 +139,21 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-13 - 综合代码审计修复 v6（46项修复）
+- **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 全面审查，修复 1 项 P0、6 项 P1、12 项 P2、27 项 P3
+- **P0（1项）**: `receiver_dongle.ino` — DRIVE_MODE 命令包改用 `createCommandPacket()` 构造
+- **P1（6项）**: MAC 动态配置 peer 修复、测速校准系数去重、摄像头日志防重入、串口断开竞态修复、串口按钮状态独立
+- **P2（12项）**: extern 解耦、死字段移除、空 switch 删除、除零保护、命令错误消息优化、行缓冲数据保留、MAC 原子发送、panic 日志、build.rs 路径修正、retryCount 重置、GIMBAL_KEYS Set、port_list 类型守卫
+- **P3（27项）**: 固件 6 项 + 后端 13 项 + 前端 8 项（详见 checklist）
+- **验证**: `cargo check` 通过；`cargo test` 42 测试全过；`cargo clippy` 因 Rust 1.96.0 ICE 暂无法运行；`bun run build` 成功
+
+### 2026-06-13 - receiver_dongle DRIVE_MODE 包构造修复（P0）
+- **范围**: `receiver_dongle.ino` — `forwardToCar` 函数 DRIVE_MODE 分支
+- **修复**:
+  - 手动构造 `WirelessPacket pkt = {};` 仅设置 `type`/`data`，`magic`/`version`/`checksum` 均为零，导致 `car_controller` 的 `validatePacket()` 静默丢弃，**行走模式切换完全失效**
+  - 改为 `createCommandPacket(CommandType::DRIVE_MODE, static_cast<uint8_t>(modeVal), 0)`，正确设置所有字段
+- **验证**: 无需编译验证（仅替换函数调用，函数签名匹配）
+
 ### 2026-06-13 - 综合代码审计修复 v5.3（2项追加修复）
 - **范围**: 修复排查报告中最后 2 项未修复问题
 - **P1 高优先级修复（1项）**:

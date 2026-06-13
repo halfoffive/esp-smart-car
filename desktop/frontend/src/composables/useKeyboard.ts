@@ -40,6 +40,9 @@ const DIRECTION_KEYS = new Set(['W', 'A', 'S', 'D', 'Q', 'E'])
 /** 需要阻止默认行为的按键集合 */
 const PREVENT_DEFAULT_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '])
 
+/** 云台控制键集合 */
+const GIMBAL_KEYS = new Set(['U', 'J', 'H', 'K', 'C'])
+
 /**
  * 键盘控制组合式函数
  * 
@@ -95,7 +98,7 @@ export const useKeyboard = (sendCommand: (cmd: string) => void) => {
       sendCommand(key)
     }
     // 处理云台控制
-    else if (['U', 'J', 'H', 'K', 'C'].includes(key)) {
+    else if (GIMBAL_KEYS.has(key)) {
       sendCommand(key)
     }
   }

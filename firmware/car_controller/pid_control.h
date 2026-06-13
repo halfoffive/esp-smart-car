@@ -142,9 +142,6 @@ namespace PIDControllerState {
     float g_headingLockTarget = 0.0f;
     // 航向锁定目标是否已初始化
     bool g_headingLockTargetInitialized = false;
-
-    // 直线模式使能
-    bool g_straightLineEnabled = true;
 }
 
 // ============================================
@@ -266,7 +263,6 @@ inline void initializePIDController() {
     PIDControllerState::g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, 0, millis());
     PIDControllerState::g_driveMode = DriveMode::NORMAL;
     PIDControllerState::g_targetHeading = 0.0f;
-    PIDControllerState::g_straightLineEnabled = false;
     
     Serial.println("[PID控制器] 初始化完成");
     Serial.printf("  直线PID: Kp=%.2f, Ki=%.3f, Kd=%.2f\n",
@@ -390,30 +386,10 @@ inline void setDriveMode(DriveMode mode) {
 }
 
 /**
- * 启用/禁用直线修正
- */
-inline void setStraightLineEnabled(bool enabled) {
-    PIDControllerState::g_straightLineEnabled = enabled;
-    Serial.printf("[PID控制器] 直线修正: %s\n", enabled ? "启用" : "禁用");
-    
-    // 重置PID状态
-    if (enabled) {
-        PIDControllerState::g_straightPidState = PIDState(0, 0, 0, 0, 0, 0, 0, millis());
-    }
-}
-
-/**
  * 获取当前行走模式
  */
 inline DriveMode getCurrentDriveMode() {
     return PIDControllerState::g_driveMode;
-}
-
-/**
- * 获取直线修正使能状态
- */
-inline bool isStraightLineEnabled() {
-    return PIDControllerState::g_straightLineEnabled;
 }
 
 #endif // PID_CONTROL_H

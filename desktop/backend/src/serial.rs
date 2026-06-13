@@ -25,7 +25,7 @@ use tracing::{debug, error, info, warn};
 use crate::AppState;
 
 /// 测速数据
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OdometryData {
     /// 左轮速度(mm/s)
     pub left_speed_mmps: f32,
@@ -46,6 +46,18 @@ impl Default for OdometryData {
             right_speed_mmps: 0.0,
             heading: 0.0,
             total_distance_mm: 0.0,
+            last_update: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Clone for OdometryData {
+    fn clone(&self) -> Self {
+        Self {
+            left_speed_mmps: self.left_speed_mmps,
+            right_speed_mmps: self.right_speed_mmps,
+            heading: self.heading,
+            total_distance_mm: self.total_distance_mm,
             last_update: std::time::Instant::now(),
         }
     }
@@ -180,25 +192,36 @@ impl SerialManager {
     }
 
     /// 断开串口
-    /// 即使 port 被临时取出（read_next 借用中）也能正确断开
+    /// 无条件清理 port 和状态，防止以下资源泄漏：
+    /// - run_serial_task 通过 port.take() 临时取出 port 后，disconnect() 被调用，
+    ///   若条件判断跳过清理，run_serial_task 归还 port 后将永远无法再访问到它
+    /// - port 为 Some 但 state 不是 Connected 的异常状态
     pub fn disconnect(&mut self) {
-        let was_connected = matches!(self.state, SerialConnectionState::Connected { .. });
-        if was_connected || self.port.is_some() {
-            info!("断开串口连接");
-            self.port = None;
-            self.state = SerialConnectionState::Disconnected;
-        }
+        // 无条件清理：即使 port 当前被 run_serial_task 临时取出（为 None），
+        // 也必须将 state 设为 Disconnected，这样 run_serial_task 归还 port 时
+        // 能检测到 Disconnected 状态并 drop port，而不是将其放回已废弃的 manager
+        info!("断开串口连接");
+        self.port = None;
+        self.state = SerialConnectionState::Disconnected;
     }
 
-    /// 发送命令
+    /// 发送单字节命令
     pub fn send_command(&mut self, cmd: u8) -> Result<()> {
+        self.send_bytes(&[cmd])
+    }
+
+    /// 发送多字节数据（原子写入，避免部分发送）
+    pub fn send_bytes(&mut self, data: &[u8]) -> Result<()> {
         if let Some(ref mut port) = self.port {
-            port.get_mut().write_all(&[cmd])?;
+            port.get_mut().write_all(data)?;
             port.get_mut().flush()?;
-            self.bytes_sent += 1;
+            self.bytes_sent += data.len() as u64;
             self.command_count += 1;
-            debug!("发送命令: 0x{:02X} ('{}')", cmd, cmd as char);
+            debug!("发送数据: {} 字节", data.len());
             Ok(())
+        } else if matches!(self.state, SerialConnectionState::Connected { .. }) {
+            // port 为 None 但 state 为 Connected：说明 port 被 run_serial_task 临时取出
+            Err(anyhow::anyhow!("串口正忙，请稍后重试"))
         } else {
             Err(anyhow::anyhow!("串口未连接"))
         }
@@ -313,13 +336,17 @@ impl SerialManager {
                             Ok(_) => {
                                 if second[0] == FRAME_HEADER[1] {
                                     // 找到帧头 0xAA 0x55
+                                    // 局限性：line_buf 中累积的文本数据（可能的测速JSON行）
+                                    // 在此被丢弃。由于函数返回单一 SerialReadResult，无法同时返回
+                                    // OdometryLine 和 VideoFrame。实际影响很小，因为测速数据以
+                                    // \n 换行、视频帧以 0xAA 0x55 帧头分隔，二者不应混叠在同一个读取周期。
                                     let result = Self::read_frame_data(port);
                                     return result;
                                 } else {
                                     // 0xAA 后不是 0x55，只丢弃第一个 0xAA
                                     // 将第二个字节重新检查（可能是下一个 0xAA）
                                     // 关键修复：不丢弃第二个字节
-                                    line_buf.push(b); // 丢弃第一个 0xAA（加入行缓冲）
+                                    line_buf.push(b); // 不作为帧头，作为普通数据保留在行缓冲中
                                     // 重新处理第二个字节
                                     if second[0] == FRAME_HEADER[0] {
                                         // 第二个字节也是 0xAA，可能是帧头的开始
@@ -428,7 +455,7 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
     loop {
         // 检查串口是否连接
         let is_connected = {
-            let manager = state.serial_manager.lock().unwrap();
+            let manager = state.serial_manager.lock().expect("serial_manager lock poisoned");
             matches!(manager.state, SerialConnectionState::Connected { .. })
         };
 
@@ -441,7 +468,7 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
             let result = tokio::task::spawn_blocking(move || {
                 // 短暂获取锁，取出 port
                 let mut port = {
-                    let mut manager = state_clone.serial_manager.lock().unwrap();
+                    let mut manager = state_clone.serial_manager.lock().expect("serial_manager lock poisoned");
                     match manager.port.take() {
                         Some(p) => p,
                         None => return SerialTaskResult::NoData,
@@ -452,9 +479,15 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                 let result = SerialManager::read_next(&mut port);
 
                 // 归还 port 并更新帧计数
+                // 检查 disconnect() 是否在 I/O 期间被调用：若已断开则丢弃 port
                 {
-                    let mut manager = state_clone.serial_manager.lock().unwrap();
-                    manager.port = Some(port);
+                    let mut manager = state_clone.serial_manager.lock().expect("serial_manager lock poisoned");
+                    if matches!(manager.state, SerialConnectionState::Disconnected) {
+                        // disconnect() 已在 I/O 期间调用，drop port 避免资源泄漏
+                        drop(port);
+                    } else {
+                        manager.port = Some(port);
+                    }
                     if let Ok(SerialReadResult::VideoFrame(_)) = &result {
                         manager.frame_count += 1;
                     }
@@ -483,19 +516,19 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
 
                     // 使用 Arc::clone 共享视频帧引用，避免 clone 整帧数据
                     {
-                        let mut video = state.video_frame.lock().unwrap();
+                        let mut video = state.video_frame.lock().expect("video_frame lock poisoned");
                         *video = Some(Arc::new(buffer));
                     }
                     // 存储 Base64 编码结果，供 WebSocket 客户端共享读取
                     {
-                        let mut b64 = state.video_frame_b64.lock().unwrap();
+                        let mut b64 = state.video_frame_b64.lock().expect("video_frame_b64 lock poisoned");
                         *b64 = Some(b64_arc);
                     }
                 }
                 Ok(SerialTaskResult::OdometryLine(line)) => {
                     // serial_manager 锁已释放，单独获取 odometry 锁
                     if let Some(odom_data) = SerialManager::parse_odometry_line(&line) {
-                        let mut odom = state.odometry.lock().unwrap();
+                        let mut odom = state.odometry.lock().expect("odometry lock poisoned");
                         *odom = odom_data;
                         debug!(
                             "测速数据: 左={}mm/s, 右={}mm/s, 航向={}rad",
@@ -507,17 +540,17 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                 }
                 Ok(SerialTaskResult::NoData) => {
                     // 无数据，短暂等待
-                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
                 }
                 Ok(SerialTaskResult::Error { msg }) => {
                     error!("串口读取错误: {}", msg);
-                    let mut manager = state.serial_manager.lock().unwrap();
+                    let mut manager = state.serial_manager.lock().expect("serial_manager lock poisoned");
                     manager.disconnect();
                 }
                 Err(e) if e.is_panic() => {
                     // spawn_blocking 任务 panic，记录详细信息
                     error!("串口任务 panic: {:?}，可能需要重启", e);
-                    let mut manager = state.serial_manager.lock().unwrap();
+                    let mut manager = state.serial_manager.lock().expect("serial_manager lock poisoned");
                     manager.disconnect();
                 }
                 Err(e) if e.is_cancelled() => {
@@ -549,7 +582,7 @@ pub async fn run_port_scan_task(state: std::sync::Arc<AppState>) {
 
         // 与上次扫描结果比较
         let changed = {
-            let last = state.last_ports.lock().unwrap();
+            let last = state.last_ports.lock().expect("last_ports lock poisoned");
             last.as_slice() != new_ports.as_slice()
         };
 
@@ -560,7 +593,7 @@ pub async fn run_port_scan_task(state: std::sync::Arc<AppState>) {
             drop(available);
 
             // 更新上次扫描结果（sync 锁）
-            let mut last = state.last_ports.lock().unwrap();
+            let mut last = state.last_ports.lock().expect("last_ports lock poisoned");
             *last = new_ports;
             info!("可用串口列表已更新");
         }
@@ -647,7 +680,7 @@ mod tests {
         let state = crate::AppState::new();
         let available = state.available_ports.blocking_lock();
         assert!(available.is_empty(), "初始可用串口列表应为空");
-        let last = state.last_ports.lock().unwrap();
+        let last = state.last_ports.lock().expect("last_ports lock poisoned");
         assert!(last.is_empty(), "初始 last_ports 应为空");
     }
 }

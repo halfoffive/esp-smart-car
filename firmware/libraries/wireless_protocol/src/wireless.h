@@ -117,16 +117,12 @@ struct WirelessState {
     bool isConnected;            // 是否已连接
     uint8_t peerCount;         // 已配对设备数
     uint16_t lastSeq;          // 最后接收序列号
-    uint32_t lastRecvTime;     // 最后接收时间
-    uint32_t txCount;          // 发送计数
-    uint32_t rxCount;          // 接收计数
-    uint32_t errCount;         // 错误计数
     
     constexpr WirelessState(
         DeviceRole r, bool c, uint8_t pc,
-        uint16_t ls, uint32_t lrt, uint32_t tx, uint32_t rx, uint32_t err
+        uint16_t ls
     ) : role(r), isConnected(c), peerCount(pc),
-        lastSeq(ls), lastRecvTime(lrt), txCount(tx), rxCount(rx), errCount(err) {}
+        lastSeq(ls) {}
 };
 
 // ============================================
@@ -162,7 +158,7 @@ namespace StreamConfig {
 // ============================================
 // 注意：使用 inline 确保头文件被多个翻译单元包含时只有一个定义
 inline WirelessState g_wirelessState(
-    DeviceRole::CAR, false, 0, 0, 0, 0, 0, 0
+    DeviceRole::CAR, false, 0, 0
 );
 inline esp_now_peer_info_t g_peerInfo{};
 
@@ -197,7 +193,7 @@ inline bool validatePacket(const WirelessPacket& packet) {
 }
 
 /**
- * 纯函数：创建命令数据包
+ * 创建命令数据包（非纯函数，内部维护序列号计数器）
  * 输入：命令类型，数据，速度
  * 输出：数据包
  */
@@ -285,19 +281,6 @@ extern void onDataRecv(const esp_now_recv_info* info, const uint8_t* incomingDat
 inline bool initializeWireless(DeviceRole role) {
     // 初始化WiFi
     WiFi.mode(WIFI_STA);
-    
-    // 设置本机MAC地址（根据角色）
-    switch (role) {
-        case DeviceRole::CAR:
-            // 设置车载端MAC地址
-            break;
-        case DeviceRole::RECEIVER:
-            // 设置接收器MAC地址
-            break;
-        case DeviceRole::CAMERA:
-            // 设置摄像头MAC地址
-            break;
-    }
     
     // 初始化ESP-NOW
     if (esp_now_init() != ESP_OK) {
@@ -406,15 +389,25 @@ inline bool sendToCamera(const WirelessPacket& packet) {
  * 输入：6字节MAC地址指针
  */
 inline void setTargetCarMac(const uint8_t* newMac) {
-    memcpy(WirelessConfig::CAR_MAC, newMac, 6);
-    // 更新 ESP-NOW 配对表，使运行时修改 MAC 后发送生效
+    // 保存旧 MAC，删除旧 peer，再添加新 peer
+    // esp_now_mod_peer 按 peer_addr 查找，用新 MAC 查不到旧 peer，需先删后加
+    uint8_t oldMac[6];
+    memcpy(oldMac, WirelessConfig::CAR_MAC, 6);
+    
+    if (esp_now_del_peer(oldMac) != ESP_OK) {
+        Serial.println("[无线通信] 删除旧车载端配对信息失败");
+    }
+    
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, newMac, 6);
     peerInfo.channel = WirelessConfig::CHANNEL;
     peerInfo.encrypt = false;
-    if (esp_now_mod_peer(&peerInfo) != ESP_OK) {
-        Serial.println("[无线通信] 更新车载端配对信息失败");
+    
+    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+        Serial.println("[无线通信] 添加新车载端配对信息失败");
     }
+    
+    memcpy(WirelessConfig::CAR_MAC, newMac, 6);
 }
 
 /**
@@ -422,15 +415,25 @@ inline void setTargetCarMac(const uint8_t* newMac) {
  * 输入：6字节MAC地址指针
  */
 inline void setTargetCameraMac(const uint8_t* newMac) {
-    memcpy(WirelessConfig::CAMERA_MAC, newMac, 6);
-    // 更新 ESP-NOW 配对表，使运行时修改 MAC 后发送生效
+    // 保存旧 MAC，删除旧 peer，再添加新 peer
+    // esp_now_mod_peer 按 peer_addr 查找，用新 MAC 查不到旧 peer，需先删后加
+    uint8_t oldMac[6];
+    memcpy(oldMac, WirelessConfig::CAMERA_MAC, 6);
+    
+    if (esp_now_del_peer(oldMac) != ESP_OK) {
+        Serial.println("[无线通信] 删除旧摄像头配对信息失败");
+    }
+    
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, newMac, 6);
     peerInfo.channel = WirelessConfig::CHANNEL;
     peerInfo.encrypt = false;
-    if (esp_now_mod_peer(&peerInfo) != ESP_OK) {
-        Serial.println("[无线通信] 更新摄像头配对信息失败");
+    
+    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+        Serial.println("[无线通信] 添加新摄像头配对信息失败");
     }
+    
+    memcpy(WirelessConfig::CAMERA_MAC, newMac, 6);
 }
 
 #endif // WIRELESS_H

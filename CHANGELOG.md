@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **v6 综合代码审计修复（46项）** — 修复 1 项 P0、6 项 P1、12 项 P2、27 项 P3
+- **P0**: `receiver_dongle.ino` DRIVE_MODE 命令包改用 `createCommandPacket()` 构造，修复 magic/version/checksum 缺失
+- **P1**: MAC 动态配置 peer 先删后加、测速校准系数去重、摄像头日志防重入、串口断开竞态修复、串口按钮状态独立
+- **P2**: extern 解耦、死字段移除、空 switch 删除、除零保护、命令错误消息优化、行缓冲数据保留、MAC 原子发送、panic 日志、build.rs 路径修正、retryCount 重置、GIMBAL_KEYS Set、port_list 类型守卫
+- **P3**: 固件 6 项 + 后端 13 项 + 前端 8 项（详见 checklist.md）
+- 验证: `cargo check` 通过；`cargo test` 42 测试全过；`bun run build` 成功
+
+### Fixed
 - **P1: 视频包校验和验证** — `receiver_dongle.ino` 接收端添加校验和验证，使用 `len - 1` 计算（排除 checksum 字段），与发送端对齐，损坏包静默丢弃防止花屏
 - **P3: 箭头键临时数组优化** — `useKeyboard.ts` 定义 `PREVENT_DEFAULT_KEYS` 常量 Set，避免每次 keydown 创建新数组
 - **P2: 帧捕获错误恢复** — `video_stream.h` 添加连续失败计数，超过 10 次自动重启摄像头硬件，修复摄像头故障后无法恢复

@@ -96,7 +96,7 @@ pub async fn ws_handler(
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // 注册客户端
     let client_id = {
-        let mut manager = state.ws_manager.lock().unwrap();
+        let mut manager = state.ws_manager.lock().expect("ws_manager lock poisoned");
         manager.add_client()
     };
 
@@ -130,7 +130,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         drop(tx);
         let _ = forward_task.await;
         {
-            let mut manager = state.ws_manager.lock().unwrap();
+            let mut manager = state.ws_manager.lock().expect("ws_manager lock poisoned");
             manager.remove_client(client_id);
         }
         return;
@@ -147,6 +147,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         let mut last_frame_hash: Option<u64> = None;
         let mut last_odometry_send = Instant::now();
         let mut last_ports: Vec<String> = Vec::new();
+        let mut last_port_check = Instant::now();
 
         loop {
             // 检查取消信号
@@ -155,29 +156,32 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 break;
             }
 
-            // 检查串口列表变化，变化时广播 port_list
-            let current_ports = {
-                let ports = video_state.available_ports.lock().await;
-                ports.clone()
-            };
-            if current_ports != last_ports {
-                last_ports = current_ports.clone();
-                let port_message = serde_json::json!({
-                    "type": "port_list",
-                    "ports": current_ports,
-                    "timestamp": chrono::Utc::now().timestamp_millis()
-                });
-                if let Err(e) = video_tx
-                    .send(Message::Text(port_message.to_string().into()))
-                    .await
-                {
-                    debug!("串口列表发送失败: {}", e);
+            // 检查串口列表变化，变化时广播 port_list（每秒最多检查一次）
+            if last_port_check.elapsed() >= std::time::Duration::from_secs(1) {
+                last_port_check = Instant::now();
+                let current_ports = {
+                    let ports = video_state.available_ports.lock().await;
+                    ports.clone()
+                };
+                if current_ports != last_ports {
+                    last_ports = current_ports.clone();
+                    let port_message = serde_json::json!({
+                        "type": "port_list",
+                        "ports": current_ports,
+                        "timestamp": chrono::Utc::now().timestamp_millis()
+                    });
+                    if let Err(e) = video_tx
+                        .send(Message::Text(port_message.to_string().into()))
+                        .await
+                    {
+                        debug!("串口列表发送失败: {}", e);
+                    }
                 }
             }
 
             // 获取视频帧（使用预编码 Base64 数据，避免每客户端重复编码）
             let frame_b64: Option<Arc<String>> = {
-                let b64 = video_state.video_frame_b64.lock().unwrap();
+                let b64 = video_state.video_frame_b64.lock().expect("video_frame_b64 lock poisoned");
                 b64.clone()
             };
 
@@ -224,7 +228,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             if last_odometry_send.elapsed() >= std::time::Duration::from_millis(200) {
                 last_odometry_send = Instant::now();
                 let message = {
-                    let odom = video_state.odometry.lock().unwrap();
+                    let odom = video_state.odometry.lock().expect("odometry lock poisoned");
                     serde_json::json!({
                         "type": "odometry",
                         "leftSpeed": odom.left_speed_mmps,
@@ -290,14 +294,22 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // 通过 CancellationToken 通知视频任务优雅退出
     cancel_token.cancel();
     // 等待视频任务结束（已收到取消信号，会很快退出）
-    let _ = video_task.await;
+    if let Err(e) = video_task.await {
+        if e.is_panic() {
+            error!("视频广播任务 panic: {:?}", e);
+        }
+    }
     // 关闭转发通道（drop tx 触发 rx 结束）
     drop(tx);
-    let _ = forward_task.await;
+    if let Err(e) = forward_task.await {
+        if e.is_panic() {
+            error!("WebSocket 转发任务 panic: {:?}", e);
+        }
+    }
 
     // 注销客户端
     {
-        let mut manager = state.ws_manager.lock().unwrap();
+        let mut manager = state.ws_manager.lock().expect("ws_manager lock poisoned");
         manager.remove_client(client_id);
     }
 }
@@ -315,7 +327,7 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             if let Some(cmd_byte) = data.bytes().next() {
                 // 先获取 serial_manager 锁（与 get_status 锁顺序一致：serial_manager → current_speed）
                 {
-                    let mut manager = state.serial_manager.lock().unwrap();
+                    let mut manager = state.serial_manager.lock().expect("serial_manager lock poisoned");
                     if let Err(e) = manager.send_command(cmd_byte) {
                         warn!("命令发送失败: {}", e);
                         return Err(anyhow::anyhow!("命令发送失败: {}", e));
@@ -334,13 +346,17 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
         "speed" => {
             // 设置速度
             if let Ok(speed) = data.parse::<u8>() {
+                if !(1..=9).contains(&speed) {
+                    warn!("速度值无效: {} (有效范围 1-9)", speed);
+                    return Ok(());
+                }
                 state.current_speed.store(speed, Ordering::Relaxed);
                 info!("设置速度: {}", speed);
             }
         }
         "heartbeat" => {
             // 心跳
-            let mut last = state.last_heartbeat.lock().unwrap();
+            let mut last = state.last_heartbeat.lock().expect("last_heartbeat lock poisoned");
             *last = std::time::Instant::now();
         }
         "drive_mode" => {
@@ -350,7 +366,7 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
                 // 未知模式回退到普通模式（0），防止固件收到无法识别的模式值
                 let mode_value = if mode <= 2 { mode as u8 } else { 0u8 };
                 {
-                    let mut manager = state.serial_manager.lock().unwrap();
+                    let mut manager = state.serial_manager.lock().expect("serial_manager lock poisoned");
                     // 发送 DRIVE_MODE 标识字符 'T'
                     if let Err(e) = manager.send_command(b'T') {
                         warn!("命令发送失败: {}", e);
@@ -366,30 +382,28 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             }
         }
         "mac_config" => {
-            // MAC地址配置：解析MAC字符串并转发到串口
+            // MAC地址配置：解析MAC字符串并原子转发到串口
             if let Some(mac_str) = message["mac"].as_str() {
                 if let Ok(mac_bytes) = parse_mac_address(mac_str) {
                     {
-                        let mut manager = state.serial_manager.lock().unwrap();
+                        let mut manager = state.serial_manager.lock().expect("serial_manager lock poisoned");
                         // MAC 配置帧格式：'M' + 0xFF 帧边界标识 + 长度字节(6) + 6字节MAC
-                        // 防止 MAC 字节恰好匹配控制字符导致接收器误动作
-                        if let Err(e) = manager.send_command(b'M') {
+                        // 组装为单个 [u8; 9] 数组一次性发送，确保原子性：
+                        // 若串口中途断开，接收器不会收到部分 MAC 配置帧
+                        let mac_packet: [u8; 9] = [
+                            b'M',
+                            0xFF,
+                            6, // 长度
+                            mac_bytes[0],
+                            mac_bytes[1],
+                            mac_bytes[2],
+                            mac_bytes[3],
+                            mac_bytes[4],
+                            mac_bytes[5],
+                        ];
+                        if let Err(e) = manager.send_bytes(&mac_packet) {
                             warn!("MAC配置发送失败: {}", e);
                             return Err(anyhow::anyhow!("MAC配置发送失败: {}", e));
-                        }
-                        if let Err(e) = manager.send_command(0xFF) {
-                            warn!("MAC配置发送失败: {}", e);
-                            return Err(anyhow::anyhow!("MAC配置发送失败: {}", e));
-                        }
-                        if let Err(e) = manager.send_command(mac_bytes.len() as u8) {
-                            warn!("MAC配置发送失败: {}", e);
-                            return Err(anyhow::anyhow!("MAC配置发送失败: {}", e));
-                        }
-                        for byte in &mac_bytes {
-                            if let Err(e) = manager.send_command(*byte) {
-                                warn!("MAC配置发送失败: {}", e);
-                                return Err(anyhow::anyhow!("MAC配置发送失败: {}", e));
-                            }
                         }
                     }
                     info!("MAC地址配置已转发: {}", mac_str);
@@ -564,7 +578,7 @@ mod tests {
         let state = create_test_state();
 
         // 记录初始心跳时间
-        let initial = *state.last_heartbeat.lock().unwrap();
+        let initial = *state.last_heartbeat.lock().expect("last_heartbeat lock poisoned");
 
         // 短暂等待确保时间差
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -578,7 +592,7 @@ mod tests {
         );
 
         // 验证心跳时间已更新
-        let updated = *state.last_heartbeat.lock().unwrap();
+        let updated = *state.last_heartbeat.lock().expect("last_heartbeat lock poisoned");
         assert!(updated > initial, "心跳时间应在处理后更新");
     }
 

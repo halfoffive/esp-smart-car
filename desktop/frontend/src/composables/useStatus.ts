@@ -77,10 +77,11 @@ function createStatusPoller() {
   }
 
   /** 启动轮询 */
-  const startPolling = () => {
+  const startPolling = async () => {
     if (interval !== null) return
     isPolling.value = true
-    fetchStatus()
+    // 先同步获取一次状态，确保首次渲染有真实数据而非硬编码零值
+    await fetchStatus()
     interval = setInterval(fetchStatus, POLL_INTERVAL)
   }
 

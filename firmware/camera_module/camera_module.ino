@@ -101,11 +101,13 @@ void setup() {
 
 void loop() {
     // 更新视频流传输
-    updateStreaming();
+    updateStreaming(g_cameraConfig);
     
-    // 每100帧打印一次统计
+    // 每100帧打印一次统计（使用 lastLoggedFrame 防止同一帧重复打印）
+    static uint32_t lastLoggedFrame = 0;
     const StreamState state = getStreamState();
-    if (state.totalFrames % 100 == 0 && state.totalFrames > 0) {
+    if (state.totalFrames != lastLoggedFrame && state.totalFrames % 100 == 0 && state.totalFrames > 0) {
+        lastLoggedFrame = state.totalFrames;
         Serial.printf("[视频流] FPS:%d, 总帧:%lu, 丢弃:%lu, 发送:%lu KB\n",
                       state.fps,
                       (unsigned long)state.totalFrames,

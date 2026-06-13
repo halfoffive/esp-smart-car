@@ -396,7 +396,7 @@ inline void setSpeedCalibration(float leftCorrection, float rightCorrection) {
  */
 inline SpeedCalibration autoCalibrate() {
     // 如果左右轮速度都接近0，返回默认校准
-    if (OdometerState::g_leftSpeedMmps < 1.0f && OdometerState::g_rightSpeedMmps < 1.0f) {
+    if (OdometerState::g_leftSpeedMmps < 1.0f || OdometerState::g_rightSpeedMmps < 1.0f) {
         Serial.println("[测速模块] 自动校准失败：速度过低");
         return OdometerConfig::DEFAULT_CALIBRATION;
     }

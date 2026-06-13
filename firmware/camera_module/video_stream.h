@@ -112,7 +112,7 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
  * 纯函数：动态调整质量
  * 根据网络状况调整JPEG质量
  */
-inline uint8_t adjustQuality(const uint32_t bytesSent, const uint32_t frameSize) {
+inline uint8_t adjustQuality(const uint32_t frameSize) {
     // 如果帧太大，提高压缩率（降低质量）
     if (frameSize > 10000) {
         return VideoStreamConfig::JPEG_QUALITY_MAX;
@@ -149,7 +149,7 @@ inline void sendVideoFrame(const FrameState& frame) {
         );
         
         // 构建视频包
-        VideoPacket packet;
+        VideoPacket packet = {};
         packet.magic = StreamConfig::VIDEO_MAGIC;
         packet.version = StreamConfig::PROTOCOL_VERSION;
         packet.frameId = frame.frameId;
@@ -200,7 +200,7 @@ inline void stopStreaming() {
 /**
  * 更新流传输状态
  */
-inline void updateStreaming() {
+inline void updateStreaming(const CameraConfiguration& config) {
     if (!g_streamState.isStreaming) return;
     
     const uint32_t currentTime = millis();
@@ -225,9 +225,8 @@ inline void updateStreaming() {
                           g_consecutiveFailures);
             esp_camera_deinit();
             delay(500);
-            // 重新初始化摄像头（使用全局配置）
-            extern CameraConfiguration g_cameraConfig;
-            if (!initializeCamera(g_cameraConfig)) {
+            // 重新初始化摄像头
+            if (!initializeCamera(config)) {
                 Serial.println("[视频流] 摄像头重启失败，继续重试...");
             } else {
                 Serial.println("[视频流] 摄像头重启成功");
@@ -244,7 +243,7 @@ inline void updateStreaming() {
     sendVideoFrame(frame);
     
     // 动态调整质量（根据帧大小自适应压缩率）
-    const uint8_t newQuality = adjustQuality(g_streamState.bytesSent, frame.frameSize);
+    const uint8_t newQuality = adjustQuality(frame.frameSize);
     sensor_t* sensor = esp_camera_sensor_get();
     if (sensor != NULL) {
         sensor->set_quality(sensor, newQuality);

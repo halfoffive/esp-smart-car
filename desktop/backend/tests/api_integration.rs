@@ -28,6 +28,7 @@ fn create_test_app(state: Arc<AppState>) -> Router {
         .route("/api/status", get(api::get_status))
         .route("/api/connect", post(api::connect_serial))
         .route("/api/disconnect", post(api::disconnect_serial))
+        .route("/api/ports", get(api::list_ports))
         .with_state(state)
 }
 

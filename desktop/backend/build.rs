@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Command;
 
 fn main() {
@@ -33,22 +34,22 @@ fn main() {
 
         // 条件判断：检查 node_modules 是否存在且 package.json 未变更
         let node_modules_exists =
-            std::path::Path::new(&format!("{}/node_modules", frontend_dir)).exists();
-        let package_json_mtime = std::path::Path::new(frontend_dir)
+            Path::new(frontend_dir).join("node_modules").exists();
+        let package_json_mtime = Path::new(frontend_dir)
             .join("package.json")
             .metadata()
             .and_then(|m| m.modified())
             .ok();
         // bun 使用 bun.lockb 或 bun.lock 作为锁文件（而非 npm 的 .package-lock.json）
-        let lock_file_path = if std::path::Path::new(&format!("{}/bun.lockb", frontend_dir)).exists() {
-            format!("{}/bun.lockb", frontend_dir)
-        } else if std::path::Path::new(&format!("{}/bun.lock", frontend_dir)).exists() {
-            format!("{}/bun.lock", frontend_dir)
+        let lock_file_path = if Path::new(frontend_dir).join("bun.lockb").exists() {
+            Path::new(frontend_dir).join("bun.lockb")
+        } else if Path::new(frontend_dir).join("bun.lock").exists() {
+            Path::new(frontend_dir).join("bun.lock")
         } else {
-            format!("{}/node_modules/.package-lock.json", frontend_dir)
+            Path::new(frontend_dir).join("node_modules").join("package-lock.json")
         };
         let node_modules_mtime =
-            std::path::Path::new(&lock_file_path)
+            lock_file_path
                 .metadata()
                 .and_then(|m| m.modified())
                 .ok();
@@ -75,7 +76,7 @@ fn main() {
             }
 
             // 检查 node_modules 是否存在，确保依赖已安装
-            if !std::path::Path::new(&format!("{}/node_modules", frontend_dir)).exists() {
+            if !Path::new(frontend_dir).join("node_modules").exists() {
                 panic!(
                     "前端依赖安装后 node_modules 目录不存在，请手动运行: cd ../frontend && bun install"
                 );
