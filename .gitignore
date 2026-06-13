@@ -54,3 +54,7 @@ logs/
 
 # Oh My Open Agent
 .sisyphus/
+
+# Deepseek Reasonix
+.codegraph/
+.reasonix/
