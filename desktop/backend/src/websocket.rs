@@ -370,22 +370,17 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             *last = std::time::Instant::now();
         }
         "drive_mode" => {
-            // 行走模式切换：发送 'T' 标识 + 模式值
+            // 行走模式切换：原子发送 [T, mode] 双字节，防止中间插入其他命令导致DRIVE_MODE失效
             // 'T' 是 DRIVE_MODE 专属命令字节，与 MAC_CONFIG 的 'M' 不冲突
             if let Some(mode) = message["mode"].as_u64() {
                 // 未知模式回退到普通模式（0），防止固件收到无法识别的模式值
                 let mode_value = if mode <= 2 { mode as u8 } else { 0u8 };
                 {
                     let mut manager = state.serial_manager.lock().expect("serial_manager lock poisoned");
-                    // 发送 DRIVE_MODE 标识字符 'T'
-                    if let Err(e) = manager.send_command(b'T') {
-                        warn!("命令发送失败: {}", e);
-                        return Err(anyhow::anyhow!("命令发送失败: {}", e));
-                    }
-                    // 发送模式数值（0=普通, 1=直线修正, 2=航向锁定）
-                    if let Err(e) = manager.send_command(mode_value) {
-                        warn!("命令发送失败: {}", e);
-                        return Err(anyhow::anyhow!("命令发送失败: {}", e));
+                    // 使用 send_bytes 确保 [T, mode] 双字节原子发送
+                    if let Err(e) = manager.send_bytes(&[b'T', mode_value]) {
+                        warn!("行走模式命令发送失败: {}", e);
+                        return Err(anyhow::anyhow!("行走模式命令发送失败: {}", e));
                     }
                 }
                 info!("切换行走模式: {} (发送值: {})", mode, mode_value);

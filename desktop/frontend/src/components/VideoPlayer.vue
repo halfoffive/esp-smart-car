@@ -54,32 +54,19 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
 
-const { videoFrame, isConnected } = useWebSocket()
+const { videoFrame, isConnected, videoFps } = useWebSocket()
 
 const videoSrc = ref<string | null>(null)
-const fps = ref(0)
-
-let frameCount = 0
-let lastFpsUpdate = Date.now()
+const fps = computed(() => videoFps.value)
 
 const updateVideo = () => {
   if (!videoFrame.value) {
     return
   }
-
   videoSrc.value = videoFrame.value
-
-  const now = Date.now()
-  frameCount++
-
-  if (now - lastFpsUpdate >= 1000) {
-    fps.value = frameCount
-    frameCount = 0
-    lastFpsUpdate = now
-  }
 }
 
 const unwatch = watch(videoFrame, updateVideo)

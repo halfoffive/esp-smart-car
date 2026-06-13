@@ -64,6 +64,10 @@ const { status } = useStatus()
 
 const serialConnected = computed(() => status.value.serial_status === '已连接')
 const fps = computed(() => videoFps.value || 0)
-const currentSpeed = computed(() => Math.min(9, Math.max(1, status.value.current_speed || 5)))
+const currentSpeed = computed(() => {
+  const speed = status.value.current_speed
+  // current_speed 可能为 0（未初始化），使用 ?? 而非 || 避免 0 被错误替换为 5
+  return Math.min(9, Math.max(1, speed !== null && speed !== undefined ? speed : 5))
+})
 const frameCount = computed(() => status.value.frame_count || 0)
 </script>

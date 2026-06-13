@@ -246,6 +246,17 @@ cargo clippy       # 静态分析检查
 
 ## 版本历史
 
+- v1.7.3 - 2026-06-14
+  - 综合代码审计 v8：修复 9 项问题（2 P2 + 7 P3）
+  - P2: drive_mode 命令原子性修复（websocket.rs `send_bytes` 替代两次 `send_command`）
+  - P2: ControlPanel WebSocket 连接异常处理（wsConnect 添加 await + try-catch）
+  - P3: 固件死代码清理（5项：g_targetHeading、changeMotorState、g_isStreaming、TIMEOUT_MS、WirelessState 死字段）
+  - P3: 视频流配置注释修正（JPEG_QUALITY_MAX/MIN 语义对齐 ESP32 驱动）
+  - P3: 前端 FPS 去重（VideoPlayer 统一使用 useWebSocket().videoFps）
+  - P3: StatusBar 回退逻辑修正（|| 5 → 显式 null/undefined 检查）
+  - P3: .env 死配置清理（移除未被读取的 VIDEO_FRAME_BUFFER_SIZE / MAX_VIDEO_PACKET_SIZE）
+  - P3: receiver_dongle.ino odometry JSON %u 格式符添加 static_cast 显式转换
+
 - v1.7.2 - 2026-06-13
   - 综合代码审计 v5.3：修复 2 项问题（1 P1 + 1 P3）
   - P1: 视频包校验和验证（接收端添加校验和检查，防止花屏）

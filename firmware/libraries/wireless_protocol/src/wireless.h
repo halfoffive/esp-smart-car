@@ -114,15 +114,11 @@ enum class DeviceRole : uint8_t {
  */
 struct WirelessState {
     DeviceRole role;           // 本机角色
-    bool isConnected;            // 是否已连接
     uint8_t peerCount;         // 已配对设备数
-    uint16_t lastSeq;          // 最后接收序列号
     
     constexpr WirelessState(
-        DeviceRole r, bool c, uint8_t pc,
-        uint16_t ls
-    ) : role(r), isConnected(c), peerCount(pc),
-        lastSeq(ls) {}
+        DeviceRole r, uint8_t pc
+    ) : role(r), peerCount(pc) {}
 };
 
 // ============================================
@@ -132,7 +128,6 @@ namespace WirelessConfig {
     constexpr uint8_t MAGIC_BYTE = 0xA5;      // 帧同步魔术字
     constexpr uint8_t PROTOCOL_VERSION = 1;   // 协议版本
     constexpr uint8_t MAX_PEERS = 5;          // 最大配对设备数
-    constexpr uint32_t TIMEOUT_MS = 500;        // 超时时间（毫秒）
     constexpr uint8_t CHANNEL = 1;            // 通信信道
     
     // 接收器MAC地址（需与接收器固件一致）
@@ -158,7 +153,7 @@ namespace StreamConfig {
 // ============================================
 // 注意：使用 inline 确保头文件被多个翻译单元包含时只有一个定义
 inline WirelessState g_wirelessState(
-    DeviceRole::CAR, false, 0, 0
+    DeviceRole::CAR, 0
 );
 inline esp_now_peer_info_t g_peerInfo{};
 

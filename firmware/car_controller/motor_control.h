@@ -160,18 +160,6 @@ inline MotorState createMotorState(
     return MotorState(in1, in2, en, dir, speed);
 }
 
-/**
- * 纯函数：创建新电机状态（基于现有引脚配置）
- */
-inline MotorState changeMotorState(
-    const MotorState& current, const MotorDirection dir, const uint8_t speed
-) {
-    return MotorState(
-        current.pinIn1, current.pinIn2, current.pinEn,
-        dir, speed
-    );
-}
-
 // ============================================
 // 高阶函数：运动模式组合
 // ============================================

@@ -56,8 +56,8 @@ struct StreamState {
 namespace VideoStreamConfig {
     constexpr uint16_t TARGET_FPS = 30;       // 目标帧率
     constexpr uint32_t FRAME_INTERVAL = 1000 / TARGET_FPS; // 帧间隔
-    constexpr uint8_t JPEG_QUALITY_MIN = 5;   // 最小JPEG质量
-    constexpr uint8_t JPEG_QUALITY_MAX = 50;  // 最大JPEG质量
+    constexpr uint8_t JPEG_QUALITY_MIN = 5;   // 最小压缩值（最高质量，驱动中数值越小质量越高）
+    constexpr uint8_t JPEG_QUALITY_MAX = 50;  // 最大压缩值（最低质量，驱动中数值越大质量越低）
 }
 
 // ============================================

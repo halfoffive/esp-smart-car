@@ -70,7 +70,6 @@ struct VideoFrameBuffer {
 // 全局状态
 // ============================================
 VideoFrameBuffer g_videoBuffer;
-bool g_isStreaming = false;
 uint32_t g_lastHeartbeat = 0;
 
 // ============================================
@@ -404,7 +403,7 @@ void onReceiverDataRecv(const esp_now_recv_info* info, const uint8_t* data, int 
                          odomPacket->leftSpeedMmps,
                          odomPacket->rightSpeedMmps,
                          odomPacket->headingX100,
-                         odomPacket->totalDistMm);
+                         static_cast<unsigned int>(odomPacket->totalDistMm));
             return;
         }
     }

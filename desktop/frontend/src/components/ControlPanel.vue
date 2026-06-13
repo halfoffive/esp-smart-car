@@ -414,8 +414,12 @@ const connect = async () => {
     
     if (result.success) {
       addLog('串口连接成功', 'info')
-      // 串口连接成功后自动连接 WebSocket
-      wsConnect()
+      // 串口连接成功后自动连接 WebSocket（await 确保异常可被 catch 捕获）
+      try {
+        await wsConnect()
+      } catch (e) {
+        addLog(`WebSocket 连接失败: ${e instanceof Error ? e.message : String(e)}`, 'warning')
+      }
     } else {
       addLog(`连接失败: ${result.message}`, 'error')
     }

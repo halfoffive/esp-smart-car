@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **P2: DRIVE_MODE 命令原子性修复** — `websocket.rs` drive_mode 从两次独立 `send_command` 改为 `send_bytes(&[b'T', mode_value])` 原子发送，防止中间插入其他命令导致接收器 50ms 超时丢弃
+- **P2: ControlPanel WebSocket 连接异常处理** — `ControlPanel.vue` wsConnect() 改为 `await` + try-catch，确保连接失败异常可被捕获而非静默丢弃
+- **P3: 固件死代码清理（5项）** — `pid_control.h` 移除死字段 `g_targetHeading`；`motor_control.h` 移除从未调用的 `changeMotorState` 函数；`receiver_dongle.ino` 移除从未置 true 的 `g_isStreaming` 变量；`wireless.h` 移除从未引用的 `TIMEOUT_MS` 常量和 `WirelessState` 中从未更新的 `isConnected`/`lastSeq` 字段
+- **P3: 视频流配置注释修正** — `video_stream.h` `VideoStreamConfig::JPEG_QUALITY_MAX/MIN` 注释从"最大/最小JPEG质量"修正为"最大/最小压缩值"，与 ESP32 驱动语义对齐（数值越大 = 压缩越高 = 质量越低）
+- **P3: 前端 FPS 去重** — `VideoPlayer.vue` 移除独立 FPS 计算逻辑，统一使用 `useWebSocket().videoFps`，消除重复统计
+- **P3: StatusBar 速度回退逻辑修正** — `StatusBar.vue` currentSpeed 的 `|| 5` 回退改用显式 null/undefined 检查，避免合法值 0 被错误替换
+- **P3: 后端死配置清理** — `.env` 移除未被任何代码读取的 `VIDEO_FRAME_BUFFER_SIZE` 和 `MAX_VIDEO_PACKET_SIZE`
+- **P3: 串口格式符修正** — `receiver_dongle.ino` odometry JSON `%u` 格式符对 `uint16_t` 添加 `static_cast<unsigned int>()` 显式转换，消除隐式提升歧义
+- 验证: `cargo clippy` 0 warnings；`cargo test` 42 测试全过；`bun run build` 成功
+
+### Fixed
 - **P0: 视频包校验和传输修复** — `video_stream.h` 校验和写入位置从 `packet.checksum`（偏移138）改为实际发送末字节，`sendSize` 增加校验和 1 字节；`receiver_dongle.ino` 读取改为 `data[len-1]`，修复非满载包校验和从未传输 & 越界读取 UB，视频帧最后一个分包不再丢失
 - **P1: videoFps 死状态修复** — `useWebSocket.ts` videoFps 添加实际每秒帧率统计更新逻辑，StatusBar FPS 指示器恢复正常
 - **P1: 主循环延迟优化** — `car_controller.ino` loop() 中 delay(10) → delay(1)，舵机更新粒度提升10倍，命令响应延迟降低

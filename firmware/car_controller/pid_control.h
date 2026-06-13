@@ -135,9 +135,6 @@ namespace PIDControllerState {
     // 行走模式（默认普通模式，与 car_controller.ino 中 g_smartDriveEnabled=false 一致）
     DriveMode g_driveMode = DriveMode::NORMAL;
 
-    // 目标航向（锁定航向模式下使用）
-    float g_targetHeading = 0.0f;
-
     // 航向锁定目标角度（进入锁定模式时捕获当前航向）
     float g_headingLockTarget = 0.0f;
     // 航向锁定目标是否已初始化

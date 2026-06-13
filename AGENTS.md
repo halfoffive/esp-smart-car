@@ -139,6 +139,22 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-14 - 综合代码审计修复 v8（9项修复）
+- **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 全面审查，修复 2 项 P2、7 项 P3
+- **P2（2项）**:
+  - `websocket.rs` — drive_mode 从两次独立 `send_command` 改为 `send_bytes(&[b'T', mode_value])` 原子发送双字节，防止中间插入其他命令导致接收器 50ms 超时静默丢弃
+  - `ControlPanel.vue` — wsConnect() 改为 `await` + try-catch，确保 WebSocket 连接失败异常可被捕获而非静默忽略
+- **P3（7项）**:
+  - `pid_control.h` — 移除死字段 `g_targetHeading`（声明但从未使用）
+  - `motor_control.h` — 移除死函数 `changeMotorState`（定义但从未被调用）
+  - `receiver_dongle.ino` — 移除死变量 `g_isStreaming`（声明但从未置 true）；odometry JSON 中 `%u` 格式符对 `uint16_t` 添加 `static_cast<unsigned int>()` 显式转换
+  - `wireless.h` — 移除死常量 `TIMEOUT_MS`（从未引用）；移除 `WirelessState` 中死字段 `isConnected`/`lastSeq`（从未更新）
+  - `video_stream.h` — `VideoStreamConfig::JPEG_QUALITY_MAX/MIN` 注释从"最大/最小JPEG质量"修正为"最大/最小压缩值"，对齐 ESP32 驱动语义
+  - `VideoPlayer.vue` — 移除独立 FPS 计算逻辑，统一使用 `useWebSocket().videoFps`，消除重复统计
+  - `StatusBar.vue` — currentSpeed 的 `|| 5` 回退改用显式 null/undefined 检查，避免 0 被错误替换
+  - `.env` — 移除未被任何代码读取的死配置值 `VIDEO_FRAME_BUFFER_SIZE` / `MAX_VIDEO_PACKET_SIZE`
+- **验证**: `cargo clippy` 0 warnings；`cargo test` 42 测试全过；`bun run build` 成功
+
 ### 2026-06-14 - 综合代码审计修复 v7（9项修复）
 - **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 全面审查，修复 2 项 P0、2 项 P1、3 项 P2、2 项 P3
 - **P0（2项）**:
