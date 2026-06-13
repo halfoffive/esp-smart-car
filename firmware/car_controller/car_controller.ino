@@ -278,47 +278,53 @@ void sendOdometryData() {
 // ============================================
 
 void onDataRecv(const esp_now_recv_info* info, const uint8_t* incomingData, int len) {
-    // 先尝试按 WirelessPacket 解析
-    if (len == sizeof(WirelessPacket)) {
-        const WirelessPacket* packet = reinterpret_cast<const WirelessPacket*>(incomingData);
-        
-        if (!validatePacket(*packet)) {
+    // 非标准长度包日志（调试用，生产环境通过 DEBUG_WIRELESS 开关控制）
+    if (len != sizeof(WirelessPacket)) {
 #if DEBUG_WIRELESS
-            Serial.println("[无线通信] 收到无效数据包");
+        Serial.printf("[无线通信] 收到非标准长度包: %d 字节（期望 %d）\n",
+                      len, static_cast<int>(sizeof(WirelessPacket)));
 #endif
-            return;
-        }
-        
-        // 处理命令
-        switch (packet->type) {
-            case CommandType::MOVE:
-                g_emergencyStop = false;  // 运动命令显式解除紧急停止
-                handleMoveCommand(static_cast<char>(packet->data));
-                break;
-            case CommandType::SERVO:
-                handleServoCommand(static_cast<char>(packet->data));
-                break;
-            case CommandType::SPEED:
-                handleSpeedCommand(packet->speed);
-                break;
-            case CommandType::STOP:
-                handleStopCommand();
-                break;
-            case CommandType::STATUS:
-                // 心跳命令只更新时间戳，防止超时自动停止
-                // 测速数据已由 loop() 中的 200ms 定时器独立发送，无需重复发送
-                g_lastCmdTime = millis();
-                break;
-            case CommandType::CALIBRATE:
-                handleCalibrateCommand();
-                break;
-            case CommandType::DRIVE_MODE:
-                handleDriveModeCommand(packet->data);
-                g_lastCmdTime = millis();
-                break;
-            default:
-                break;
-        }
+        return;
+    }
+
+    const WirelessPacket* packet = reinterpret_cast<const WirelessPacket*>(incomingData);
+    
+    if (!validatePacket(*packet)) {
+#if DEBUG_WIRELESS
+        Serial.println("[无线通信] 收到无效数据包");
+#endif
+        return;
+    }
+    
+    // 处理命令
+    switch (packet->type) {
+        case CommandType::MOVE:
+            g_emergencyStop = false;  // 运动命令显式解除紧急停止
+            handleMoveCommand(static_cast<char>(packet->data));
+            break;
+        case CommandType::SERVO:
+            handleServoCommand(static_cast<char>(packet->data));
+            break;
+        case CommandType::SPEED:
+            handleSpeedCommand(packet->speed);
+            break;
+        case CommandType::STOP:
+            handleStopCommand();
+            break;
+        case CommandType::STATUS:
+            // 心跳命令只更新时间戳，防止超时自动停止
+            // 测速数据已由 loop() 中的 200ms 定时器独立发送，无需重复发送
+            g_lastCmdTime = millis();
+            break;
+        case CommandType::CALIBRATE:
+            handleCalibrateCommand();
+            break;
+        case CommandType::DRIVE_MODE:
+            handleDriveModeCommand(packet->data);
+            g_lastCmdTime = millis();
+            break;
+        default:
+            break;
     }
 }
 

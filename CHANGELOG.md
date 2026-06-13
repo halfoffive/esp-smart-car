@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **P2: 帧捕获错误恢复** — `video_stream.h` 添加连续失败计数，超过 10 次自动重启摄像头硬件，修复摄像头故障后无法恢复
+- **P2: 非标准包日志** — `car_controller.ino` onDataRecv 添加非标准长度包日志（DEBUG_WIRELESS 开关控制），便于调试
+- **P3: 串口重启指数退避** — `main.rs` 串口任务重启从固定 3 秒改为指数退避（3s→60s 最大），防止持续失败时频繁重试
+- **clippy 警告** — `websocket.rs` test_base64_encode 移除 needless borrow
+
+### Fixed
 - **dead_code 清理** — `websocket.rs` 移除未使用的 `base64_encode` 函数；测试模块内联 Base64 编码并添加 `use base64::Engine;` 导入，`cargo clippy` 0 warnings
 - **P0: HEADING_LOCK PID参数修正** — `pid_control.h` HEADING_LOCK 模式使用正确的 HEADING_PID 参数和 g_headingPidState 状态变量，修复航向锁定功能名存实亡
 - **P0: 视频校验和范围修复** — `video_stream.h` 校验和计算改为仅覆盖实际发送字节（sendSize - 1），修复发送端与接收端校验和不匹配

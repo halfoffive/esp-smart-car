@@ -26,15 +26,26 @@ async fn main() -> anyhow::Result<()> {
     // 创建应用状态
     let state = Arc::new(AppState::new());
 
-    // 启动串口通信任务（退出后自动重启，防止"假死"）
+    // 启动串口通信任务（退出后自动重启，指数退避防止"假死"时频繁重试）
     let serial_state = state.clone();
     tokio::spawn(async move {
+        let mut consecutive_failures: u32 = 0;
         loop {
             if let Err(e) = serial::run_serial_task(serial_state.clone()).await {
-                warn!("串口任务错误: {}, 3秒后重启", e);
-                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                consecutive_failures += 1;
+                // 指数退避：3s, 6s, 12s, 24s, 最大 60s
+                let delay_secs = std::cmp::min(
+                    3u64 * (1u64 << consecutive_failures.saturating_sub(1)),
+                    60,
+                );
+                warn!(
+                    "串口任务错误(连续第{}次): {}, {}秒后重启",
+                    consecutive_failures, e, delay_secs
+                );
+                tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
             } else {
-                // 正常退出（如断开连接），短暂等待后重启
+                // 正常退出（如断开连接），重置退避计数，短暂等待后重启
+                consecutive_failures = 0;
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             }
         }

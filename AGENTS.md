@@ -139,7 +139,16 @@ Key connections:
 
 ## 近期修复记录
 
-### 2026-06-13 - 清理 dead_code 警告
+### 2026-06-13 - 综合代码审计修复 v5.2（3项追加修复）
+- **范围**: 基于 v5.1 排查报告，修复剩余 3 项问题
+- **P2 中优先级修复（2项）**:
+  - `video_stream.h` — 帧捕获添加错误恢复机制：连续失败超过 10 次时自动重启摄像头硬件（调用 esp_camera_deinit + initializeCamera），修复摄像头故障后无法恢复的问题
+  - `car_controller.ino` — onDataRecv 添加非标准长度包日志（通过 DEBUG_WIRELESS 开关控制），便于调试无线通信异常
+- **P3 低优先级修复（1项）**:
+  - `main.rs` — 串口任务重启添加指数退避（3s→6s→12s→24s→60s 最大），防止持续失败时频繁重试
+- **验证**: `bun run build` 成功；`cargo clippy` 0 warnings（修复 test_base64_encode needless borrow）；`cargo test` 因 Rust 1.96.0 ICE 暂无法运行
+
+### 2026-06-13 - 综合代码审计修复 v5.1（23项追加修复）
 - **范围**: 后端 Rust
 - **修复**:
   - `websocket.rs` — 移除未使用的 `base64_encode` 函数，消除 `cargo clippy` dead_code 警告

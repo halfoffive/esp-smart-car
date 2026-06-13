@@ -63,8 +63,12 @@ namespace VideoStreamConfig {
 // ============================================
 // 全局状态（可变）
 // ============================================
-static StreamState g_streamState(false, 0, 0, 0, 0, 0);
-static uint16_t g_frameId = 0;
+inline StreamState g_streamState(false, 0, 0, 0, 0, 0);
+inline uint16_t g_frameId = 0;
+/// 连续帧捕获失败计数（用于错误恢复）
+inline uint8_t g_consecutiveFailures = 0;
+/// 连续失败超过此阈值时重启摄像头
+constexpr uint8_t CAMERA_RESTART_THRESHOLD = 10;
 
 // ============================================
 // 纯函数：帧处理
@@ -209,13 +213,32 @@ inline void updateStreaming() {
     // 捕获帧
     const FrameState frame = captureFrame();
     if (!frame.isValid) {
+        g_consecutiveFailures++;
         g_streamState = StreamState(
             true, g_streamState.lastFrameTime, g_streamState.fps,
             g_streamState.totalFrames, g_streamState.droppedFrames + 1,
             g_streamState.bytesSent
         );
+        // 连续失败超过阈值时重启摄像头硬件
+        if (g_consecutiveFailures >= CAMERA_RESTART_THRESHOLD) {
+            Serial.printf("[视频流] 连续 %d 次帧捕获失败，重启摄像头...\n",
+                          g_consecutiveFailures);
+            esp_camera_deinit();
+            delay(500);
+            // 重新初始化摄像头（使用全局配置）
+            extern CameraConfiguration g_cameraConfig;
+            if (!initializeCamera(g_cameraConfig)) {
+                Serial.println("[视频流] 摄像头重启失败，继续重试...");
+            } else {
+                Serial.println("[视频流] 摄像头重启成功");
+            }
+            g_consecutiveFailures = 0;
+        }
         return;
     }
+    
+    // 帧捕获成功，重置连续失败计数
+    g_consecutiveFailures = 0;
     
     // 发送帧
     sendVideoFrame(frame);

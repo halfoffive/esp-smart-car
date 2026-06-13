@@ -471,7 +471,7 @@ mod tests {
     /// 测试 base64 编码
     #[test]
     fn test_base64_encode() {
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&[0x00, 0x01, 0x02]);
+        let encoded = base64::engine::general_purpose::STANDARD.encode([0x00, 0x01, 0x02]);
         assert_eq!(encoded, "AAEC");
     }
 
