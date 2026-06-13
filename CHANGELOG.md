@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **前端资源嵌入二进制** — `main.rs` 使用 `rust-embed` 将 `frontend/dist/` 编译进 Rust 可执行文件，`Cargo.toml` 新增 `rust-embed` + `mime_guess` 依赖，移除 `tower-http`（仅用于 `ServeDir`）。exe 可在任意位置运行，无需前端 `dist` 目录伴随
+- **SPA fallback 保留** — 所有未匹配路由返回 `index.html`，支持 Vue 客户端路由
+
 ### Fixed
 - **P2: DRIVE_MODE 命令原子性修复** — `websocket.rs` drive_mode 从两次独立 `send_command` 改为 `send_bytes(&[b'T', mode_value])` 原子发送，防止中间插入其他命令导致接收器 50ms 超时丢弃
 - **P2: ControlPanel WebSocket 连接异常处理** — `ControlPanel.vue` wsConnect() 改为 `await` + try-catch，确保连接失败异常可被捕获而非静默丢弃

@@ -48,6 +48,7 @@ esp-smart-car/
 | `SerialManager` | struct | `serial.rs` | USB serial communication |
 | `WebSocketManager` | struct | `websocket.rs` | Client connection management |
 | `AppState` | struct | `lib.rs` | Shared application state |
+| `Assets` | struct | `main.rs` | `rust-embed` static file embedding |
 
 ## Conventions
 
@@ -96,15 +97,15 @@ esp-smart-car/
 ```bash
 # Backend (Rust)
 cd desktop/backend
-cargo build        # Build
-cargo run          # Run server (serves frontend at http://localhost:8080)
+cargo build        # Build（自动将前端嵌入二进制）
+cargo run          # Run server（前端已编译进 exe，可在任意位置运行）
 cargo test         # Run all tests
 
 # Frontend (Vue + Bun)
 cd desktop/frontend
 bun install        # Install dependencies
 bun run dev        # Development server (port 3000)
-bun run build      # Production build (outputs to ../backend/frontend/dist)
+bun run build      # Production build（outputs to ../backend/frontend/dist，供后端嵌入二进制）
 
 # Firmware (Arduino IDE)
 # 1. Install the wireless_protocol library:

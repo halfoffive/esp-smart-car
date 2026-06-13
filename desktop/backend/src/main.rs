@@ -2,13 +2,22 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
+    body::Body,
+    http::{header, StatusCode, Uri},
+    response::Response,
     routing::{get, post},
     Router,
 };
+use rust_embed::Embed;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use esp_smart_car_backend::{api, serial, websocket, AppState};
+
+/// 静态文件嵌入：前端资源编译进二进制
+#[derive(Embed)]
+#[folder = "frontend/dist/"]
+struct Assets;
 
 /// 主函数
 #[tokio::main]
@@ -70,17 +79,12 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/disconnect", post(api::disconnect_serial))
         .route("/api/ports", get(api::list_ports));
 
-    // 静态文件路由（SPA fallback）
-    let static_routes = Router::new().fallback_service(
-        tower_http::services::ServeDir::new("./frontend/dist").fallback(
-            tower_http::services::ServeFile::new("./frontend/dist/index.html"),
-        ),
-    );
+    info!("前端资源已嵌入二进制");
 
     let app = Router::new()
         .route("/ws", get(websocket::ws_handler))
         .merge(api_routes)
-        .merge(static_routes)
+        .fallback(get(static_handler))
         .with_state(state);
 
     // 监听地址（仅本地访问，不暴露给其他设备）
@@ -93,6 +97,35 @@ async fn main() -> anyhow::Result<()> {
     axum::serve(listener, app).await?;
 
     Ok(())
+}
+
+/// 静态文件处理器（嵌入二进制）
+/// 先尝试匹配请求路径的文件，找不到则返回 index.html（SPA fallback）
+async fn static_handler(uri: Uri) -> Response<Body> {
+    let path = uri.path().trim_start_matches('/');
+    let path = if path.is_empty() { "index.html" } else { path };
+
+    match Assets::get(path) {
+        Some(file) => {
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime.as_ref())
+                .body(Body::from(file.data.into_owned()))
+                .expect("响应构建不应失败")
+        }
+        None => match Assets::get("index.html") {
+            Some(index) => Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .body(Body::from(index.data.into_owned()))
+                .expect("响应构建不应失败"),
+            None => Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::from("404 Not Found"))
+                .expect("响应构建不应失败"),
+        },
+    }
 }
 
 #[cfg(test)]

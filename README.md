@@ -154,10 +154,10 @@ esp-smart-car/
 ```bash
 cd desktop/backend
 
-# 编译后端（自动构建前端，设置 SKIP_FRONTEND_BUILD=1 可跳过）
+# 编译后端（自动构建前端并嵌入二进制，设置 SKIP_FRONTEND_BUILD=1 可跳过）
 cargo build
 
-# 运行（自动提供前端页面，访问 http://localhost:8080）
+# 运行（前端已编译进 exe，可在任意位置运行，访问 http://localhost:8080）
 cargo run
 ```
 

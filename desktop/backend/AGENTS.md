@@ -26,6 +26,7 @@ desktop/backend/
 | 修改串口通信 | `src/serial.rs` | 921600 波特率 |
 | 添加 API 端点 | `src/api.rs` | RESTful API |
 | 修改服务器配置 | `src/main.rs` | 路由 + 状态管理 |
+| 修改静态文件嵌入 | `src/main.rs` | `rust-embed` `Assets` 结构体 |
 | 添加依赖 | `Cargo.toml` | Rust 包管理 |
 
 ## Code Map
@@ -33,6 +34,7 @@ desktop/backend/
 | Symbol | Type | Location | Role |
 |--------|------|----------|------|
 | `AppState` | struct | `lib.rs` | 全局共享状态 |
+| `Assets` | struct | `main.rs` | `rust-embed` 静态文件嵌入（`frontend/dist`） |
 | `SerialManager` | struct | `serial.rs` | 串口连接管理 |
 | `WebSocketManager` | struct | `websocket.rs` | 客户端管理 |
 | `SerialConnectionState` | enum | `serial.rs` | 连接状态 |
@@ -81,6 +83,7 @@ cargo build --release  # 优化编译
 
 ## Notes
 
+- **前端嵌入**：前端资源通过 `rust-embed` 编译进二进制，`exe` 可在任意位置运行，无需 `frontend/dist` 目录伴随
 - **端口**：HTTP 服务器监听 8080，WebSocket 在 `/ws`
 - **串口**：默认 921600 波特率，支持动态连接/断开
 - **视频帧**：通过 WebSocket 发送 Base64 编码的 JPEG

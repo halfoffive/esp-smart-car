@@ -10,7 +10,10 @@ build = "build.rs"
 [dependencies]
 # Web框架
 axum = { version = "0.8", features = ["ws"] }
-tower-http = { version = "0.6", features = ["fs"] }
+
+# 静态文件嵌入（将前端编译进二进制，支持任意位置运行）
+rust-embed = { version = "8.11", features = ["mime-guess"] }
+mime_guess = "2.0"
 
 # 异步运行时
 tokio = { version = "1", features = ["full"] }
