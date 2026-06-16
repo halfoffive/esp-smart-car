@@ -13,7 +13,7 @@
           class="flex-1 min-w-0 bg-dark-800 border border-dark-600 rounded-lg px-2 py-1.5 text-xs text-dark-100 focus:outline-none focus:border-primary-500"
         >
           <option value="">选择串口</option>
-          <option v-for="port in wsAvailablePorts" :key="port" :value="port">
+          <option v-for="port in displayedPorts" :key="port" :value="port">
             {{ port }}
           </option>
         </select>
@@ -239,6 +239,13 @@ const { post, get } = useApi()
 const { status } = useStatus()
 
 const selectedPort = ref('')
+/** 手动扫描获取的串口列表（兜底，WebSocket 未连接时也可用） */
+const scannedPorts = ref<string[]>([])
+/** 合并 WebSocket 推送 + 手动扫描的串口列表（去重排序） */
+const displayedPorts = computed(() => {
+  const merged = new Set([...scannedPorts.value, ...wsAvailablePorts.value])
+  return [...merged].sort()
+})
 const currentSpeed = ref(5)
 /** 连接进行中状态标志 */
 const isConnecting = ref(false)
@@ -416,6 +423,7 @@ const scanPorts = async () => {
     const result = await get<{ success: boolean; ports: string[] }>('/api/ports')
 
     if (result.success && result.ports.length > 0) {
+      scannedPorts.value = result.ports
       addLog(`发现 ${result.ports.length} 个串口: ${result.ports.join(', ')}`, 'info')
     } else {
       addLog('未找到可用串口', 'warning')
@@ -431,8 +439,8 @@ onMounted(() => {
   // 页面加载时无需恢复 MAC 地址（已移除 MAC 地址设置功能）
 })
 
-/** 当 WebSocket 推送的可用串口列表变化时，如果当前选中的串口已不在列表中则清除 */
-watch(wsAvailablePorts, (newPorts) => {
+/** 当可用串口列表变化时，如果当前选中的串口已不在列表中则清除 */
+watch(displayedPorts, (newPorts) => {
   if (selectedPort.value && !newPorts.includes(selectedPort.value)) {
     selectedPort.value = ''
   }
