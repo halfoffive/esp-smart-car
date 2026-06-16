@@ -238,7 +238,7 @@ inline void forwardToCar(const SerialCommand& cmd) {
         uint8_t mac[6];
         if (readMacBytes(mac)) {
             setTargetCarMac(mac);
-            Serial.print("[MAC配置] 车载端MAC已更新: ");
+            Serial.print("[链接] 设备已链接，车载端MAC: ");
             for (int i = 0; i < 6; i++) {
                 if (i > 0) Serial.print(':');
                 Serial.printf("%02X", mac[i]);
@@ -526,6 +526,8 @@ void setup() {
     Serial.println("\n================================");
     Serial.println("智能车接收器 - ESP32-C6");
     Serial.println("版本: 1.2.0");
+    Serial.print("MAC: ");
+    Serial.println(WiFi.macAddress());
     Serial.println("================================\n");
     
     // 初始化无线通信
