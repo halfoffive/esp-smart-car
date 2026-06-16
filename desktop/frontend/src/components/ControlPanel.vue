@@ -176,14 +176,14 @@
       </p>
     </div>
 
-    <!-- 蓝牙设备扫描 -->
+    <!-- 设备链接（BLE 扫描 / MAC 手动输入） -->
     <div>
       <div class="flex items-center justify-between mb-1.5">
-        <h3 class="text-xs font-medium text-dark-300">蓝牙设备</h3>
+        <h3 class="text-xs font-medium text-dark-300">设备链接</h3>
         <button
           @click="scanBleDevices"
           class="px-2 py-0.5 text-[10px] bg-dark-700 hover:bg-dark-600 text-dark-200 rounded border border-dark-600 transition-colors"
-          :disabled="isBleScanning || !isConnected"
+          :disabled="isBleScanning || !serialConnected"
           :aria-label="isBleScanning ? '扫描中' : '扫描蓝牙设备'"
         >
           {{ isBleScanning ? '扫描中...' : '扫描' }}
@@ -201,7 +201,7 @@
         <button
           @click="linkManualMac"
           class="px-2 py-1 text-[10px] bg-primary-600 hover:bg-primary-500 text-white rounded transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-          :disabled="!manualMac.trim() || !isConnected"
+          :disabled="!manualMac.trim() || !serialConnected"
         >
           链接
         </button>
@@ -342,8 +342,8 @@ const linkManualMac = () => {
 
 /** 扫描蓝牙设备 */
 const scanBleDevices = async () => {
-  if (!isConnected.value) {
-    addLog('未连接，无法扫描蓝牙设备', 'warning')
+  if (!serialConnected.value) {
+    addLog('未连接串口，无法扫描蓝牙设备', 'warning')
     return
   }
   isBleScanning.value = true
