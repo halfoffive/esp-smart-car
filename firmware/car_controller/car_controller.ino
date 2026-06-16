@@ -451,6 +451,8 @@ void setup() {
     Serial.println("\n================================");
     Serial.println("智能车控制系统 - ESP32-C6");
     Serial.println("版本: 1.3.0 (含测速+PID+视频转发)");
+    Serial.print("MAC: ");
+    Serial.println(WiFi.macAddress());
     Serial.println("================================\n");
     
     // 初始化串口1（与摄像头模块通信，硬件串口自带硬件缓冲，可承受921600波特率）
