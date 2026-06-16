@@ -189,6 +189,23 @@
           {{ isBleScanning ? '扫描中...' : '扫描' }}
         </button>
       </div>
+      <!-- MAC 手动输入一键链接 -->
+      <div class="flex gap-1.5 mb-1.5">
+        <input
+          v-model="manualMac"
+          type="text"
+          placeholder="MAC: AA:BB:CC:DD:EE:FF"
+          class="flex-1 min-w-0 bg-dark-900 border border-dark-600 rounded px-2 py-1 text-[10px] text-dark-200 placeholder-dark-500 focus:outline-none focus:border-primary-500 font-mono"
+          aria-label="手动输入MAC地址"
+        />
+        <button
+          @click="linkManualMac"
+          class="px-2 py-1 text-[10px] bg-primary-600 hover:bg-primary-500 text-white rounded transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+          :disabled="!manualMac.trim() || !isConnected"
+        >
+          链接
+        </button>
+      </div>
       <!-- 设备名过滤 -->
       <input
         v-if="bleDevices.length > 0"
@@ -281,6 +298,8 @@ const logs = ref<{ id: number, time: string, message: string, color: string }[]>
 
 /** BLE 扫描进行中状态 */
 const isBleScanning = ref(false)
+/** 手动输入的 MAC 地址 */
+const manualMac = ref('')
 /** BLE 设备名/MAC 过滤关键词 */
 const bleNameFilter = ref('')
 /** 选中的 BLE 设备 MAC（高亮显示） */
@@ -305,6 +324,19 @@ const selectBleDevice = (device: { name: string; mac: string; rssi: number }) =>
     addLog(`已链接设备: ${device.name} (${device.mac})`, 'info')
   } else {
     addLog(`链接失败: ${device.name}，WebSocket 未连接`, 'error')
+  }
+}
+
+/** 手动输入 MAC 一键链接（复制车载端启动日志中的 MAC 粘贴即可） */
+const linkManualMac = () => {
+  const mac = manualMac.value.trim()
+  if (!mac) return
+  const success = sendMacConfig(mac)
+  if (success) {
+    addLog(`已链接设备: ${mac}`, 'info')
+    selectedBleMac.value = mac
+  } else {
+    addLog('链接失败，请确认已连接串口和 WebSocket', 'error')
   }
 }
 
