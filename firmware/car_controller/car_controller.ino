@@ -25,6 +25,7 @@
 #include "../libraries/wireless_protocol/src/wireless.h"
 #include "odometer.h"
 #include "pid_control.h"
+#include <BLEDevice.h>
 
 // Serial1 配置：与 ESP32-S3 摄像头模块通信（硬件串口，GPIO2 RX / GPIO3 TX）
 namespace SoftSerialConfig {
@@ -451,8 +452,6 @@ void setup() {
     Serial.println("\n================================");
     Serial.println("智能车控制系统 - ESP32-C6");
     Serial.println("版本: 1.3.0 (含测速+PID+视频转发)");
-    Serial.print("MAC: ");
-    Serial.println(WiFi.macAddress());
     Serial.println("================================\n");
     
     // 初始化串口1（与摄像头模块通信，硬件串口自带硬件缓冲，可承受921600波特率）
@@ -483,6 +482,12 @@ void setup() {
     if (esp_now_register_recv_cb(onDataRecv) != ESP_OK) {
         Serial.println("[无线通信] 注册接收回调失败");
     }
+    
+    Serial.print("[初始化] MAC: ");
+    Serial.println(WiFi.macAddress());
+    
+    // 初始化 BLE 设备名（方便扫描识别）
+    BLEDevice::init("智能车");
     
     // 初始化状态
     g_currentMotion = createStopState();
