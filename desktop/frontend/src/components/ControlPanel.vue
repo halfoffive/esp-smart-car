@@ -194,7 +194,7 @@
         v-if="bleDevices.length > 0"
         v-model="bleNameFilter"
         type="text"
-        placeholder="输入设备名过滤..."
+        placeholder="输入设备名或MAC过滤..."
         class="w-full bg-dark-900 border border-dark-600 rounded px-2 py-1 mb-1.5 text-[10px] text-dark-200 placeholder-dark-500 focus:outline-none focus:border-primary-500"
         aria-label="蓝牙设备名过滤"
       />
@@ -217,7 +217,7 @@
         </div>
       </div>
       <p v-else-if="bleDevices.length > 0 && bleNameFilter" class="text-[9px] text-dark-600">
-        无匹配"{{ bleNameFilter }}"的设备（共 {{ bleDevices.length }} 个）
+        无匹配"{{ bleNameFilter }}"的设备（共 {{ bleDevices.length }} 个，可按 MAC 地址过滤）
       </p>
       <p v-else class="text-[9px] text-dark-600">点击扫描发现周围蓝牙设备</p>
     </div>
@@ -281,15 +281,18 @@ const logs = ref<{ id: number, time: string, message: string, color: string }[]>
 
 /** BLE 扫描进行中状态 */
 const isBleScanning = ref(false)
-/** BLE 设备名过滤关键词 */
+/** BLE 设备名/MAC 过滤关键词 */
 const bleNameFilter = ref('')
 /** 选中的 BLE 设备 MAC（高亮显示） */
 const selectedBleMac = ref('')
-/** 过滤后的 BLE 设备列表（按名称包含过滤词，大小写不敏感） */
+/** 过滤后的 BLE 设备列表（按名称或 MAC 包含过滤词，大小写不敏感） */
 const filteredBleDevices = computed(() => {
   const filter = bleNameFilter.value.trim().toLowerCase()
   if (!filter) return bleDevices.value
-  return bleDevices.value.filter(d => d.name.toLowerCase().includes(filter))
+  return bleDevices.value.filter(d =>
+    d.name.toLowerCase().includes(filter) ||
+    d.mac.toLowerCase().includes(filter)
+  )
 })
 
 /** 点击 BLE 设备：选中并发送 MAC 配置到接收器，用于泵项目设备链接 */
