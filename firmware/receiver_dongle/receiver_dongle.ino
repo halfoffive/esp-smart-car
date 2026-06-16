@@ -541,7 +541,7 @@ void setup() {
     }
     
     // 初始化 BLE（扫描前只需初始化一次）
-    BLEDevice::init("");
+    BLEDevice::init("智能车");
     
     // 初始化视频缓冲区
     initVideoBuffer();
