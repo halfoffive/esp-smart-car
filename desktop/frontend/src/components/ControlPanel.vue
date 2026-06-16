@@ -251,7 +251,7 @@ import { useKeyboard } from '../composables/useKeyboard'
 import { useApi } from '../composables/useApi'
 import { useStatus } from '../composables/useStatus'
 
-const { sendCommand: wsSendCommand, sendSpeed, isConnected, sendDriveMode, availablePorts: wsAvailablePorts, connect: wsConnect, disconnect: wsDisconnect, bleDevices, sendBleScan } = useWebSocket(true)
+const { sendCommand: wsSendCommand, sendSpeed, isConnected, sendDriveMode, availablePorts: wsAvailablePorts, connect: wsConnect, disconnect: wsDisconnect, bleDevices, sendBleScan, sendMacConfig } = useWebSocket(true)
 const { post, get } = useApi()
 const { status } = useStatus()
 
@@ -292,14 +292,17 @@ const filteredBleDevices = computed(() => {
   return bleDevices.value.filter(d => d.name.toLowerCase().includes(filter))
 })
 
-/** 点击 BLE 设备：选中并复制 MAC 地址，用于泵项目设备链接 */
+/** 点击 BLE 设备：选中并发送 MAC 配置到接收器，用于泵项目设备链接 */
 const selectBleDevice = (device: { name: string; mac: string; rssi: number }) => {
   selectedBleMac.value = device.mac
-  navigator.clipboard.writeText(device.mac).then(() => {
-    addLog(`已复制 MAC: ${device.mac} (${device.name})`, 'info')
-  }).catch(() => {
-    addLog(`选中设备: ${device.name} (${device.mac})`, 'info')
-  })
+  // 发送 MAC 配置到接收器，接收器会通过 ESP-NOW 转发到车载端
+  const success = sendMacConfig(device.mac)
+  navigator.clipboard.writeText(device.mac).catch(() => {})
+  if (success) {
+    addLog(`已链接设备: ${device.name} (${device.mac})`, 'info')
+  } else {
+    addLog(`链接失败: ${device.name}，WebSocket 未连接`, 'error')
+  }
 }
 
 /** 扫描蓝牙设备 */
