@@ -208,6 +208,7 @@ inline bool initializeCamera(const CameraConfiguration& config) {
     cameraConfig.frame_size = resolutionToFramesize(config.resolution);
     cameraConfig.jpeg_quality = static_cast<int>(config.quality);
     cameraConfig.fb_count = 2;  // 双缓冲
+    cameraConfig.xclk_freq_hz = 20000000;  // 20MHz XCLK（修复除零：驱动据此计算时钟分频器，必须非零）
     
     // 初始化摄像头
     esp_err_t err = esp_camera_init(&cameraConfig);

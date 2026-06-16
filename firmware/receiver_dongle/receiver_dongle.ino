@@ -294,26 +294,26 @@ inline void forwardToCar(const SerialCommand& cmd) {
  * BLE 扫描回调类
  * 收集发现的设备信息，按 MAC 地址去重
  */
-class MyBLEScanCallback : public BLEScanCallbacks {
+class MyBLEScanCallback : public BLEAdvertisedDeviceCallbacks {
 private:
     BleScanResult& result_;
 
 public:
     MyBLEScanCallback(BleScanResult& result) : result_(result) {}
 
-    void onResult(BLEAdvertisedDevice* advertisedDevice) override {
+    void onResult(BLEAdvertisedDevice advertisedDevice) {
         if (result_.count >= 20) return;  // 缓冲区已满
 
         // 获取 MAC 地址
-        BLEAddress addr = advertisedDevice->getAddress();
+        BLEAddress addr = advertisedDevice.getAddress();
         const uint8_t* mac = addr.getNative();
 
         // 按 MAC 去重
         for (uint8_t i = 0; i < result_.count; i++) {
             if (memcmp(result_.devices[i].mac, mac, 6) == 0) {
                 // 更新 RSSI（取更强的信号）
-                if (advertisedDevice->getRSSI() > result_.devices[i].rssi) {
-                    result_.devices[i].rssi = advertisedDevice->getRSSI();
+                if (advertisedDevice.getRSSI() > result_.devices[i].rssi) {
+                    result_.devices[i].rssi = advertisedDevice.getRSSI();
                 }
                 return;
             }
@@ -322,12 +322,12 @@ public:
         // 新设备
         BleDeviceInfo& dev = result_.devices[result_.count];
         memcpy(dev.mac, mac, 6);
-        dev.rssi = advertisedDevice->getRSSI();
+        dev.rssi = advertisedDevice.getRSSI();
         dev.isValid = true;
 
         // 获取设备名称
-        if (advertisedDevice->haveName()) {
-            strncpy(dev.name, advertisedDevice->getName().c_str(), sizeof(dev.name) - 1);
+        if (advertisedDevice.haveName()) {
+            strncpy(dev.name, advertisedDevice.getName().c_str(), sizeof(dev.name) - 1);
             dev.name[sizeof(dev.name) - 1] = '\0';
         } else {
             strncpy(dev.name, "Unknown", sizeof(dev.name) - 1);
@@ -356,7 +356,7 @@ void performBleScan() {
     // 重复调用可能导致资源泄漏或状态异常
     BLEScan* pBLEScan = BLEDevice::getScan();
     MyBLEScanCallback callback(scanResult);
-    pBLEScan->setScanCallbacks(&callback);
+    pBLEScan->setAdvertisedDeviceCallbacks(&callback);
     pBLEScan->setActiveScan(true);
     pBLEScan->start(10);  // 扫描 10 秒
 

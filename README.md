@@ -15,7 +15,7 @@ esp-smart-car/
 │   │   ├── motor_control.h      # 电机控制（函数式编程，差速支持）
 │   │   ├── odometer.h           # 编码器测速模块
 │   │   ├── pid_control.h        # PID控制器（直线修正+航向锁定）
-│   │   └── car_controller.ino   # 主程序（含软串口视频帧接收）
+│   │   └── car_controller.ino   # 主程序（含 HardwareSerial Serial1 视频帧接收）
 │   ├── camera_module/           # 摄像头模块（ESP32-S3 CAM）
 │   │   ├── camera_config.h      # 摄像头配置
 │   │   ├── video_stream.h       # 视频流传输（Serial1 发送）

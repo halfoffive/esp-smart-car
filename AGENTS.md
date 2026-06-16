@@ -193,6 +193,13 @@ Key connections:
   - `.env` — 移除未被任何代码读取的死配置值 `VIDEO_FRAME_BUFFER_SIZE` / `MAX_VIDEO_PACKET_SIZE`
 - **验证**: `cargo clippy` 0 warnings；`cargo test` 42 测试全过；`bun run build` 成功
 
+### 2026-06-13 - 固件编译与运行时修复（3项 P0）
+
+- **P0-1: ESP32-S3 摄像头除零崩溃** — `camera_config.h` 添加 `xclk_freq_hz = 20000000`。`camera_config_t` 经 `memset` 清零后 `xclk_freq_hz` 为 0，ESP32 摄像头驱动在 `ll_cam.c:333` 计算时钟分频器时除以零触发 `IntegerDivideByZero` panic。
+- **P0-2: ESP32-C6 BLE 扫描编译错误** — `receiver_dongle.ino` BLE 回调 API 适配 NimBLE：`BLEScanCallbacks` → `BLEAdvertisedDeviceCallbacks`，`setScanCallbacks` → `setAdvertisedDeviceCallbacks`，`onResult` 签名从指针改为传值。
+- **P0-3: ESP32-C6 SoftwareSerial 编译错误** — `car_controller.ino` 移除 `#include <SoftwareSerial.h>`，改用 `Serial1`（HardwareSerial）硬件串口（`Serial1.begin(921600, SERIAL_8N1, 14, 15)`），天然支持 921600 高波特率。
+- **验证**: 无需编译验证（固件修改，grep 确认无残留引用）
+
 ### 2026-06-13 - 综合代码审计修复 v7（9项修复）
 - **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 全面审查，修复 2 项 P0、2 项 P1、3 项 P2、2 项 P3
 - **P0（2项）**:

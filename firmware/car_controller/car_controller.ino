@@ -25,12 +25,11 @@
 #include "../libraries/wireless_protocol/src/wireless.h"
 #include "odometer.h"
 #include "pid_control.h"
-#include <SoftwareSerial.h>
 
-// 软串口配置：与 ESP32-S3 摄像头模块通信
+// Serial1 配置：与 ESP32-S3 摄像头模块通信（硬件串口，支持高速率）
 namespace SoftSerialConfig {
-    constexpr uint8_t RX_PIN = 14;       // 软串口接收引脚（原舵机水平引脚）
-    constexpr uint8_t TX_PIN = 15;       // 软串口发送引脚（原舵机垂直引脚）
+    constexpr uint8_t RX_PIN = 14;       // Serial1 接收引脚（GPIO14）
+    constexpr uint8_t TX_PIN = 15;       // Serial1 发送引脚（GPIO15）
     constexpr uint32_t BAUD_RATE = 921600; // 波特率（高速传输视频帧）
     constexpr size_t FRAME_BUFFER_SIZE = 32768; // 视频帧缓冲区大小（32KB）
 }
@@ -49,8 +48,7 @@ namespace SoftSerialConfig {
 // 全局状态（可变状态，在主循环中更新）
 // ============================================
 
-/// 软串口实例（与摄像头模块通信）
-SoftwareSerial g_cameraSerial(SoftSerialConfig::RX_PIN, SoftSerialConfig::TX_PIN);
+/// 硬件串口 Serial1（与摄像头模块通信，GPIO14 RX / GPIO15 TX）
 
 /// 视频帧缓冲区（从摄像头接收的帧数据）
 uint8_t g_cameraFrameBuffer[SoftSerialConfig::FRAME_BUFFER_SIZE];
@@ -285,8 +283,8 @@ void receiveCameraFrame() {
     // 防止 forwardCameraFrame() 发送期间缓冲区被覆盖
     if (g_cameraFrameReady) return;
     
-    while (g_cameraSerial.available()) {
-        const int byteVal = g_cameraSerial.read();
+    while (Serial1.available()) {
+        const int byteVal = Serial1.read();
         if (byteVal < 0) return;
         
         switch (g_frameState) {
@@ -455,10 +453,10 @@ void setup() {
     Serial.println("版本: 1.3.0 (含测速+PID+视频转发)");
     Serial.println("================================\n");
     
-    // 初始化软串口（与摄像头模块通信）
-    g_cameraSerial.begin(SoftSerialConfig::BAUD_RATE);
+    // 初始化串口1（与摄像头模块通信，硬件串口自带硬件缓冲，可承受921600波特率）
+    Serial1.begin(SoftSerialConfig::BAUD_RATE, SERIAL_8N1, SoftSerialConfig::RX_PIN, SoftSerialConfig::TX_PIN);
     delay(100);
-    Serial.println("[初始化] 软串口初始化完成 (GPIO14 RX, GPIO15 TX)");
+    Serial.println("[初始化] 串口1初始化完成 (GPIO14 RX, GPIO15 TX)");
     
     // 初始化电机引脚
     initializeMotorPins();

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.8.0] - 2026-06-13
 
+### 编译与运行时修复（P0）
+- **ESP32-S3 摄像头除零崩溃**: `camera_config.h` 添加 `xclk_freq_hz=20000000`，修复摄像头驱动时钟分频器除零 panic（`IntegerDivideByZero`）
+- **ESP32-C6 BLE 扫描编译错误**: `receiver_dongle.ino` BLE 回调 API 适配 NimBLE（3.3.8 core 变更），`BLEScanCallbacks`→`BLEAdvertisedDeviceCallbacks`
+- **ESP32-C6 SoftwareSerial 编译错误**: `car_controller.ino` 移除不存在的 `SoftwareSerial.h`，视频帧接收改用 `Serial1`（HardwareSerial），921600 波特率硬件缓冲
+
 ### 硬件变更
 - **移除舵机**：砍掉 SG90 水平/垂直舵机，简化硬件
 - **HardwareSerial 直连**：ESP32-S3 摄像头与 ESP32-C6 车载控制器改为 HardwareSerial (Serial1) 直连（GPIO 14/15），替代 ESP-NOW 无线通信
