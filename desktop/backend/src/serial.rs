@@ -97,6 +97,8 @@ pub enum SerialReadResult {
 pub struct SerialManager {
     /// 当前串口连接（使用 BufReader 缓冲读取，解决帧头重叠遗漏问题）
     port: Option<BufReader<Box<dyn SerialPort>>>,
+    /// 串口写句柄（通过 try_clone 创建的独立句柄，与 port 可并发读写）
+    write_port: Option<Box<dyn SerialPort>>,
     /// 连接状态
     pub state: SerialConnectionState,
     /// 已接收的帧数
@@ -118,6 +120,7 @@ impl SerialManager {
     pub fn new() -> Self {
         Self {
             port: None,
+            write_port: None,
             state: SerialConnectionState::Disconnected,
             frame_count: 0,
             bytes_sent: 0,
@@ -181,6 +184,16 @@ impl SerialManager {
             }
         };
 
+        // 克隆写句柄：串口支持 try_clone，读写可并发操作不同句柄
+        let write_port = match port.try_clone() {
+            Ok(wp) => wp,
+            Err(e) => {
+                self.state = SerialConnectionState::Disconnected;
+                return Err(anyhow::anyhow!("串口写句柄克隆失败: {}", e));
+            }
+        };
+
+        self.write_port = Some(write_port);
         self.port = Some(BufReader::new(port));
         self.state = SerialConnectionState::Connected {
             port_name: port_name.to_string(),
@@ -202,6 +215,7 @@ impl SerialManager {
         // 能检测到 Disconnected 状态并 drop port，而不是将其放回已废弃的 manager
         info!("断开串口连接");
         self.port = None;
+        self.write_port = None;
         self.state = SerialConnectionState::Disconnected;
     }
 
@@ -210,18 +224,18 @@ impl SerialManager {
         self.send_bytes(&[cmd])
     }
 
-    /// 发送多字节数据（原子写入，避免部分发送）
+    /// 发送多字节数据（使用独立写句柄，与读操作可并发）
     pub fn send_bytes(&mut self, data: &[u8]) -> Result<()> {
-        if let Some(ref mut port) = self.port {
-            port.get_mut().write_all(data)?;
-            port.get_mut().flush()?;
+        if let Some(ref mut wp) = self.write_port {
+            wp.write_all(data)?;
+            wp.flush()?;
             self.bytes_sent += data.len() as u64;
             self.command_count += 1;
             debug!("发送数据: {} 字节", data.len());
             Ok(())
         } else if matches!(self.state, SerialConnectionState::Connected { .. }) {
-            // port 为 None 但 state 为 Connected：说明 port 被 run_serial_task 临时取出
-            Err(anyhow::anyhow!("串口正忙，请稍后重试"))
+            // write_port 为 None 但 state 为 Connected：异常状态（不应再发生）
+            Err(anyhow::anyhow!("串口写句柄异常，请断开后重连"))
         } else {
             Err(anyhow::anyhow!("串口未连接"))
         }
@@ -496,8 +510,7 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
             let state_clone = Arc::clone(&state);
 
             // 在 spawn_blocking 中执行阻塞 I/O，避免阻塞 Tokio 运行时
-            // 关键修复：不持有 serial_manager 锁执行长时间 I/O（read_next 最长5秒）
-            // 使用 take/return 模式临时取出 port，释放锁供其他 API 使用
+            // port 由 read 任务独占（send_bytes 使用独立的 write_port），take 后做 I/O 再归还
             let result = tokio::task::spawn_blocking(move || {
                 // 短暂获取锁，取出 port
                 let mut port = {
