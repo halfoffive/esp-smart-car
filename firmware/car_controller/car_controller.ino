@@ -15,7 +15,7 @@
  * - L298N #2: IN1->GPIO7, IN2->GPIO8, EN->GPIO9 (控制右侧电机)
  * - 左编码器: GPIO0
  * - 右编码器: GPIO1
- * - 软串口: GPIO14(RX) / GPIO15(TX) -> ESP32-S3 UART（与摄像头模块通信）
+ * - Serial1: GPIO2(RX) / GPIO3(TX) -> ESP32-S3 UART（与摄像头模块通信）
  * 
  * 作者：智能车项目团队
  * 版本：1.3.0
@@ -26,10 +26,10 @@
 #include "odometer.h"
 #include "pid_control.h"
 
-// Serial1 配置：与 ESP32-S3 摄像头模块通信（硬件串口，GPIO2 RX / GPIO15 TX）
+// Serial1 配置：与 ESP32-S3 摄像头模块通信（硬件串口，GPIO2 RX / GPIO3 TX）
 namespace SoftSerialConfig {
     constexpr uint8_t RX_PIN = 2;        // Serial1 接收引脚（GPIO2）
-    constexpr uint8_t TX_PIN = 15;       // Serial1 发送引脚（GPIO15）
+    constexpr uint8_t TX_PIN = 3;        // Serial1 发送引脚（GPIO3）
     constexpr uint32_t BAUD_RATE = 921600; // 波特率（高速传输视频帧）
     constexpr size_t FRAME_BUFFER_SIZE = 32768; // 视频帧缓冲区大小（32KB）
 }
@@ -48,7 +48,7 @@ namespace SoftSerialConfig {
 // 全局状态（可变状态，在主循环中更新）
 // ============================================
 
-/// 硬件串口 Serial1（与摄像头模块通信，GPIO2 RX / GPIO15 TX）
+/// 硬件串口 Serial1（与摄像头模块通信，GPIO2 RX / GPIO3 TX）
 
 /// 视频帧缓冲区（从摄像头接收的帧数据）
 uint8_t g_cameraFrameBuffer[SoftSerialConfig::FRAME_BUFFER_SIZE];
@@ -268,7 +268,7 @@ void sendOdometryData() {
 // ============================================
 
 /**
- * 从软串口接收摄像头视频帧
+ * 从串口1（Serial1）接收摄像头视频帧
  * 帧格式: [0xAA][0x55][帧大小4字节][帧数据]
  * 接收完整帧后标记为待转发
  */
@@ -456,7 +456,7 @@ void setup() {
     // 初始化串口1（与摄像头模块通信，硬件串口自带硬件缓冲，可承受921600波特率）
     Serial1.begin(SoftSerialConfig::BAUD_RATE, SERIAL_8N1, SoftSerialConfig::RX_PIN, SoftSerialConfig::TX_PIN);
     delay(100);
-    Serial.println("[初始化] 串口1初始化完成 (GPIO2 RX, GPIO15 TX)");
+    Serial.println("[初始化] 串口1初始化完成 (GPIO2 RX, GPIO3 TX)");
     
     // 初始化电机引脚
     initializeMotorPins();
