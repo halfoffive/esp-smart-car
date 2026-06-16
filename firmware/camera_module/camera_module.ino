@@ -33,7 +33,16 @@ void setup() {
     Serial.println("\n================================");
     Serial.println("ESP32-S3 CAM 视频传输模块");
     Serial.println("版本: 1.3.0 (串口直连车载控制器)");
-    Serial.println("================================\n");
+    Serial.println("================================");
+    
+    // PSRAM 诊断（摄像头 DMA 缓冲依赖 PSRAM）
+    if (psramFound()) {
+        Serial.printf("[内存] PSRAM 已启用: %.1f MB\n", ESP.getPsramSize() / 1048576.0f);
+    } else {
+        Serial.println("[内存] ⚠ PSRAM 未启用！请在 Arduino IDE 中设置 Tools→PSRAM→OPI PSRAM");
+        Serial.println("[内存] 摄像头需要 PSRAM，初始化将失败");
+    }
+    Serial.println("");
     
     // 初始化摄像头
     if (!initializeCamera(g_cameraConfig)) {

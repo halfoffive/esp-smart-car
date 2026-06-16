@@ -207,13 +207,15 @@ inline bool initializeCamera(const CameraConfiguration& config) {
     cameraConfig.pixel_format = PIXFORMAT_JPEG;  // JPEG格式，适合传输
     cameraConfig.frame_size = resolutionToFramesize(config.resolution);
     cameraConfig.jpeg_quality = static_cast<int>(config.quality);
-    cameraConfig.fb_count = 1;  // 单缓冲（双缓冲可能超出 PSRAM 导致 DMA 分配失败）
-    cameraConfig.xclk_freq_hz = 10000000;  // 10MHz XCLK（Freenove S3 CAM 典型值，20MHz 部分板子不稳定）
+    cameraConfig.fb_count = 1;  // 单缓冲（减少 PSRAM 占用）
+    cameraConfig.xclk_freq_hz = 10000000;  // 10MHz XCLK（Freenove S3 CAM 典型值）
+    cameraConfig.fb_location = CAMERA_FB_IN_PSRAM;  // 帧缓冲使用 PSRAM（S3 CAM 必需）
     
     // 初始化摄像头
     esp_err_t err = esp_camera_init(&cameraConfig);
     if (err != ESP_OK) {
         Serial.printf("[摄像头] 初始化失败: 0x%x\n", err);
+        Serial.println("[摄像头] 请检查: 1)PSRAM是否开启(Tools→PSRAM→OPI) 2)摄像头排线");
         return false;
     }
     
