@@ -189,11 +189,25 @@
           {{ isBleScanning ? '扫描中...' : '扫描' }}
         </button>
       </div>
-      <div v-if="bleDevices.length > 0" class="space-y-1 max-h-[120px] overflow-y-auto">
+      <!-- 设备名过滤 -->
+      <input
+        v-if="bleDevices.length > 0"
+        v-model="bleNameFilter"
+        type="text"
+        placeholder="输入设备名过滤..."
+        class="w-full bg-dark-900 border border-dark-600 rounded px-2 py-1 mb-1.5 text-[10px] text-dark-200 placeholder-dark-500 focus:outline-none focus:border-primary-500"
+        aria-label="蓝牙设备名过滤"
+      />
+      <div v-if="filteredBleDevices.length > 0" class="space-y-1 max-h-[120px] overflow-y-auto">
         <div
-          v-for="device in bleDevices"
+          v-for="device in filteredBleDevices"
           :key="device.mac"
-          class="flex items-center justify-between bg-dark-800 rounded px-2 py-1 text-[10px]"
+          @click="selectBleDevice(device)"
+          :class="[
+            'flex items-center justify-between rounded px-2 py-1 text-[10px] cursor-pointer transition-colors',
+            selectedBleMac === device.mac ? 'bg-primary-600/30 border border-primary-500/50' : 'bg-dark-800 hover:bg-dark-700 border border-transparent'
+          ]"
+          :title="'点击链接设备: ' + device.mac"
         >
           <span class="text-dark-200 truncate flex-1 min-w-0">{{ device.name }}</span>
           <span class="text-dark-500 font-mono ml-2 shrink-0">{{ device.mac }}</span>
@@ -202,6 +216,9 @@
           </span>
         </div>
       </div>
+      <p v-else-if="bleDevices.length > 0 && bleNameFilter" class="text-[9px] text-dark-600">
+        无匹配"{{ bleNameFilter }}"的设备（共 {{ bleDevices.length }} 个）
+      </p>
       <p v-else class="text-[9px] text-dark-600">点击扫描发现周围蓝牙设备</p>
     </div>
 
@@ -264,6 +281,26 @@ const logs = ref<{ id: number, time: string, message: string, color: string }[]>
 
 /** BLE 扫描进行中状态 */
 const isBleScanning = ref(false)
+/** BLE 设备名过滤关键词 */
+const bleNameFilter = ref('')
+/** 选中的 BLE 设备 MAC（高亮显示） */
+const selectedBleMac = ref('')
+/** 过滤后的 BLE 设备列表（按名称包含过滤词，大小写不敏感） */
+const filteredBleDevices = computed(() => {
+  const filter = bleNameFilter.value.trim().toLowerCase()
+  if (!filter) return bleDevices.value
+  return bleDevices.value.filter(d => d.name.toLowerCase().includes(filter))
+})
+
+/** 点击 BLE 设备：选中并复制 MAC 地址，用于泵项目设备链接 */
+const selectBleDevice = (device: { name: string; mac: string; rssi: number }) => {
+  selectedBleMac.value = device.mac
+  navigator.clipboard.writeText(device.mac).then(() => {
+    addLog(`已复制 MAC: ${device.mac} (${device.name})`, 'info')
+  }).catch(() => {
+    addLog(`选中设备: ${device.name} (${device.mac})`, 'info')
+  })
+}
 
 /** 扫描蓝牙设备 */
 const scanBleDevices = async () => {

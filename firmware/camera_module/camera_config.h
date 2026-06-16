@@ -207,8 +207,8 @@ inline bool initializeCamera(const CameraConfiguration& config) {
     cameraConfig.pixel_format = PIXFORMAT_JPEG;  // JPEG格式，适合传输
     cameraConfig.frame_size = resolutionToFramesize(config.resolution);
     cameraConfig.jpeg_quality = static_cast<int>(config.quality);
-    cameraConfig.fb_count = 2;  // 双缓冲
-    cameraConfig.xclk_freq_hz = 20000000;  // 20MHz XCLK（修复除零：驱动据此计算时钟分频器，必须非零）
+    cameraConfig.fb_count = 1;  // 单缓冲（双缓冲可能超出 PSRAM 导致 DMA 分配失败）
+    cameraConfig.xclk_freq_hz = 10000000;  // 10MHz XCLK（Freenove S3 CAM 典型值，20MHz 部分板子不稳定）
     
     // 初始化摄像头
     esp_err_t err = esp_camera_init(&cameraConfig);
