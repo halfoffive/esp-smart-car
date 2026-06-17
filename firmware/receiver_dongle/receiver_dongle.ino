@@ -330,12 +330,13 @@ public:
 
         // 尝试从 Manufacturer Data 提取 WiFi MAC（ESP-NOW 通信用）
         // 车载 C6 广播格式: [Company ID 2字节=0xFFFF] + [WiFi MAC 6字节]
+        // NimBLE 的 getManufacturerData() 返回 Arduino String，非 std::string
         if (advertisedDevice.haveManufacturerData()) {
-            std::string mfgData = advertisedDevice.getManufacturerData();
+            String mfgData = advertisedDevice.getManufacturerData();
             if (mfgData.length() >= 8) {
                 // 前 2 字节为 Company ID（应为 0xFF 0xFF），跳过
                 // 后 6 字节为 WiFi MAC
-                memcpy(dev.wifiMac, mfgData.data() + 2, 6);
+                memcpy(dev.wifiMac, mfgData.c_str() + 2, 6);
                 dev.hasWifiMac = true;
             }
         }

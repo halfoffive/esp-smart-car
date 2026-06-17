@@ -28,6 +28,7 @@
 #include "pid_control.h"
 #include <BLEDevice.h>
 #include <BLEServer.h>
+#include <BLEAdvertising.h>
 
 // Serial1 配置：与 ESP32-S3 CAM 摄像头模块通信（硬件串口，GPIO2 RX / GPIO3 TX）
 // 摄像头 SoftwareSerial TX=GPIO14 通过物理导线连接到本机 GPIO2(RX)
@@ -497,15 +498,19 @@ void setup() {
     // 初始化 BLE 设备并启动广播（让接收器可扫描到本机）
     BLEDevice::init("智能车");
     BLEServer* pServer = BLEDevice::createServer();  // 创建 BLE 服务器
+    (void)pServer;  // 仅需存在即可，后续不需要引用
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
     // 将 WiFi MAC 嵌入 BLE 广播的 Manufacturer Data 中
     // 格式: [Company ID 2字节=0xFFFF] + [WiFi MAC 6字节] = 共 8 字节
     // 接收器扫描时可提取 WiFi MAC，用于 ESP-NOW 连接配置
-    uint8_t mfgData[8];
-    mfgData[0] = 0xFF;  // Company ID 低字节（0xFFFF = 测试用）
-    mfgData[1] = 0xFF;  // Company ID 高字节
-    memcpy(mfgData + 2, wifiMacBytes, 6);
-    pAdvertising->setManufacturerData(std::string(reinterpret_cast<const char*>(mfgData), 8));
+    // NimBLE API: 通过 BLEAdvertisementData 设置 manufacturer data（Arduino String）
+    BLEAdvertisementData oAdvertisementData;
+    String mfgStr;
+    mfgStr += char(0xFF);  // Company ID 低字节（0xFFFF = 测试用）
+    mfgStr += char(0xFF);  // Company ID 高字节
+    for (int i = 0; i < 6; i++) mfgStr += char(wifiMacBytes[i]);
+    oAdvertisementData.setManufacturerData(mfgStr);
+    pAdvertising->setAdvertisementData(oAdvertisementData);
     pAdvertising->start();  // 开始广播
     Serial.println("[初始化] BLE 广播已启动 (设备名: 智能车, 含 WiFi MAC)");
     
