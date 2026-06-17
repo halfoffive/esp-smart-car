@@ -88,7 +88,7 @@ esp-smart-car/
 - **Binary protocol**: Custom 12-byte packet format for ESP-NOW communication
 - **Frame packetization** (历史): Video frames previously split into 128-byte chunks for ESP-NOW wireless transmission; 当前 camera_module 通过 SoftwareSerial (TX=GPIO14) 直接发送完整帧到 car_controller
 - **Differential steering**: Left/right motor speed differential for turning
-- **SoftwareSerial bridge**: ESP32-S3 camera 使用 SoftwareSerial (TX=GPIO14) 连接 ESP32-C6 car controller HardwareSerial (RX=GPIO2) at 921600 baud。注意：921600 对 SoftwareSerial 不可靠
+- **SoftwareSerial bridge** (历史尝试): ESP32-S3 尝试 SoftwareSerial 但库不可用; 当前使用 HardwareSerial (Serial1) 指定自定义引脚 TX=GPIO14 连接 ESP32-C6 car controller (RX=GPIO2) at 921600 baud
 - **BLE advertising**: car_controller 启动 BLE 广播（设备名"智能车"），receiver_dongle 可通过 BLE 扫描发现车载 C6 的 MAC 地址
 
 ## Commands
@@ -139,6 +139,11 @@ Key connections:
 - **Arduino library**: `wireless.h` is installed as an Arduino library in `firmware/libraries/wireless_protocol/` to avoid duplication across sketches
 
 ## 近期修复记录
+
+### 2026-06-14 - 编译修复: SoftwareSerial.h → HardwareSerial + 显式引脚
+- **范围**: 嵌入式固件
+- **P0 修复**:
+  - `camera_module.ino` — `#include <SoftwareSerial.h>` 编译失败（ESP32-S3 Arduino core 不含此库）。改用 `Serial1.begin(921600, SERIAL_8N1, -1, 14)`（HardwareSerial + 显式引脚 TX=GPIO14）。TX 引脚保持 GPIO14 不变，恢复 `availableForWrite()` 检查和 CHUNK_SIZE=1024
 
 ### 2026-06-14 - 软串口重构 + BLE 广播 + MAC 修复（3项修复）
 - **范围**: 嵌入式固件 + 文档

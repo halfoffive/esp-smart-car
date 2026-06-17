@@ -4,27 +4,31 @@
  * 
  * 功能：
  * 1. 初始化摄像头
- * 2. 通过 SoftwareSerial 软串口传输视频帧到车载控制器
+ * 2. 通过 HardwareSerial 串口传输视频帧到车载控制器
  * 3. 支持动态分辨率调整
  * 
  * 硬件：ESP32-S3 CAM + OV2640
- * 通信：SoftwareSerial (TX=GPIO14) -> ESP32-C6 车载控制器 (RX=GPIO2)
- * 注意：SoftwareSerial 在 921600 波特率下不可靠，实测如花屏需降波特率
+ * 通信：Serial1 (TX=GPIO14) -> ESP32-C6 车载控制器 (RX=GPIO2)
+ * 注意：ESP32-S3 无 SoftwareSerial.h，使用 HardwareSerial 指定自定义引脚
  * 
  * 作者：智能车项目团队
  * 版本：1.4.0
  */
 
-#include <SoftwareSerial.h>
 #include "camera_config.h"
 #include "video_stream.h"
 
 // ============================================
-// 软串口配置（与车载控制器通信）
-// TX=GPIO14（LED 闪光灯引脚，空闲可用）
-// RX=GPIO1（占位引脚，摄像头只发不收，实际未接线）
+// 串口引脚配置（与车载控制器通信）
+// ESP32-S3 无 SoftwareSerial.h，使用 HardwareSerial (Serial1) 指定自定义引脚
+// TX=GPIO14（LED 闪光灯引脚，空闲可用）→ 车载 C6 RX=GPIO2
+// 摄像头只发不收，RX 设为 -1
 // ============================================
-SoftwareSerial camSerial(1, 14);  // RX=GPIO1（占位）, TX=GPIO14
+namespace CamSerialConfig {
+    constexpr int8_t RX_PIN = -1;       // 不使用 RX（摄像头只发不收）
+    constexpr int8_t TX_PIN = 14;       // TX 引脚（GPIO14，LED 闪光灯）
+    constexpr uint32_t BAUD_RATE = 921600;
+}
 
 // ============================================
 // 全局状态
@@ -41,7 +45,7 @@ void setup() {
     
     Serial.println("\n================================");
     Serial.println("ESP32-S3 CAM 视频传输模块");
-    Serial.println("版本: 1.4.0 (SoftwareSerial 软串口)");
+    Serial.println("版本: 1.4.0 (HardwareSerial TX=GPIO14)");
     Serial.println("================================");
     
     // PSRAM 诊断（摄像头 DMA 缓冲依赖 PSRAM）
@@ -60,11 +64,12 @@ void setup() {
         ESP.restart();
     }
     
-    // 初始化 SoftwareSerial 软串口（与车载控制器通信）
-    // TX=GPIO14 -> 车载 C6 RX=GPIO2
-    camSerial.begin(921600);
+    // 初始化 Serial1 硬件串口（与车载控制器通信）
+    // TX=GPIO14 -> 车载 C6 RX=GPIO2，RX 设为 -1（不使用）
+    Serial1.begin(CamSerialConfig::BAUD_RATE, SERIAL_8N1,
+                  CamSerialConfig::RX_PIN, CamSerialConfig::TX_PIN);
     delay(100);
-    Serial.println("[初始化] SoftwareSerial 初始化完成 (TX=GPIO14, 921600 baud)");
+    Serial.println("[初始化] Serial1 初始化完成 (TX=GPIO14, 921600 baud)");
     
     // 启动视频流
     startStreaming();
@@ -114,23 +119,26 @@ void loop() {
     // 帧捕获成功，重置连续失败计数
     g_consecutiveFailures = 0;
     
-    // 通过 SoftwareSerial 软串口发送视频帧到车载控制器
+    // 通过 Serial1 硬件串口发送视频帧到车载控制器
     // 格式: [0xAA][0x55][帧大小4字节][帧数据]
-    // 注意：SoftwareSerial 无 availableForWrite()，直接分块写入+flush
     const uint8_t header[] = {0xAA, 0x55};
     const uint32_t frameSize = static_cast<uint32_t>(frame.frameSize);
     
-    camSerial.write(header, 2);
-    camSerial.write(reinterpret_cast<const uint8_t*>(&frameSize), 4);
-    
-    // 分块发送帧数据（避免一次性写入大量数据导致软串口缓冲区溢出）
-    constexpr size_t CHUNK_SIZE = 256;  // SoftwareSerial 缓冲小，用更小的块
-    size_t sent = 0;
-    while (sent < frame.frameSize) {
-        const size_t chunkLen = min(CHUNK_SIZE, frame.frameSize - sent);
-        camSerial.write(frame.frameBuffer->buf + sent, chunkLen);
-        sent += chunkLen;
-        camSerial.flush();  // 每块等待发送完成，防止丢字节
+    // 检查 Serial1 缓冲区空间（避免阻塞）
+    const size_t totalWriteLen = 2 + 4 + frameSize;
+    if (Serial1.availableForWrite() >= static_cast<int>(min(totalWriteLen, static_cast<size_t>(256)))) {
+        Serial1.write(header, 2);
+        Serial1.write(reinterpret_cast<const uint8_t*>(&frameSize), 4);
+        
+        // 分块发送帧数据（避免一次性写入大量数据导致缓冲区溢出）
+        constexpr size_t CHUNK_SIZE = 1024;
+        size_t sent = 0;
+        while (sent < frame.frameSize) {
+            const size_t chunkLen = min(CHUNK_SIZE, frame.frameSize - sent);
+            Serial1.write(frame.frameBuffer->buf + sent, chunkLen);
+            sent += chunkLen;
+            Serial1.flush();
+        }
     }
     
     // 动态调整质量
