@@ -38,7 +38,10 @@ export interface OdometryData {
 /** BLE 设备接口 */
 export interface BleDevice {
   name: string
+  /** BLE 广播 MAC 地址 */
   mac: string
+  /** WiFi (ESP-NOW) MAC 地址，从 Manufacturer Data 提取。仅车载 C6 等设备会广播此字段 */
+  wifiMac?: string
   rssi: number
 }
 
@@ -198,13 +201,18 @@ function createWebSocket() {
               break
 
             case 'ble_devices':
-              // 接收 BLE 设备列表
+              // 接收 BLE 设备列表（wifi_mac 从后端 JSON 映射到 wifiMac）
               if (Array.isArray(message.devices)) {
                 bleDevices.value = message.devices.filter((d: unknown): d is BleDevice => {
                   if (typeof d !== 'object' || d === null) return false
                   const dev = d as Record<string, unknown>
                   return typeof dev.name === 'string' && typeof dev.mac === 'string' && typeof dev.rssi === 'number'
-                })
+                }).map((d: BleDevice & { wifi_mac?: string }) => ({
+                  name: d.name,
+                  mac: d.mac,
+                  rssi: d.rssi,
+                  wifiMac: d.wifi_mac,  // 后端 snake_case → 前端 camelCase
+                }))
               }
               break
 

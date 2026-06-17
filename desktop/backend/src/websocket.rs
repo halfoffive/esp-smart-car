@@ -274,11 +274,16 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         devices
                             .iter()
                             .map(|d| {
-                                serde_json::json!({
+                                let mut json = serde_json::json!({
                                     "name": d.name,
                                     "mac": d.mac,
                                     "rssi": d.rssi
-                                })
+                                });
+                                // 如果有 WiFi MAC（ESP-NOW 通信用），追加到 JSON 中
+                                if let Some(ref wm) = d.wifi_mac {
+                                    json["wifi_mac"] = serde_json::Value::String(wm.clone());
+                                }
+                                json
                             })
                             .collect()
                     }

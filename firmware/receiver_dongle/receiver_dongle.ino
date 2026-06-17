@@ -72,7 +72,9 @@ struct VideoFrameBuffer {
  */
 struct BleDeviceInfo {
     char name[32];          // 设备名称
-    uint8_t mac[6];         // MAC 地址
+    uint8_t mac[6];         // BLE MAC 地址（扫描到的广播地址）
+    uint8_t wifiMac[6];     // WiFi (ESP-NOW) MAC 地址（从 Manufacturer Data 提取）
+    bool hasWifiMac;        // 是否包含 WiFi MAC
     int8_t rssi;            // 信号强度
     bool isValid;           // 是否有效
 };
@@ -324,6 +326,19 @@ public:
         memcpy(dev.mac, mac, 6);
         dev.rssi = advertisedDevice.getRSSI();
         dev.isValid = true;
+        dev.hasWifiMac = false;  // 默认无 WiFi MAC
+
+        // 尝试从 Manufacturer Data 提取 WiFi MAC（ESP-NOW 通信用）
+        // 车载 C6 广播格式: [Company ID 2字节=0xFFFF] + [WiFi MAC 6字节]
+        if (advertisedDevice.haveManufacturerData()) {
+            std::string mfgData = advertisedDevice.getManufacturerData();
+            if (mfgData.length() >= 8) {
+                // 前 2 字节为 Company ID（应为 0xFF 0xFF），跳过
+                // 后 6 字节为 WiFi MAC
+                memcpy(dev.wifiMac, mfgData.data() + 2, 6);
+                dev.hasWifiMac = true;
+            }
+        }
 
         // 获取设备名称
         if (advertisedDevice.haveName()) {
@@ -361,16 +376,24 @@ void performBleScan() {
     pBLEScan->start(10);  // 扫描 10 秒
 
     // 输出 JSON 格式结果
-    // 格式: {"t":"ble","devices":[{"name":"xxx","mac":"AA:BB:CC:DD:EE:FF","rssi":-42},...]}
+    // 格式: {"t":"ble","devices":[{"name":"xxx","mac":"AA:BB:CC:DD:EE:FF","rssi":-42,"wifi_mac":"AA:BB:CC:DD:EE:FF"},...]}
+    // wifi_mac 仅当设备广播了 Manufacturer Data 且包含 WiFi MAC 时才会出现
     Serial.print("{\"t\":\"ble\",\"devices\":[");
     for (uint8_t i = 0; i < scanResult.count; i++) {
         if (i > 0) Serial.print(",");
         const BleDeviceInfo& dev = scanResult.devices[i];
-        Serial.printf("{\"name\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"rssi\":%d}",
+        Serial.printf("{\"name\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"rssi\":%d",
                       dev.name,
                       dev.mac[0], dev.mac[1], dev.mac[2],
                       dev.mac[3], dev.mac[4], dev.mac[5],
                       dev.rssi);
+        // 如果有 WiFi MAC，追加到 JSON 中
+        if (dev.hasWifiMac) {
+            Serial.printf(",\"wifi_mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"",
+                          dev.wifiMac[0], dev.wifiMac[1], dev.wifiMac[2],
+                          dev.wifiMac[3], dev.wifiMac[4], dev.wifiMac[5]);
+        }
+        Serial.print("}");
     }
     Serial.println("]}");
 

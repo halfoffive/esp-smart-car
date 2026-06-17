@@ -13,8 +13,10 @@ pub use serial::OdometryData;
 pub struct BleDevice {
     /// 设备名称
     pub name: String,
-    /// MAC 地址
+    /// BLE MAC 地址（扫描到的广播地址）
     pub mac: String,
+    /// WiFi (ESP-NOW) MAC 地址（从 Manufacturer Data 提取，仅车载 C6 等设备会广播）
+    pub wifi_mac: Option<String>,
     /// 信号强度
     pub rssi: i16,
 }

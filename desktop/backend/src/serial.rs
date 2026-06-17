@@ -265,7 +265,8 @@ impl SerialManager {
     }
 
     /// 解析 BLE 设备 JSON 行
-    /// 格式: {"t":"ble","devices":[{"name":"xxx","mac":"AA:BB:CC:DD:EE:FF","rssi":-42},...]}
+    /// 格式: {"t":"ble","devices":[{"name":"xxx","mac":"AA:BB:CC:DD:EE:FF","rssi":-42,"wifi_mac":"AA:BB:CC:DD:EE:FF"},...]}
+    /// wifi_mac 为可选项，仅当设备广播了 Manufacturer Data 且包含 WiFi MAC 时才会出现
     pub fn parse_ble_line(line: &str) -> Option<Vec<crate::BleDevice>> {
         if !line.contains("\"t\":\"ble\"") {
             return None;
@@ -279,7 +280,9 @@ impl SerialManager {
             let name = dev.get("name")?.as_str()?.to_string();
             let mac = dev.get("mac")?.as_str()?.to_string();
             let rssi = dev.get("rssi")?.as_i64()? as i16;
-            devices.push(crate::BleDevice { name, mac, rssi });
+            // wifi_mac 为可选项：仅车载 C6 等设备会广播
+            let wifi_mac = dev.get("wifi_mac").and_then(|v| v.as_str()).map(String::from);
+            devices.push(crate::BleDevice { name, mac, rssi, wifi_mac });
         }
 
         Some(devices)

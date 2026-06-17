@@ -487,15 +487,27 @@ void setup() {
         Serial.println("[无线通信] 注册接收回调失败");
     }
     
-    Serial.print("[初始化] MAC: ");
+    // 打印 ESP-NOW 通信用的 WiFi MAC（与 BLE MAC 不同，必须区分）
+    uint8_t wifiMacBytes[6];
+    WiFi.macAddress(wifiMacBytes);  // 获取原始 6 字节 WiFi MAC
+    Serial.print("[初始化] ESP-NOW MAC: ");
     Serial.println(WiFi.macAddress());
+    Serial.println("[初始化] ⚠ 此 MAC 用于 ESP-NOW 连接，与 BLE 扫描显示的 MAC 不同");
     
-    // 初始化 BLE 设备并启动广播（让接收器可扫描到本机 MAC）
+    // 初始化 BLE 设备并启动广播（让接收器可扫描到本机）
     BLEDevice::init("智能车");
     BLEServer* pServer = BLEDevice::createServer();  // 创建 BLE 服务器
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
-    pAdvertising->start();  // 开始广播（设备名"智能车"将对扫描端可见）
-    Serial.println("[初始化] BLE 广播已启动 (设备名: 智能车)");
+    // 将 WiFi MAC 嵌入 BLE 广播的 Manufacturer Data 中
+    // 格式: [Company ID 2字节=0xFFFF] + [WiFi MAC 6字节] = 共 8 字节
+    // 接收器扫描时可提取 WiFi MAC，用于 ESP-NOW 连接配置
+    uint8_t mfgData[8];
+    mfgData[0] = 0xFF;  // Company ID 低字节（0xFFFF = 测试用）
+    mfgData[1] = 0xFF;  // Company ID 高字节
+    memcpy(mfgData + 2, wifiMacBytes, 6);
+    pAdvertising->setManufacturerData(std::string(reinterpret_cast<const char*>(mfgData), 8));
+    pAdvertising->start();  // 开始广播
+    Serial.println("[初始化] BLE 广播已启动 (设备名: 智能车, 含 WiFi MAC)");
     
     // 初始化状态
     g_currentMotion = createStopState();

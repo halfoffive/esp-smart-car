@@ -222,13 +222,14 @@
           @click="selectBleDevice(device)"
           :class="[
             'flex items-center justify-between rounded px-2 py-1 text-[10px] cursor-pointer transition-colors',
-            selectedBleMac === device.mac ? 'bg-primary-600/30 border border-primary-500/50' : 'bg-dark-800 hover:bg-dark-700 border border-transparent'
+            selectedBleMac === (device.wifiMac || device.mac) ? 'bg-primary-600/30 border border-primary-500/50' : 'bg-dark-800 hover:bg-dark-700 border border-transparent'
           ]"
-          :title="'点击链接设备: ' + device.mac"
+          :title="device.wifiMac ? '点击链接 (ESP-NOW MAC: ' + device.wifiMac + ')' : '点击链接设备: ' + device.mac"
         >
           <span class="text-dark-200 truncate flex-1 min-w-0">{{ device.name }}</span>
-          <span class="text-dark-500 font-mono ml-2 shrink-0">{{ device.mac }}</span>
-          <span :class="device.rssi > -50 ? 'text-green-400' : device.rssi > -70 ? 'text-yellow-400' : 'text-red-400'" class="ml-2 shrink-0">
+          <span class="text-dark-500 font-mono ml-2 shrink-0">{{ device.wifiMac || device.mac }}</span>
+          <span v-if="device.wifiMac" class="text-primary-400 font-mono text-[8px] ml-1 shrink-0" title="ESP-NOW WiFi MAC">📡</span>
+          <span :class="device.rssi > -50 ? 'text-green-400' : device.rssi > -70 ? 'text-yellow-400' : 'text-red-400'" class="ml-1 shrink-0">
             {{ device.rssi }}dBm
           </span>
         </div>
@@ -304,24 +305,27 @@ const manualMac = ref('')
 const bleNameFilter = ref('')
 /** 选中的 BLE 设备 MAC（高亮显示） */
 const selectedBleMac = ref('')
-/** 过滤后的 BLE 设备列表（按名称或 MAC 包含过滤词，大小写不敏感） */
+/** 过滤后的 BLE 设备列表（按名称、MAC 或 WiFi MAC 包含过滤词，大小写不敏感） */
 const filteredBleDevices = computed(() => {
   const filter = bleNameFilter.value.trim().toLowerCase()
   if (!filter) return bleDevices.value
   return bleDevices.value.filter(d =>
     d.name.toLowerCase().includes(filter) ||
-    d.mac.toLowerCase().includes(filter)
+    d.mac.toLowerCase().includes(filter) ||
+    (d.wifiMac && d.wifiMac.toLowerCase().includes(filter))
   )
 })
 
 /** 点击 BLE 设备：选中并发送 MAC 配置到接收器，用于泵项目设备链接 */
-const selectBleDevice = (device: { name: string; mac: string; rssi: number }) => {
-  selectedBleMac.value = device.mac
-  // 发送 MAC 配置到接收器，接收器会通过 ESP-NOW 转发到车载端
-  const success = sendMacConfig(device.mac)
-  navigator.clipboard.writeText(device.mac).catch(() => {})
+const selectBleDevice = (device: { name: string; mac: string; rssi: number; wifiMac?: string }) => {
+  // 优先使用 WiFi MAC（ESP-NOW 通信），回退到 BLE MAC
+  const targetMac = device.wifiMac || device.mac
+  selectedBleMac.value = targetMac
+  const success = sendMacConfig(targetMac)
+  navigator.clipboard.writeText(targetMac).catch(() => {})
+  const macLabel = device.wifiMac ? `ESP-NOW: ${targetMac}` : targetMac
   if (success) {
-    addLog(`已链接设备: ${device.name} (${device.mac})`, 'info')
+    addLog(`已链接设备: ${device.name} (${macLabel})`, 'info')
   } else {
     addLog(`链接失败: ${device.name}，WebSocket 未连接`, 'error')
   }
