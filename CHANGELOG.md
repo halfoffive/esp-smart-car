@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-06-14
+
+### Added
+- **BLE 广播嵌入 WiFi MAC** — 车载 C6 通过 `BLEAdvertisementData` 将 WiFi MAC（ESP-NOW 通信用）嵌入 BLE 广播 Manufacturer Data
+- **接收器 WiFi MAC 解析** — `BleDeviceInfo` 扩展，`onResult()` 解析 manufacturer data 提取 6 字节 WiFi MAC，JSON 输出条件性增加 `wifi_mac` 字段
+- **前端 WiFi MAC 优先连接** — `BleDevice` 接口新增 `wifiMac`，`selectBleDevice` 优先使用 WiFi MAC 配置 ESP-NOW，列表显示 📡 标注
+
+### Fixed
+- **BLE/WiFi MAC 混淆** — ESP32-C6 的 BLE MAC ≠ WiFi MAC，用户从扫描复制 BLE MAC 配置 ESP-NOW 导致车载 C6 无反应。现已将正确 MAC 嵌入广播数据，全链路透传
+- **接收器 MAC 全零显示** — `WiFi.macAddress()` 在 `WiFi.mode(WIFI_STA)` 之前调用返回 `00:00:00:00:00:00`，MAC 打印移至 WiFi 初始化后
+- **camera_module SoftwareSerial 编译错误** — ESP32-S3 Arduino core 不含 `SoftwareSerial.h`，改用 `Serial1.begin(921600, SERIAL_8N1, -1, 14)`（HardwareSerial TX=GPIO14）
+- **NimBLE API 兼容** — `setManufacturerData` 移至 `BLEAdvertisementData`；`getManufacturerData()` 返回 Arduino `String` 非 `std::string`
+
+### Changed
+- **串口引脚**: Camera TX=GPIO14 → Car RX=GPIO2（显式指定，不再依赖默认引脚）
+- **BLE 广播**: 车载 C6 从仅 init BLE 栈升级为完整 `BLEServer` + `BLEAdvertising` + manufacturer data
+
 ## [1.8.0] - 2026-06-13
 
 ### 编译与运行时修复（P0）

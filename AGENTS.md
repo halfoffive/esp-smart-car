@@ -140,20 +140,23 @@ Key connections:
 
 ## 近期修复记录
 
-### 2026-06-14 - 编译修复: SoftwareSerial.h → HardwareSerial + 显式引脚
-- **范围**: 嵌入式固件
-- **P0 修复**:
-  - `camera_module.ino` — `#include <SoftwareSerial.h>` 编译失败（ESP32-S3 Arduino core 不含此库）。改用 `Serial1.begin(921600, SERIAL_8N1, -1, 14)`（HardwareSerial + 显式引脚 TX=GPIO14）。TX 引脚保持 GPIO14 不变，恢复 `availableForWrite()` 检查和 CHUNK_SIZE=1024
+### 2026-06-14 - BLE/WiFi MAC 区分 + 串口引脚修复（全链路）
 
-### 2026-06-14 - 软串口重构 + BLE 广播 + MAC 修复（3项修复）
-- **范围**: 嵌入式固件 + 文档
-- **变更**:
-  - `camera_module.ino` — Serial1 (HardwareSerial) → SoftwareSerial (TX=GPIO14, RX=GPIO1占位)，CHUNK_SIZE 1024→256，移除 availableForWrite() 检查（SoftwareSerial 不支持）。版本 1.3.0 → 1.4.0
-  - `car_controller.ino` — 新增 BLE 广播功能（BLEServer + BLEAdvertising::start()），让接收器可扫描到车载 C6 的 MAC 地址。版本 1.3.0 → 1.4.0
-  - `receiver_dongle.ino` — MAC 地址打印从 `initializeWireless()` 之前移至之后（WiFi.mode(WIFI_STA) 之后），修复 ESP32-C6 显示 00:00:00:00:00:00 的问题。版本 1.2.0 → 1.3.0
-  - `docs/hardware.md` — 更新摄像端→车载端串口引脚（Camera TX=GPIO14 → Car RX=GPIO2）
-- **注意**: SoftwareSerial 在 921600 波特率下不可靠，实测如花屏严重需降波特率或回到 HardwareSerial
-- **验证**: 无需编译验证（固件修改）
+**问题**: ESP32-C6 的 BLE MAC ≠ WiFi MAC，用户从 BLE 扫描复制 MAC 配置 ESP-NOW → 数据包无法到达车载 C6，无反应无画面。
+
+**修复** — 将 WiFi MAC 嵌入 BLE 广播 Manufacturer Data，全链路透传：
+
+- `car_controller.ino` — BLE 广播通过 `BLEAdvertisementData` 嵌入 WiFi MAC（CompanyID=0xFFFF + 6B），启动日志标注 "ESP-NOW MAC" 与 BLE MAC 区分。版本 1.3.0 → 1.4.0
+- `receiver_dongle.ino` — `BleDeviceInfo` 新增 `wifiMac[6]` + `hasWifiMac`；`onResult()` 解析 manufacturer data 提取 WiFi MAC；JSON 输出条件性增加 `wifi_mac` 字段；MAC 地址打印移至 WiFi 初始化后，修复 00:00:00:00:00:00 显示。版本 1.2.0 → 1.3.0
+- `camera_module.ino` — `SoftwareSerial.h` 编译失败（ESP32-S3 core 不含此库），改用 `Serial1.begin(921600, SERIAL_8N1, -1, 14)`（HardwareSerial TX=GPIO14），保持与车载 C6 RX=GPIO2 的物理接线。版本 1.3.0 → 1.4.0
+- `lib.rs` — `BleDevice` 新增 `wifi_mac: Option<String>`
+- `serial.rs` — `parse_ble_line` 解析可选 `wifi_mac` JSON 字段
+- `websocket.rs` — `ble_devices` 广播条件性追加 `wifi_mac`
+- `useWebSocket.ts` — `BleDevice` 接口新增 `wifiMac?: string`，消息处理映射 `wifi_mac`→`wifiMac`
+- `ControlPanel.vue` — `selectBleDevice` 优先使用 `wifiMac` 连接 ESP-NOW，列表显示 📡 标注
+- `docs/hardware.md` — 更新串口引脚（Camera TX=GPIO14 → Car RX=GPIO2）
+
+**验证**: `cargo clippy` 0 warnings；`cargo test` 48 测试全过；`vue-tsc` + `vite build` 通过
 
 ### 2026-06-13 - 代码审计修复 v10（3项修复）
 - **范围**: 嵌入式固件
