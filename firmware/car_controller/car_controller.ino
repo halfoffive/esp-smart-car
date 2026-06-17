@@ -9,16 +9,17 @@
  * 4. PID控制：直线修正+精确方向
  * 5. 发送状态反馈（含测速数据）
  * 6. 接收摄像头视频帧并转发到接收器
+ * 7. BLE 广播（让接收器可扫描到本机 MAC）
  *
  * 硬件接线：
  * - L298N #1: IN1->GPIO4, IN2->GPIO5, EN->GPIO6 (控制左侧电机)
  * - L298N #2: IN1->GPIO7, IN2->GPIO8, EN->GPIO9 (控制右侧电机)
  * - 左编码器: GPIO0
  * - 右编码器: GPIO1
- * - Serial1: GPIO2(RX) / GPIO3(TX) -> ESP32-S3 UART（与摄像头模块通信）
+ * - Serial1: GPIO2(RX) / GPIO3(TX) -> ESP32-S3 CAM SoftwareSerial (TX=GPIO14)
  * 
  * 作者：智能车项目团队
- * 版本：1.3.0
+ * 版本：1.4.0
  */
 
 #include "motor_control.h"
@@ -26,8 +27,10 @@
 #include "odometer.h"
 #include "pid_control.h"
 #include <BLEDevice.h>
+#include <BLEServer.h>
 
-// Serial1 配置：与 ESP32-S3 摄像头模块通信（硬件串口，GPIO2 RX / GPIO3 TX）
+// Serial1 配置：与 ESP32-S3 CAM 摄像头模块通信（硬件串口，GPIO2 RX / GPIO3 TX）
+// 摄像头 SoftwareSerial TX=GPIO14 通过物理导线连接到本机 GPIO2(RX)
 namespace SoftSerialConfig {
     constexpr uint8_t RX_PIN = 2;        // Serial1 接收引脚（GPIO2）
     constexpr uint8_t TX_PIN = 3;        // Serial1 发送引脚（GPIO3）
@@ -451,13 +454,14 @@ void setup() {
     
     Serial.println("\n================================");
     Serial.println("智能车控制系统 - ESP32-C6");
-    Serial.println("版本: 1.3.0 (含测速+PID+视频转发)");
+    Serial.println("版本: 1.4.0 (含测速+PID+视频转发+BLE广播)");
     Serial.println("================================\n");
     
     // 初始化串口1（与摄像头模块通信，硬件串口自带硬件缓冲，可承受921600波特率）
+    // 摄像头 SoftwareSerial TX=GPIO14 -> 本机 RX=GPIO2
     Serial1.begin(SoftSerialConfig::BAUD_RATE, SERIAL_8N1, SoftSerialConfig::RX_PIN, SoftSerialConfig::TX_PIN);
     delay(100);
-    Serial.println("[初始化] 串口1初始化完成 (GPIO2 RX, GPIO3 TX)");
+    Serial.println("[初始化] 串口1初始化完成 (GPIO2 RX <-> 摄像头 TX=GPIO14)");
     
     // 初始化电机引脚
     initializeMotorPins();
@@ -486,8 +490,12 @@ void setup() {
     Serial.print("[初始化] MAC: ");
     Serial.println(WiFi.macAddress());
     
-    // 初始化 BLE 设备名（方便扫描识别）
+    // 初始化 BLE 设备并启动广播（让接收器可扫描到本机 MAC）
     BLEDevice::init("智能车");
+    BLEServer* pServer = BLEDevice::createServer();  // 创建 BLE 服务器
+    BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
+    pAdvertising->start();  // 开始广播（设备名"智能车"将对扫描端可见）
+    Serial.println("[初始化] BLE 广播已启动 (设备名: 智能车)");
     
     // 初始化状态
     g_currentMotion = createStopState();

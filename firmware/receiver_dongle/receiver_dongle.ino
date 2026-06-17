@@ -19,7 +19,7 @@
  * 接收器 -> 电脑: USB 串口 (视频帧)
  * 
  * 作者：智能车项目团队
- * 版本：1.2.0
+ * 版本：1.3.0
  */
 
 #include "../libraries/wireless_protocol/src/wireless.h"
@@ -525,12 +525,10 @@ void setup() {
     
     Serial.println("\n================================");
     Serial.println("智能车接收器 - ESP32-C6");
-    Serial.println("版本: 1.2.0");
-    Serial.print("MAC: ");
-    Serial.println(WiFi.macAddress());
+    Serial.println("版本: 1.3.0");
     Serial.println("================================\n");
     
-    // 初始化无线通信
+    // 初始化无线通信（会调用 WiFi.mode(WIFI_STA)，之后 MAC 地址才可用）
     if (!initializeWireless(DeviceRole::RECEIVER)) {
         Serial.println("[初始化] 无线通信初始化失败，重启中...");
         delay(2000);
@@ -541,6 +539,10 @@ void setup() {
     if (esp_now_register_recv_cb(onReceiverDataRecv) != ESP_OK) {
         Serial.println("[无线通信] 注册接收回调失败");
     }
+    
+    // MAC 地址必须在 WiFi.mode(WIFI_STA) 之后打印，否则 ESP32-C6 返回全零
+    Serial.print("[初始化] MAC: ");
+    Serial.println(WiFi.macAddress());
     
     // 初始化 BLE（扫描前只需初始化一次）
     BLEDevice::init("智能车");

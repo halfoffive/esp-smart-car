@@ -86,9 +86,10 @@ esp-smart-car/
 
 - **Functional C++**: Value semantics preferred, state changes via function returns; `static` globals allowed only when confined to a single translation unit (e.g. `video_stream.h`, `wireless.h`)
 - **Binary protocol**: Custom 12-byte packet format for ESP-NOW communication
-- **Frame packetization** (历史): Video frames previously split into 128-byte chunks for ESP-NOW wireless transmission; 当前 camera_module 通过 Serial1 直接发送完整帧
+- **Frame packetization** (历史): Video frames previously split into 128-byte chunks for ESP-NOW wireless transmission; 当前 camera_module 通过 SoftwareSerial (TX=GPIO14) 直接发送完整帧到 car_controller
 - **Differential steering**: Left/right motor speed differential for turning
-- **HardwareSerial bridge**: ESP32-S3 camera connected to ESP32-C6 car controller via GPIO 14/15 HardwareSerial (Serial1) at 921600 baud
+- **SoftwareSerial bridge**: ESP32-S3 camera 使用 SoftwareSerial (TX=GPIO14) 连接 ESP32-C6 car controller HardwareSerial (RX=GPIO2) at 921600 baud。注意：921600 对 SoftwareSerial 不可靠
+- **BLE advertising**: car_controller 启动 BLE 广播（设备名"智能车"），receiver_dongle 可通过 BLE 扫描发现车载 C6 的 MAC 地址
 
 ## Commands
 
@@ -121,8 +122,8 @@ See `docs/hardware.md` for complete pinout diagram.
 Key connections:
 - **L298N #1**: GPIO 4,5 (left motors)
 - **L298N #2**: GPIO 7,8 (right motors)
-- **SoftSerial RX**: GPIO 14 (ESP32-S3 camera → ESP32-C6 car controller, video frames + commands)
-- **SoftSerial TX**: GPIO 15 (ESP32-C6 car controller → ESP32-S3 camera, commands)
+- **SoftSerial RX**: GPIO 2 (ESP32-C6 car controller HardwareSerial RX ← ESP32-S3 camera SoftwareSerial TX=GPIO14, video frames)
+- **SoftSerial TX**: GPIO 3 (ESP32-C6 car controller HardwareSerial TX → ESP32-S3 camera SoftwareSerial RX=GPIO1, 占位未用)
 - **Camera**: ESP32-S3 standard CAM pins
 
 ## Notes
@@ -130,7 +131,7 @@ Key connections:
 - **Power isolation**: Motor power and logic power must be separate
 - **Ground common**: All devices must share common ground
 - **Baud rate**: 921600 for USB serial (high-speed video)
-- **HardwareSerial (Serial1)**: GPIO 14/15 at 921600 baud for camera video frames, wire length ≤ 30cm
+- **HardwareSerial (Serial1)**: GPIO 2/3 at 921600 baud for receiving camera video frames from ESP32-S3 SoftwareSerial (TX=GPIO14), wire length ≤ 30cm
 - **ESP-NOW channel**: Fixed channel 1 for all devices
 - **Video buffer**: 32768 bytes for frame reassembly
 - **Timeout protection**: 1-second auto-stop if no commands received
@@ -138,6 +139,16 @@ Key connections:
 - **Arduino library**: `wireless.h` is installed as an Arduino library in `firmware/libraries/wireless_protocol/` to avoid duplication across sketches
 
 ## 近期修复记录
+
+### 2026-06-14 - 软串口重构 + BLE 广播 + MAC 修复（3项修复）
+- **范围**: 嵌入式固件 + 文档
+- **变更**:
+  - `camera_module.ino` — Serial1 (HardwareSerial) → SoftwareSerial (TX=GPIO14, RX=GPIO1占位)，CHUNK_SIZE 1024→256，移除 availableForWrite() 检查（SoftwareSerial 不支持）。版本 1.3.0 → 1.4.0
+  - `car_controller.ino` — 新增 BLE 广播功能（BLEServer + BLEAdvertising::start()），让接收器可扫描到车载 C6 的 MAC 地址。版本 1.3.0 → 1.4.0
+  - `receiver_dongle.ino` — MAC 地址打印从 `initializeWireless()` 之前移至之后（WiFi.mode(WIFI_STA) 之后），修复 ESP32-C6 显示 00:00:00:00:00:00 的问题。版本 1.2.0 → 1.3.0
+  - `docs/hardware.md` — 更新摄像端→车载端串口引脚（Camera TX=GPIO14 → Car RX=GPIO2）
+- **注意**: SoftwareSerial 在 921600 波特率下不可靠，实测如花屏严重需降波特率或回到 HardwareSerial
+- **验证**: 无需编译验证（固件修改）
 
 ### 2026-06-13 - 代码审计修复 v10（3项修复）
 - **范围**: 嵌入式固件

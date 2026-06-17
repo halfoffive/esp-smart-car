@@ -152,23 +152,25 @@ L298N #2
 
 ```
 ESP32-C6 (车载控制器)
-├── GPIO 2 (RX) ───► ESP32-S3 UART TX
-├── GPIO 3 (TX) ───► ESP32-S3 UART RX
+├── GPIO 2 (RX) ───► ESP32-S3 CAM GPIO 14 (SoftwareSerial TX)
+├── GPIO 3 (TX) ───► ESP32-S3 CAM GPIO 1  (SoftwareSerial RX，占位，实际未用)
 ├── GND ───────────► ESP32-S3 GND
 └── 3.3V ──────────► ESP32-S3 3.3V（可选供电）
 
 ESP32-S3 CAM (摄像头模块)
-├── UART TX ───────► ESP32-C6 GPIO 2 (RX)
-├── UART RX ───────► ESP32-C6 GPIO 3 (TX)
+├── GPIO 14 (SoftwareSerial TX) ──► ESP32-C6 GPIO 2 (RX)
+├── GPIO 1  (SoftwareSerial RX) ──► ESP32-C6 GPIO 3 (TX)（占位引脚，摄像头只发不收）
 ├── GND ───────────► ESP32-C6 GND
 └── 3.3V ──────────► ESP32-C6 3.3V（可选供电）
 
 通信参数：
+- 协议: SoftwareSerial（摄像端软件串口）+ HardwareSerial（车载端硬件串口）
 - 波特率: 921600
 - 数据位: 8
 - 停止位: 1
 - 校验: 无
 - 帧格式: [0xAA][0x55][帧大小4字节][帧数据]
+- 注意: SoftwareSerial 在 921600 波特率下不可靠，实测如花屏需降波特率
 ```
 
 ## ESP32-S3 CAM 接线
