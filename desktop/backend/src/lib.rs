@@ -23,8 +23,30 @@ pub struct BleDevice {
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU8;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use tracing::{info, warn};
+
+/// Mutex 中毒恢复扩展 trait
+///
+/// AGENTS.md 规范要求禁止使用 unwrap/expect。对于 Mutex，poison 时直接 panic 会导致
+/// 单个线程的错误扩散为整个服务崩溃。此 trait 在 poison 时记录警告并恢复锁内的数据，
+/// 让服务继续运行，同时保留诊断信息。
+pub trait MutexExt<T> {
+    /// 获取锁；若 Mutex 已中毒，记录警告并恢复内部数据
+    fn lock_or_recover(&self, name: &str) -> MutexGuard<'_, T>;
+}
+
+impl<T> MutexExt<T> for Mutex<T> {
+    fn lock_or_recover(&self, name: &str) -> MutexGuard<'_, T> {
+        match self.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("Mutex {} 已中毒，正在恢复", name);
+                poisoned.into_inner()
+            }
+        }
+    }
+}
 
 /// 应用状态（共享状态）
 pub struct AppState {
@@ -98,10 +120,7 @@ impl AppState {
 
     /// 节流式命令转发日志：相同命令 1 秒内只记一次
     pub fn log_command_forward(&self, cmd: u8) {
-        let mut last = self
-            .last_cmd_log
-            .lock()
-            .expect("last_cmd_log lock poisoned");
+        let mut last = self.last_cmd_log.lock_or_recover("last_cmd_log");
         let now = std::time::Instant::now();
         let should_log =
             last.0 != cmd || now.duration_since(last.1) >= std::time::Duration::from_secs(1);
@@ -113,10 +132,7 @@ impl AppState {
 
     /// 节流式警告日志：相同错误类别 5 秒内只记一次
     pub fn warn_throttled(&self, category: &str, msg: String) {
-        let mut last_errors = self
-            .last_error_log
-            .lock()
-            .expect("last_error_log lock poisoned");
+        let mut last_errors = self.last_error_log.lock_or_recover("last_error_log");
         let now = std::time::Instant::now();
         let should_log = last_errors
             .get(category)

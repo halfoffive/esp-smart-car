@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::serial::{SerialConnectionState, DEFAULT_BAUD_RATE};
-use crate::AppState;
+use crate::{AppState, MutexExt};
 
 /// 命令请求
 #[derive(Debug, Deserialize)]
@@ -115,10 +115,7 @@ pub async fn handle_command(
 
     // 在独立作用域中发送命令，确保 std::sync::MutexGuard 在 .await 前释放
     let send_result = {
-        let mut manager = state
-            .serial_manager
-            .lock()
-            .expect("serial_manager lock poisoned");
+        let mut manager = state.serial_manager.lock_or_recover("serial_manager");
         manager.send_command(cmd)
     }; // manager 锁在此处释放
 
@@ -154,10 +151,7 @@ pub async fn handle_command(
 pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json<StatusResponse>) {
     // 逐把加锁，复制数据后立即释放，减少锁争用
     let (serial_status, port_name, baud_rate, frame_count, bytes_sent, command_count) = {
-        let manager = state
-            .serial_manager
-            .lock()
-            .expect("serial_manager lock poisoned");
+        let manager = state.serial_manager.lock_or_recover("serial_manager");
         let (serial_status, port_name, baud_rate) = match &manager.state {
             SerialConnectionState::Disconnected => ("未连接".to_string(), None, None),
             SerialConnectionState::Connecting => ("连接中".to_string(), None, None),
@@ -182,14 +176,14 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
     };
 
     let ws_clients = {
-        let ws_manager = state.ws_manager.lock().expect("ws_manager lock poisoned");
+        let ws_manager = state.ws_manager.lock_or_recover("ws_manager");
         ws_manager.client_count()
     };
 
     let current_speed = state.current_speed.load(Ordering::Relaxed);
 
     let (left_speed, right_speed, heading, total_distance) = {
-        let odom = state.odometry.lock().expect("odometry lock poisoned");
+        let odom = state.odometry.lock_or_recover("odometry");
         (
             odom.left_speed_mmps,
             odom.right_speed_mmps,
@@ -230,10 +224,7 @@ pub async fn connect_serial(
 
     // 先断开现有连接（在锁内）
     {
-        let mut manager = state
-            .serial_manager
-            .lock()
-            .expect("serial_manager lock poisoned");
+        let mut manager = state.serial_manager.lock_or_recover("serial_manager");
         manager.disconnect();
     } // 释放锁
 
@@ -241,10 +232,7 @@ pub async fn connect_serial(
     let state_clone = Arc::clone(&state);
     let port_name_clone = port_name.clone();
     let connect_result = tokio::task::spawn_blocking(move || {
-        let mut manager = state_clone
-            .serial_manager
-            .lock()
-            .expect("serial_manager lock poisoned");
+        let mut manager = state_clone.serial_manager.lock_or_recover("serial_manager");
         manager.connect(&port_name_clone, baud_rate)
     })
     .await;
@@ -256,10 +244,7 @@ pub async fn connect_serial(
             // 连接成功后立即发送 'P' 探测命令，触发 Dongle 上报链路状态 JSON
             // 用户可感知"连接 = 链路打通"，避免连接后无反馈
             {
-                let mut manager = state
-                    .serial_manager
-                    .lock()
-                    .expect("serial_manager lock poisoned");
+                let mut manager = state.serial_manager.lock_or_recover("serial_manager");
                 if let Err(e) = manager.send_command(b'P') {
                     warn!("发送探测命令 'P' 失败: {}", e);
                 }
@@ -299,10 +284,7 @@ pub async fn connect_serial(
 pub async fn disconnect_serial(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    let mut manager = state
-        .serial_manager
-        .lock()
-        .expect("serial_manager lock poisoned");
+    let mut manager = state.serial_manager.lock_or_recover("serial_manager");
     manager.disconnect();
 
     info!("串口已断开");
@@ -318,7 +300,7 @@ pub async fn disconnect_serial(
 
 /// 获取 BLE 设备列表
 pub async fn get_ble_devices(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    let devices = state.ble_devices.lock().expect("ble_devices lock poisoned");
+    let devices = state.ble_devices.lock_or_recover("ble_devices");
     let device_list: Vec<serde_json::Value> = devices
         .iter()
         .map(|d| {

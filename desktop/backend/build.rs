@@ -33,8 +33,7 @@ fn main() {
         }
 
         // 条件判断：检查 node_modules 是否存在且 package.json 未变更
-        let node_modules_exists =
-            Path::new(frontend_dir).join("node_modules").exists();
+        let node_modules_exists = Path::new(frontend_dir).join("node_modules").exists();
         let package_json_mtime = Path::new(frontend_dir)
             .join("package.json")
             .metadata()
@@ -46,13 +45,11 @@ fn main() {
         } else if Path::new(frontend_dir).join("bun.lock").exists() {
             Path::new(frontend_dir).join("bun.lock")
         } else {
-            Path::new(frontend_dir).join("node_modules").join("package-lock.json")
+            Path::new(frontend_dir)
+                .join("node_modules")
+                .join("package-lock.json")
         };
-        let node_modules_mtime =
-            lock_file_path
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok();
+        let node_modules_mtime = lock_file_path.metadata().and_then(|m| m.modified()).ok();
 
         let need_install = if node_modules_exists {
             // node_modules 存在，但 package.json 比 node_modules/.package-lock.json 新，说明依赖有变化

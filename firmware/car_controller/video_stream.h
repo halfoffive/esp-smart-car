@@ -173,10 +173,15 @@ inline void sendVideoFrame(const FrameState& frame) {
         }
 
         // 校验和写入实际发送的最后一个字节位置
-        // packet 是栈上非 const 变量，data 为非 const 数组成员，直接写入无需 const_cast
-        // packetLen<128 时写入 data[packetLen]（data 数组内偏移），
-        // packetLen=128 时写入 packet.checksum（结构体尾部字段，二者地址相同）
-        packet.data[packetLen] = sum;
+        // packetLen<128 时写入 data[packetLen]（data 数组内偏移）
+        // packetLen=128 时写入 packet.checksum（结构体尾部字段）
+        // 使用条件判断避免 packetLen=128 时 data[128] 数组越界（严格来说是 UB，
+        // 虽然 packed 结构体下 data[128] 与 checksum 地址相同，实际工作正常）
+        if (packetLen >= StreamConfig::MAX_PACKET_SIZE) {
+            packet.checksum = sum;
+        } else {
+            packet.data[packetLen] = sum;
+        }
 
         // 发送到接收器（指定 MAC 地址，避免广播给车载端造成误解析）
         sendRawPacket(WirelessConfig::RECEIVER_MAC,

@@ -27,7 +27,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::serial::SerialConnectionState;
-use crate::AppState;
+use crate::{AppState, MutexExt};
 
 /// 客户端连接
 #[derive(Debug)]
@@ -97,7 +97,7 @@ pub async fn ws_handler(
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // 注册客户端
     let client_id = {
-        let mut manager = state.ws_manager.lock().expect("ws_manager lock poisoned");
+        let mut manager = state.ws_manager.lock_or_recover("ws_manager");
         manager.add_client()
     };
 
@@ -131,7 +131,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         drop(tx);
         let _ = forward_task.await;
         {
-            let mut manager = state.ws_manager.lock().expect("ws_manager lock poisoned");
+            let mut manager = state.ws_manager.lock_or_recover("ws_manager");
             manager.remove_client(client_id);
         }
         return;
@@ -139,6 +139,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     // 创建取消令牌，用于优雅关闭视频广播任务
     let cancel_token = CancellationToken::new();
+
+    // 初始化心跳时间戳：连接建立时即视为收到一次心跳
+    // 防止视频任务在刚连接时立即判定超时
+    {
+        let mut last_hb = state.last_heartbeat.lock_or_recover("last_heartbeat");
+        *last_hb = Instant::now();
+    }
 
     // 视频任务：通过 mpsc tx 发送视频帧、测速数据、串口列表
     let video_tx = tx.clone();
@@ -160,12 +167,23 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 break;
             }
 
+            // 心跳超时检测：客户端 90 秒未发送心跳，判定为死连接
+            // 心跳间隔为 30 秒，允许 3 次心跳丢失的容错
+            {
+                let last_hb = video_state.last_heartbeat.lock_or_recover("last_heartbeat");
+                if last_hb.elapsed() > std::time::Duration::from_secs(90) {
+                    warn!(
+                        "客户端 #{} 心跳超时（{}秒），主动断开连接",
+                        client_id,
+                        last_hb.elapsed().as_secs()
+                    );
+                    break;
+                }
+            }
+
             // 无客户端时跳过帧处理和测速发送，节省资源
             let client_count = {
-                let manager = video_state
-                    .ws_manager
-                    .lock()
-                    .expect("ws_manager lock poisoned");
+                let manager = video_state.ws_manager.lock_or_recover("ws_manager");
                 manager.client_count()
             };
             if client_count == 0 {
@@ -196,14 +214,19 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         .unwrap_or_default()
                         .as_millis() as i64
                     });
-                    if let Err(e) = video_tx
-                        .send(Message::Text(port_message.to_string().into()))
-                        .await
-                    {
-                        video_state.warn_throttled(
-                            "ws_port_list_send",
-                            format!("串口列表发送失败: {}", e),
-                        );
+                    match video_tx.try_send(Message::Text(port_message.to_string().into())) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            // channel 已满（客户端处理慢），丢弃当前串口列表消息
+                            video_state.warn_throttled(
+                                "ws_port_list_send_full",
+                                "串口列表 channel 已满，丢弃一条消息".to_string(),
+                            );
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            // 客户端已断开，退出循环
+                            break;
+                        }
                     }
                 }
             }
@@ -212,12 +235,10 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             let (frame_b64, frame_hash): (Option<Arc<String>>, Option<u64>) = {
                 let b64 = video_state
                     .video_frame_b64
-                    .lock()
-                    .expect("video_frame_b64 lock poisoned");
+                    .lock_or_recover("video_frame_b64");
                 let h = video_state
                     .video_frame_hash
-                    .lock()
-                    .expect("video_frame_hash lock poisoned");
+                    .lock_or_recover("video_frame_hash");
                 (b64.clone(), *h)
             };
 
@@ -235,12 +256,19 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         .as_millis() as i64
                     });
 
-                    if let Err(e) = video_tx
-                        .send(Message::Text(message.to_string().into()))
-                        .await
-                    {
-                        video_state.warn_throttled("ws_video_send", format!("视频发送失败: {}", e));
-                        break;
+                    match video_tx.try_send(Message::Text(message.to_string().into())) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            // channel 已满（客户端处理慢），丢弃当前视频帧（视频流可容忍丢帧）
+                            video_state.warn_throttled(
+                                "ws_video_send_full",
+                                "视频 channel 已满，丢弃一帧".to_string(),
+                            );
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            // 客户端已断开，退出循环
+                            break;
+                        }
                     }
                 }
             }
@@ -249,7 +277,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             if last_odometry_send.elapsed() >= std::time::Duration::from_millis(200) {
                 last_odometry_send = Instant::now();
                 let message = {
-                    let odom = video_state.odometry.lock().expect("odometry lock poisoned");
+                    let odom = video_state.odometry.lock_or_recover("odometry");
                     serde_json::json!({
                         "type": "odometry",
                         "leftSpeed": odom.left_speed_mmps,
@@ -263,22 +291,26 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     })
                 }; // odom 锁在此处释放
 
-                if let Err(e) = video_tx
-                    .send(Message::Text(message.to_string().into()))
-                    .await
-                {
-                    video_state
-                        .warn_throttled("ws_odometry_send", format!("测速数据发送失败: {}", e));
+                match video_tx.try_send(Message::Text(message.to_string().into())) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        // channel 已满，丢弃当前测速数据
+                        video_state.warn_throttled(
+                            "ws_odometry_send_full",
+                            "测速数据 channel 已满，丢弃一条消息".to_string(),
+                        );
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        // 客户端已断开，退出循环
+                        break;
+                    }
                 }
             }
 
             // BLE 设备列表广播（5秒节流，非空时发送）
             if last_ble_send.elapsed() >= std::time::Duration::from_secs(5) {
                 let ble_data: Vec<serde_json::Value> = {
-                    let devices = video_state
-                        .ble_devices
-                        .lock()
-                        .expect("ble_devices lock poisoned");
+                    let devices = video_state.ble_devices.lock_or_recover("ble_devices");
                     if devices.is_empty() {
                         Vec::new()
                     } else {
@@ -306,22 +338,26 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         "type": "ble_devices",
                         "devices": ble_data
                     });
-                    if let Err(e) = video_tx
-                        .send(Message::Text(ble_message.to_string().into()))
-                        .await
-                    {
-                        video_state
-                            .warn_throttled("ws_ble_send", format!("BLE 设备列表发送失败: {}", e));
+                    match video_tx.try_send(Message::Text(ble_message.to_string().into())) {
+                        Ok(()) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            // channel 已满，丢弃当前 BLE 设备列表
+                            video_state.warn_throttled(
+                                "ws_ble_send_full",
+                                "BLE 设备列表 channel 已满，丢弃一条消息".to_string(),
+                            );
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            // 客户端已断开，退出循环
+                            break;
+                        }
                     }
                 }
             }
 
             // 链路状态广播（状态变化时推送）
             let current_link_status = {
-                let link = video_state
-                    .link_status
-                    .lock()
-                    .expect("link_status lock poisoned");
+                let link = video_state.link_status.lock_or_recover("link_status");
                 link.clone()
             };
             if last_link_status.as_ref() != Some(&current_link_status) {
@@ -332,12 +368,19 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     "car_paired": current_link_status.car_paired,
                     "last_odom_ms": current_link_status.last_odom_ms
                 });
-                if let Err(e) = video_tx
-                    .send(Message::Text(link_message.to_string().into()))
-                    .await
-                {
-                    video_state
-                        .warn_throttled("ws_link_status_send", format!("链路状态发送失败: {}", e));
+                match video_tx.try_send(Message::Text(link_message.to_string().into())) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        // channel 已满，丢弃当前链路状态
+                        video_state.warn_throttled(
+                            "ws_link_status_send_full",
+                            "链路状态 channel 已满，丢弃一条消息".to_string(),
+                        );
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        // 客户端已断开，退出循环
+                        break;
+                    }
                 }
             }
 
@@ -345,10 +388,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             if last_status_send.elapsed() >= std::time::Duration::from_secs(1) {
                 last_status_send = Instant::now();
                 let (serial_status, frame_count, command_count) = {
-                    let manager = video_state
-                        .serial_manager
-                        .lock()
-                        .expect("serial_manager lock poisoned");
+                    let manager = video_state.serial_manager.lock_or_recover("serial_manager");
                     let status_str = match &manager.state {
                         SerialConnectionState::Disconnected => "未连接".to_string(),
                         SerialConnectionState::Connecting => "连接中".to_string(),
@@ -361,10 +401,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 };
                 let current_speed = video_state.current_speed.load(Ordering::Relaxed);
                 let ws_clients = {
-                    let ws = video_state
-                        .ws_manager
-                        .lock()
-                        .expect("ws_manager lock poisoned");
+                    let ws = video_state.ws_manager.lock_or_recover("ws_manager");
                     ws.client_count()
                 };
                 let uptime = video_state.started_at.elapsed().as_secs();
@@ -378,11 +415,19 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     "uptime": uptime,
                     "command_count": command_count
                 });
-                if let Err(e) = video_tx
-                    .send(Message::Text(status_message.to_string().into()))
-                    .await
-                {
-                    video_state.warn_throttled("ws_status_send", format!("状态发送失败: {}", e));
+                match video_tx.try_send(Message::Text(status_message.to_string().into())) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        // channel 已满，丢弃当前状态消息
+                        video_state.warn_throttled(
+                            "ws_status_send_full",
+                            "状态 channel 已满，丢弃一条消息".to_string(),
+                        );
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        // 客户端已断开，退出循环
+                        break;
+                    }
                 }
             }
 
@@ -448,7 +493,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     // 注销客户端
     {
-        let mut manager = state.ws_manager.lock().expect("ws_manager lock poisoned");
+        let mut manager = state.ws_manager.lock_or_recover("ws_manager");
         manager.remove_client(client_id);
     }
 }
@@ -466,10 +511,7 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             if let Some(cmd_byte) = data.bytes().next() {
                 // 先获取 serial_manager 锁（与 get_status 锁顺序一致：serial_manager → current_speed）
                 {
-                    let mut manager = state
-                        .serial_manager
-                        .lock()
-                        .expect("serial_manager lock poisoned");
+                    let mut manager = state.serial_manager.lock_or_recover("serial_manager");
                     if let Err(e) = manager.send_command(cmd_byte) {
                         warn!("命令发送失败: {}", e);
                         return Err(anyhow::anyhow!("命令发送失败: {}", e));
@@ -496,10 +538,7 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
                 }
                 // 向串口发送速度等级字符
                 {
-                    let mut manager = state
-                        .serial_manager
-                        .lock()
-                        .expect("serial_manager lock poisoned");
+                    let mut manager = state.serial_manager.lock_or_recover("serial_manager");
                     // 速度等级字符：1-9 映射为 '1'-'9'
                     if let Err(e) = manager.send_command(b'0' + speed) {
                         warn!("速度命令发送失败: {}", e);
@@ -512,10 +551,7 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
         }
         "heartbeat" => {
             // 心跳
-            let mut last = state
-                .last_heartbeat
-                .lock()
-                .expect("last_heartbeat lock poisoned");
+            let mut last = state.last_heartbeat.lock_or_recover("last_heartbeat");
             *last = std::time::Instant::now();
         }
         "drive_mode" => {
@@ -525,10 +561,7 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
                 // 未知模式回退到普通模式（0），防止固件收到无法识别的模式值
                 let mode_value = if mode <= 2 { mode as u8 } else { 0u8 };
                 {
-                    let mut manager = state
-                        .serial_manager
-                        .lock()
-                        .expect("serial_manager lock poisoned");
+                    let mut manager = state.serial_manager.lock_or_recover("serial_manager");
                     // 使用 send_bytes 确保 [T, mode] 双字节原子发送
                     if let Err(e) = manager.send_bytes(&[b'T', mode_value]) {
                         warn!("行走模式命令发送失败: {}", e);
@@ -543,10 +576,7 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             if let Some(mac_str) = message["mac"].as_str() {
                 if let Ok(mac_bytes) = parse_mac_address(mac_str) {
                     {
-                        let mut manager = state
-                            .serial_manager
-                            .lock()
-                            .expect("serial_manager lock poisoned");
+                        let mut manager = state.serial_manager.lock_or_recover("serial_manager");
                         // MAC 配置帧格式：'M' + 0xFF 帧边界标识 + 长度字节(6) + 6字节MAC
                         // 组装为单个 [u8; 9] 数组一次性发送，确保原子性：
                         // 若串口中途断开，接收器不会收到部分 MAC 配置帧
@@ -575,10 +605,7 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
         "ble_scan" => {
             // 触发接收器 BLE 扫描：通过串口发送 'B' 命令
             {
-                let mut manager = state
-                    .serial_manager
-                    .lock()
-                    .expect("serial_manager lock poisoned");
+                let mut manager = state.serial_manager.lock_or_recover("serial_manager");
                 if let Err(e) = manager.send_command(b'B') {
                     warn!("BLE 扫描命令发送失败: {}", e);
                     return Err(anyhow::anyhow!("BLE 扫描命令发送失败: {}", e));
@@ -756,10 +783,7 @@ mod tests {
         let state = create_test_state();
 
         // 记录初始心跳时间
-        let initial = *state
-            .last_heartbeat
-            .lock()
-            .expect("last_heartbeat lock poisoned");
+        let initial = *state.last_heartbeat.lock_or_recover("last_heartbeat");
 
         // 短暂等待确保时间差
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -773,10 +797,7 @@ mod tests {
         );
 
         // 验证心跳时间已更新
-        let updated = *state
-            .last_heartbeat
-            .lock()
-            .expect("last_heartbeat lock poisoned");
+        let updated = *state.last_heartbeat.lock_or_recover("last_heartbeat");
         assert!(updated > initial, "心跳时间应在处理后更新");
     }
 

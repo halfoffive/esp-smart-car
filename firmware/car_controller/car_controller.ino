@@ -55,8 +55,10 @@ VehicleMotion g_currentMotion = createStopState();
 
 /**
  * 当前速度值（0-255）
+ * 初始值 141 对应前端默认速度等级 5（接收器 map(5, 1, 9, 28, 255) = 141）
+ * 避免首次连接未发送速度命令前车速与前端显示不一致
  */
-uint8_t g_currentSpeed = 28;
+uint8_t g_currentSpeed = 141;
 
 /**
  * 最后命令接收时间
@@ -472,7 +474,8 @@ void setup() {
 
   // 初始化状态
   g_currentMotion = createStopState();
-  g_currentSpeed = 28;
+  // 与前端默认速度等级 5 对应（接收器 map(5, 1, 9, 28, 255) = 141）
+  g_currentSpeed = 141;
   g_emergencyStop = false;
   // g_smartDriveEnabled 保持全局声明时的初始值 false，匹配前端默认 OFF
 

@@ -122,17 +122,30 @@ export const useKeyboard = (sendCommand: (cmd: string) => void) => {
     }
   }
 
+  /** 处理页面可见性变化（切换标签页/最小化时自动停止） */
+  const handleVisibilityChange = () => {
+    if (document.hidden) {
+      activeKeys.value = new Set()
+      if (currentDirectionKey) {
+        currentDirectionKey = null
+        sendCommand(' ')
+      }
+    }
+  }
+
   // 自动生命周期管理：组件挂载时添加监听器，卸载时自动清理
   onMounted(() => {
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
     window.addEventListener('blur', handleBlur)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
   })
 
   onUnmounted(() => {
     window.removeEventListener('keydown', handleKeyDown)
     window.removeEventListener('keyup', handleKeyUp)
     window.removeEventListener('blur', handleBlur)
+    document.removeEventListener('visibilitychange', handleVisibilityChange)
   })
 
   return {

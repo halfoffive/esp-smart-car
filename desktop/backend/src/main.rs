@@ -133,7 +133,7 @@ async fn static_handler(uri: Uri) -> Response<Body> {
 
 #[cfg(test)]
 mod tests {
-    use esp_smart_car_backend::AppState;
+    use esp_smart_car_backend::{AppState, MutexExt};
 
     /// 测试 AppState 初始状态
     #[test]
@@ -143,12 +143,9 @@ mod tests {
             .current_speed
             .load(std::sync::atomic::Ordering::Relaxed);
         assert_eq!(current_speed, 5);
-        let video_frame = state.video_frame.lock().expect("video_frame lock poisoned");
+        let video_frame = state.video_frame.lock_or_recover("video_frame");
         assert!(video_frame.is_none());
-        let video_frame_b64 = state
-            .video_frame_b64
-            .lock()
-            .expect("video_frame_b64 lock poisoned");
+        let video_frame_b64 = state.video_frame_b64.lock_or_recover("video_frame_b64");
         assert!(video_frame_b64.is_none());
     }
 }

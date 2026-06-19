@@ -41,9 +41,12 @@
         </button>
       </div>
 
-
+      <!-- 连接错误提示（WebSocket 或串口） -->
+      <div v-if="connectionError" class="text-[10px] text-red-400 bg-red-400/10 border border-red-400/30 rounded px-2 py-1">
+        {{ connectionError }}
+      </div>
     </div>
-    
+
     <!-- 速度控制 -->
     <div>
       <div class="flex items-center justify-between mb-1">
@@ -286,7 +289,7 @@ import { useApi } from '../composables/useApi'
 import { useStatus } from '../composables/useStatus'
 import { useBackendHealth } from '../composables/useBackendHealth'
 
-const { sendCommand: wsSendCommand, sendSpeed, isConnected, sendDriveMode, availablePorts: wsAvailablePorts, connect: wsConnect, disconnect: wsDisconnect, bleDevices, sendBleScan, sendMacConfig } = useWebSocket(true)
+const { sendCommand: wsSendCommand, sendSpeed, isConnected, connectionError, sendDriveMode, availablePorts: wsAvailablePorts, connect: wsConnect, disconnect: wsDisconnect, bleDevices, sendBleScan, sendMacConfig } = useWebSocket(true)
 const { post, get } = useApi()
 const { status } = useStatus()
 const { backendAvailable } = useBackendHealth()
@@ -311,6 +314,8 @@ const isScanning = ref(false)
 
 /** 速度滑块防抖定时器：快速拖动时只发送最终值，不发送中间值 */
 let speedDebounceTimer: number | null = null
+/** BLE 扫描自动取消定时器 */
+let bleScanTimeoutId: ReturnType<typeof setTimeout> | null = null
 /** 行走模式：0=普通, 1=直线修正, 2=航向锁定 */
 const driveMode = ref(0)
 const logs = ref<{ id: number, time: string, message: string, color: string }[]>([])
@@ -375,16 +380,24 @@ const scanBleDevices = async () => {
     addLog('未连接串口，无法扫描蓝牙设备', 'warning')
     return
   }
+  // 清除之前的扫描超时，避免多次点击导致状态异常
+  if (bleScanTimeoutId) {
+    clearTimeout(bleScanTimeoutId)
+    bleScanTimeoutId = null
+  }
   isBleScanning.value = true
   const success = sendBleScan()
   if (!success) {
-    addLog('蓝牙扫描命令发送失败', 'error')
-  } else {
-    addLog('蓝牙扫描已触发，等待结果...', 'info')
-  }
-  // BLE 扫描约 10 秒，12 秒后自动取消扫描状态
-  setTimeout(() => {
+    addLog('蓝牙扫描命令发送失败，请检查 WebSocket 连接', 'error')
     isBleScanning.value = false
+    return
+  }
+  addLog('蓝牙扫描已触发，等待结果...', 'info')
+  // BLE 扫描约 10 秒，12 秒后自动取消扫描状态
+  bleScanTimeoutId = window.setTimeout(() => {
+    bleScanTimeoutId = null
+    isBleScanning.value = false
+    addLog('蓝牙扫描结束', 'info')
   }, 12000)
 }
 const speedPercent = computed(() => Math.round((currentSpeed.value / 9) * 100))
@@ -410,9 +423,12 @@ const setDriveMode = (mode: number) => {
     addLog('未连接，无法切换模式', 'warning')
     return
   }
-  driveMode.value = mode
-  sendDriveMode(mode)
-  addLog(`行走模式: ${driveModeDesc.value}`, 'info')
+  if (sendDriveMode(mode)) {
+    driveMode.value = mode
+    addLog(`行走模式: ${driveModeDesc.value}`, 'info')
+  } else {
+    addLog('行走模式切换失败，请检查 WebSocket 连接', 'error')
+  }
 }
 
 const addLog = (message: string, type: 'info' | 'warning' | 'error' = 'info') => {
@@ -580,6 +596,12 @@ onUnmounted(() => {
     clearTimeout(emergencyStopTimer)
     emergencyStopTimer = null
   }
+  // 清理 BLE 扫描超时定时器
+  if (bleScanTimeoutId !== null) {
+    clearTimeout(bleScanTimeoutId)
+    bleScanTimeoutId = null
+  }
+  isBleScanning.value = false
   // 断开连接
   if (serialConnected.value) {
     disconnect().catch((e) => { if (import.meta.env.DEV) console.error('[ControlPanel] 卸载断开失败:', e) })

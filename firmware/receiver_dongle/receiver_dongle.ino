@@ -473,6 +473,11 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
         packet->version != StreamConfig::PROTOCOL_VERSION) return;
     // 校验 dataLen 边界，防止缓冲区溢出
     if (packet->dataLen > StreamConfig::MAX_PACKET_SIZE) return;
+    // 校验 dataLen 与实际接收长度 len 的一致性
+    // 发送大小 = 10 (header) + dataLen + 1 (checksum) = 11 + dataLen
+    // 若 dataLen + 11 > len，说明 dataLen 超过实际数据长度（损坏/篡改包），
+    // 后续 memcpy 会读取越界，必须提前拒绝
+    if (static_cast<int>(packet->dataLen) + 11 > len) return;
     
     // 新帧开始
     if (packet->packetId == 0) {

@@ -11,6 +11,7 @@
  * 设计模式：闭包 + 单例模式（与 useWebSocket.ts 风格一致）
  * - 所有状态封装在工厂函数闭包中，避免模块级全局变量（HMR 友好）
  * - 单例实例在首次调用时创建，整个应用生命周期共享
+ * - HMR 重载时清理旧定时器，避免定时器泄漏
  */
 
 import { ref } from 'vue'
@@ -38,6 +39,8 @@ function createBackendHealth(): BackendHealthInstance {
 
   // 防止并发探测：上一次探测未完成时跳过
   let isChecking = false
+  // 保存定时器 ID，HMR 或组件卸载时清理
+  let intervalId: ReturnType<typeof setInterval> | null = null
 
   /**
    * 探测后端：fetch /api/status，1 秒超时
@@ -67,7 +70,17 @@ function createBackendHealth(): BackendHealthInstance {
 
   // 启动时立即探测一次，随后每 10 秒重试
   check()
-  setInterval(check, CHECK_INTERVAL)
+  intervalId = setInterval(check, CHECK_INTERVAL)
+
+  // HMR 清理：模块热重载时取消旧定时器，避免多个定时器并存
+  if (import.meta.hot) {
+    import.meta.hot.dispose(() => {
+      if (intervalId) {
+        clearInterval(intervalId)
+        intervalId = null
+      }
+    })
+  }
 
   return { backendAvailable, recheck }
 }
