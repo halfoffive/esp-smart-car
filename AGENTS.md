@@ -146,6 +146,29 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-19 - 并发安全与前端状态修复
+
+**问题**: 串口断开/重连时旧串口句柄可能覆盖新连接；WebSocket `video_task` 在取消时因 `.await send` 阻塞无法退出；锁污染会导致后端 panic；前端 WebSocket 重连竞争、BLE 扫描超时泄漏、API 无超时、标签页切换后车辆继续运动。
+
+**修复**:
+
+- **后端**:
+  - `lib.rs` — 新增 `MutexExt` trait，`lock_or_recover` 自动恢复被污染的标准库 `Mutex`，避免单个线程 panic 拖垮整个进程
+  - `serial.rs` — `SerialManager` 新增 `port_generation` 计数器，`connect`/`disconnect` 时自增；`run_serial_task` 归还端口前比较 generation，旧任务发现 generation 已变则丢弃旧端口
+  - `websocket.rs` — `video_task` 中 `video_tx.send(...).await` 改为 `try_send`，配合 `CancellationToken` 实现立即取消；新增 90 秒 `last_heartbeat` 超时检测
+- **前端**:
+  - `useWebSocket.ts` — 重写为 Promise 化 `connect`、重入保护、连接超时、心跳响应检测、定时器清理，修复手动/自动重连竞争
+  - `ControlPanel.vue` — BLE 扫描超时 ID 保存并在 `onUnmounted` 清理；`setDriveMode` 仅 WS 发送成功后才切换本地状态；新增 `connectionError` 错误提示条
+  - `useApi.ts` — `request` 增加 `timeout` 参数（默认 10s）与 `AbortController`；JSON 解析失败时返回原始响应片段
+  - `useBackendHealth.ts` — interval ID 保存，HMR `dispose` 时清理
+  - `useKeyboard.ts` — 增加 `visibilitychange` 监听，标签页隐藏时清空按键状态并发送停止命令
+- **固件**:
+  - `car_controller.ino` — 提取 `COMMAND_TIMEOUT_MS` 常量（1000ms），运动/速度/心跳/行走模式命令均刷新 `g_lastCmdTime`，超时自动停车；修复 `g_currentSpeed` 初始值
+  - `video_stream.h` — 修复视频包 `packetData` 数组越界
+  - `receiver_dongle.ino` — 增加 `dataLen <= MAX_PACKET_SIZE` 校验
+- **文档**: `CHANGELOG.md` / `README.md` / `AGENTS.md` 同步更新
+- **验证**: `bun run build` 通过；`cargo clippy`/`cargo test` 因当前 Windows 环境 Rust 1.96.0 的 `std::process::Command::output` 返回 `Os { code: 0 }` 无法运行，与本项目代码无关（复现报告见 `%TEMP%\rust_panic_report.md`）
+
 ### 2026-06-18 - S3 平台整合与可观测性增强
 
 **问题**: 车载 ESP32-C6 仅承担电机/编码器/PID/视频桥接，视频帧 Serial1 桥接环节冗余；串口连接后车载端无反应（后端未主动探测）；后端日志过于简略，视频/命令/测速流水线在 info 级别不可见。

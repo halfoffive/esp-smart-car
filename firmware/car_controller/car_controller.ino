@@ -74,6 +74,12 @@ bool g_emergencyStop = false;
  * 测速数据上报间隔(ms)
  */
 constexpr uint16_t ODOMETRY_REPORT_INTERVAL_MS = 200;
+
+/**
+ * 命令超时自动停止时间(ms)
+ * 超过此时间未收到任何有效命令（运动/速度/心跳/行走模式）则自动停车
+ */
+constexpr uint32_t COMMAND_TIMEOUT_MS = 1000;
 uint32_t g_lastOdomReportTime = 0;
 
 /**
@@ -507,7 +513,7 @@ void loop() {
   }
 
   // 3. 检查通信超时
-  if (!g_emergencyStop && (currentTime - g_lastCmdTime) > 1000) {
+  if (!g_emergencyStop && (currentTime - g_lastCmdTime) > COMMAND_TIMEOUT_MS) {
     // 超过1秒未收到命令，自动停止
     if (g_currentMotion.frontLeft.direction != MotorDirection::STOP) {
       g_currentMotion = createStopState();

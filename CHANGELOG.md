@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 修复
+- **后端并发安全** — `lib.rs` 新增 `MutexExt::lock_or_recover`，被污染的 `std::sync::Mutex` 自动恢复，避免线程 panic 拖垮整个进程
+- **串口连接竞态** — `serial.rs` 新增 `port_generation` 计数器，`disconnect`/`reconnect` 时自增，旧串口任务归还端口前校验 generation，防止旧句柄覆盖新连接
+- **WebSocket 视频任务取消安全** — `websocket.rs` `video_task` 中 `.await send` 改为 `try_send`，配合 `CancellationToken`，任务可立即响应取消；新增 90 秒心跳超时检测
+- **前端 WebSocket 重入与心跳** — `useWebSocket.ts` 重写为 Promise 连接、重入保护、心跳响应检测、连接超时处理，修复手动/自动重连竞争
+- **前端控制面板状态** — `ControlPanel.vue` 增加 BLE 扫描超时清理、`setDriveMode` 发送成功后才切本地状态、连接错误提示条
+- **前端 API 健壮性** — `useApi.ts` 增加请求超时、JSON 解析错误处理、非 2xx 错误信息
+- **前端定时器泄漏** — `useBackendHealth.ts` 增加 HMR dispose 清理；`useKeyboard.ts` 增加 `visibilitychange` 监听，标签页隐藏时立即停车并清理按键状态
+- **固件命令超时自动停止** — `car_controller.ino` 提取 `COMMAND_TIMEOUT_MS` 常量（1000ms），任何有效命令/心跳刷新时间戳，超时自动停车
+- **固件边界修复** — `car_controller.ino` 修复 `g_currentSpeed` 初始化；`video_stream.h` 修复视频包数组越界；`receiver_dongle.ino` 增加 `dataLen` 校验
+
+### 已知问题
+- `cargo test`/`cargo build` 在当前 Windows 环境（Rust 1.96.0 + Windows 11 Build 26200）下因 `std::process::Command::output` 返回 `Os { code: 0 }` 而失败，与本项目代码无关；完整复现报告见 `%TEMP%\rust_panic_report.md`
+
 ## [1.3.0] - 2026-06-18
 
 ### 破坏性变更

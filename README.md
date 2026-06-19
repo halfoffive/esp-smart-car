@@ -265,6 +265,12 @@ cargo clippy       # 静态分析检查
 
 ## 版本历史
 
+- v1.3.1 - 2026-06-19（未发布）
+  - 后端并发安全：`MutexExt` 锁污染自动恢复、串口 generation 防竞态、`video_task` 可安全取消 + 心跳超时
+  - 前端：WebSocket 重入/心跳/连接超时、ControlPanel 状态回滚与错误提示、useApi 超时与 JSON 解析、定时器清理、标签页隐藏停车
+  - 固件：命令超时自动停止常量 `COMMAND_TIMEOUT_MS`、视频包越界修复、receiver_dongle `dataLen` 校验
+  - 已知：当前 Windows + Rust 1.96.0 环境下 `cargo build` 因工具链 `Command::output` 返回 `Os { code: 0 }` 失败，与本项目代码无关，详见 `%TEMP%\rust_panic_report.md`
+
 - v1.9.1 - 2026-06-18
   - **S3 平台整合与可观测性增强**：砍掉车载 ESP32-C6，由 ESP32-S3（Freenove FNK0085）单芯片承担全部车载功能（摄像头 + 电机 + 编码器 + PID + ESP-NOW + BLE）
   - 固件：car_controller 目标板 C6→S3，合并 camera_module 代码，删除 Serial1 桥接，启用 ESP-NOW 视频直发，删除 servo_control.h；motor_control 引脚改 GPIO 38/39/40/41/42/21；odometer 编码器引脚改 GPIO 1/2；receiver_dongle 新增 'P' 命令链路状态上报 + 5 秒周期心跳
