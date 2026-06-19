@@ -50,10 +50,8 @@ async fn main() -> anyhow::Result<()> {
             if let Err(e) = serial::run_serial_task(serial_state.clone()).await {
                 consecutive_failures += 1;
                 // 指数退避：3s, 6s, 12s, 24s, 最大 60s
-                let delay_secs = std::cmp::min(
-                    3u64 * (1u64 << consecutive_failures.saturating_sub(1)),
-                    60,
-                );
+                let delay_secs =
+                    std::cmp::min(3u64 * (1u64 << consecutive_failures.saturating_sub(1)), 60);
                 warn!(
                     "串口任务错误(连续第{}次): {}, {}秒后重启",
                     consecutive_failures, e, delay_secs
@@ -62,6 +60,7 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 // 正常退出（如断开连接），重置退避计数，短暂等待后重启
                 consecutive_failures = 0;
+                info!("串口任务正常退出，1秒后重启");
                 tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
             }
         }
@@ -146,7 +145,10 @@ mod tests {
         assert_eq!(current_speed, 5);
         let video_frame = state.video_frame.lock().expect("video_frame lock poisoned");
         assert!(video_frame.is_none());
-        let video_frame_b64 = state.video_frame_b64.lock().expect("video_frame_b64 lock poisoned");
+        let video_frame_b64 = state
+            .video_frame_b64
+            .lock()
+            .expect("video_frame_b64 lock poisoned");
         assert!(video_frame_b64.is_none());
     }
 }

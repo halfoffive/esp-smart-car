@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-06-18
+
+### 破坏性变更
+- 车载控制器目标板从 ESP32-C6 改为 ESP32-S3（Freenove FNK0085）
+- `firmware/camera_module/` 目录删除，相关文件移入 `firmware/car_controller/`
+- 前端 `/api/status` 轮询移除，改为 WS 推送 `status` 消息
+- 紧急停止按钮改为长按 500ms 触发
+
+### 新增
+- S3 单芯片车载控制器：同时承担摄像头 + 电机 + 编码器 + PID + ESP-NOW + BLE 广播
+- 接收器 dongle 链路状态上报：'P' 命令触发 + 每 5 秒主动上报 `{"t":"link",...}` JSON
+- 后端连接探测：`connect_serial` 成功后发送 'P' 探测命令
+- 后端日志增强：首帧日志、10秒视频摘要、5秒测速摘要、命令转发 1s 节流、错误 5s 节流
+- 前端后端健康检测：`useBackendHealth` composable，无后端时禁用 UI
+- 前端链路状态 UI：4 级状态显示（探测中 → Dongle 已连接 → 车载已配对 → 车载在线）
+- 后端 `status` WS 消息：每秒推送完整状态替代前端轮询
+- 后端 `link_status` WS 消息：链路状态变化时推送
+
+### 修复
+- "连接串口后车载端无反应"：后端主动探测 + Dongle 链路状态上报
+- `get_ble_devices` API 缺 `wifi_mac` 字段
+- `read_next` 帧头匹配时 `line_buf` 被丢弃
+- `video_task` 每客户端重复哈希计算
+- WS_URL 不支持反向代理子路径部署
+- `<select>` 聚焦时键盘事件触发车辆运动
+
+### 优化
+- 引脚重映射：电机 GPIO 38/39/40/41/42/21，编码器 GPIO 1/2（避开摄像头引脚）
+- 删除 Serial1 视频桥接环节（S3 直接 ESP-NOW 发送）
+- 删除 servo_control.h 残留文件
+- 状态轮询统一为 WS 推送，减少 HTTP 开销
+
 ## [1.9.0] - 2026-06-14
 
 ### Added

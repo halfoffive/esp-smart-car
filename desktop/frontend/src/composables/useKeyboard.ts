@@ -57,9 +57,9 @@ export const useKeyboard = (sendCommand: (cmd: string) => void) => {
     // 忽略 IME 输入过程中的按键（如中文拼音输入等组合输入）
     if (event.isComposing) return;
 
-    // 忽略输入框/文本域中的按键，防止在输入 MAC 地址等文本时误触发车辆控制
+    // 忽略输入框/文本域/下拉框中的按键，防止在输入 MAC 地址或选择串口时误触发车辆控制
     const activeEl = document.activeElement
-    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || (activeEl as HTMLElement).isContentEditable)) {
+    if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT' || (activeEl as HTMLElement).isContentEditable)) {
       return
     }
 

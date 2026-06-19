@@ -1,14 +1,16 @@
 /**
  * WebSocket 组合式函数
  * 管理 WebSocket 连接，处理视频帧和命令传输
- * 
+ *
  * 功能：
  * 1. 连接/断开 WebSocket
  * 2. 发送控制命令
  * 3. 接收视频帧
  * 4. 接收测速数据
  * 5. 心跳保活
- * 
+ * 6. 接收链路状态（dongle/车载配对/在线状态）
+ * 7. 接收系统状态（替代 /api/status 轮询）
+ *
  * 设计模式：闭包 + 单例模式
  * - 所有状态封装在工厂函数闭包中，避免模块级全局变量（HMR 友好）
  * - 只有 owner=true 的调用者才能执行 connect() 和 disconnect()
@@ -19,8 +21,15 @@
 import { ref } from 'vue'
 import type { Ref } from 'vue'
 
-/** 根据当前页面协议动态构建 WebSocket URL（开发/生产通用） */
-const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`
+/**
+ * 构建 WebSocket URL
+ * 支持反向代理子路径部署（如 https://example.com/smartcar/）
+ * - pathname="/" → ws://host/ws
+ * - pathname="/smartcar/" → ws://host/smartcar/ws
+ * - pathname="/smartcar" → ws://host/smartcar/ws
+ */
+const WS_PATH = window.location.pathname.replace(/\/$/, '')
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}${WS_PATH}/ws`
 const HEARTBEAT_INTERVAL = 30000 // 30秒
 const MAX_RETRY_COUNT = 10       // 最大重连次数
 const INITIAL_RETRY_DELAY = 1000 // 初始重连延迟（毫秒）
@@ -45,6 +54,32 @@ export interface BleDevice {
   rssi: number
 }
 
+/**
+ * 系统状态接口（与后端 StatusResponse 对齐，camelCase）
+ * 由后端通过 WS status 消息推送，替代前端 /api/status 轮询
+ */
+export interface StatusData {
+  serialStatus: string    // 串口连接状态（"未连接"/"连接中"/"已连接"/"错误: ..."）
+  frameCount: number      // 已接收帧数
+  currentSpeed: number    // 当前速度等级（1-9）
+  wsClients: number       // WebSocket 连接数
+  uptime: number          // 运行时长（秒）
+  commandCount: number    // 已发送命令数
+}
+
+/**
+ * 链路状态接口（与后端 LinkStatus 对齐，camelCase）
+ * 由后端通过 WS link_status 消息推送
+ * - dongleOk: Dongle 是否正常响应探测
+ * - carPaired: 车载 ESP-NOW 是否已与 Dongle 配对
+ * - lastOdomMs: 距上次收到车载数据的毫秒数（>10000 视为离线）
+ */
+export interface LinkStatus {
+  dongleOk: boolean
+  carPaired: boolean
+  lastOdomMs: number
+}
+
 /** WebSocket 实例接口 */
 interface WebSocketInstance {
   isConnected: Ref<boolean>
@@ -53,6 +88,8 @@ interface WebSocketInstance {
   odometry: Ref<OdometryData>
   availablePorts: Ref<string[]>
   bleDevices: Ref<BleDevice[]>
+  status: Ref<StatusData>
+  linkStatus: Ref<LinkStatus>
   connect: () => Promise<void>
   disconnect: () => void
   sendCommand: (command: string) => boolean
@@ -80,6 +117,21 @@ function createWebSocket() {
   })
   const availablePorts = ref<string[]>([])
   const bleDevices = ref<BleDevice[]>([])
+  // 系统状态（由后端 WS status 消息推送，替代 /api/status 轮询）
+  const status = ref<StatusData>({
+    serialStatus: '未连接',
+    frameCount: 0,
+    currentSpeed: 0,
+    wsClients: 0,
+    uptime: 0,
+    commandCount: 0,
+  })
+  // 链路状态（由后端 WS link_status 消息推送）
+  const linkStatus = ref<LinkStatus>({
+    dongleOk: false,
+    carPaired: false,
+    lastOdomMs: 0,
+  })
 
   // 内部可变状态
   const ws = ref<WebSocket | null>(null)
@@ -191,6 +243,30 @@ function createWebSocket() {
               break
 
             case 'status':
+              // 接收系统状态（后端 snake_case → 前端 camelCase）
+              // 后端推送字段：serial_status/frame_count/current_speed/ws_clients/uptime/command_count
+              if (typeof message.serial_status === 'string') {
+                status.value = {
+                  serialStatus: message.serial_status,
+                  frameCount: typeof message.frame_count === 'number' ? message.frame_count : 0,
+                  currentSpeed: typeof message.current_speed === 'number' ? message.current_speed : 0,
+                  wsClients: typeof message.ws_clients === 'number' ? message.ws_clients : 0,
+                  uptime: typeof message.uptime === 'number' ? message.uptime : 0,
+                  commandCount: typeof message.command_count === 'number' ? message.command_count : 0,
+                }
+              }
+              break
+
+            case 'link_status':
+              // 接收链路状态（后端 snake_case → 前端 camelCase）
+              // 后端推送字段：dongle_ok/car_paired/last_odom_ms
+              if (typeof message.dongle_ok === 'boolean') {
+                linkStatus.value = {
+                  dongleOk: message.dongle_ok,
+                  carPaired: typeof message.car_paired === 'boolean' ? message.car_paired : false,
+                  lastOdomMs: typeof message.last_odom_ms === 'number' ? message.last_odom_ms : 0,
+                }
+              }
               break
 
             case 'port_list':
@@ -386,6 +462,8 @@ function createWebSocket() {
     odometry,
     availablePorts,
     bleDevices,
+    status,
+    linkStatus,
     connect,
     disconnect,
     sendCommand,
@@ -442,6 +520,8 @@ export const useWebSocket = (owner = false): WebSocketInstance => {
     odometry: state.odometry,
     availablePorts: state.availablePorts,
     bleDevices: state.bleDevices,
+    status: state.status,
+    linkStatus: state.linkStatus,
     connect: safeConnect,
     disconnect: safeDisconnect,
     sendCommand: state.sendCommand,

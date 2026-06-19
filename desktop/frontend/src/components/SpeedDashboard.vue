@@ -142,7 +142,7 @@ watch(odometry, (newOdom) => {
 })
 
 // 运行时长（基于后端 uptime）
-const commandCount = computed(() => status.value.command_count || 0)
+const commandCount = computed(() => status.value.commandCount || 0)
 const runTimeSeconds = computed(() => status.value.uptime || 0)
 
 const displayRunTime = computed(() => {

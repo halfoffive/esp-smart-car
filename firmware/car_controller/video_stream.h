@@ -1,14 +1,10 @@
 /**
  * 视频流传输系统 - 函数式编程风格
- * 基于 ESP32-S3 CAM，视频帧通过串口发送到车载控制器
+ * 基于 ESP32-S3 CAM（Freenove FNK0085），视频帧通过 ESP-NOW 分包直发到接收器
  * 支持动态质量调整和帧率控制
  * 
- * 注意：sendVideoFrame() 和 updateStreaming() 已废弃，
- * 视频帧现在由 camera_module.ino 通过 Serial1 直接发送。
- * 保留 captureFrame/releaseFrame/calculateFPS/adjustQuality 等纯函数。
- * 
  * 作者：智能车项目团队
- * 版本：1.3.0
+ * 版本：1.4.0
  */
 
 #ifndef VIDEO_STREAM_H
@@ -134,11 +130,9 @@ inline uint8_t adjustQuality(const uint32_t frameSize) {
 // ============================================
 
 /**
- * [已废弃] 发送视频帧
- * 视频帧现在由 camera_module.ino 通过 Serial1 直接发送到车载控制器，
- * 不再通过 ESP-NOW 分包传输。此函数保留供参考，不应再被调用。
- * 
- * 原功能：将大帧分割为多个小包通过 ESP-NOW 传输
+ * 发送视频帧
+ * 将大帧分割为多个小包通过 ESP-NOW 传输到接收器
+ * S3 单芯片架构下由 car_controller.ino 的 loop() 直接调用
  */
 inline void sendVideoFrame(const FrameState& frame) {
     if (!frame.isValid) return;
@@ -213,9 +207,8 @@ inline void stopStreaming() {
 }
 
 /**
- * [已废弃] 更新流传输状态
- * 视频帧现在由 camera_module.ino 的 loop() 直接管理（捕获+串口发送），
- * 不再通过此函数统一调度。此函数保留供参考，不应再被调用。
+ * 更新流传输状态（统一调度帧捕获+发送+质量调整）
+ * 可在 loop() 中直接调用，由 car_controller.ino 选择使用
  */
 inline void updateStreaming(const CameraConfiguration& config) {
     if (!g_streamState.isStreaming) return;

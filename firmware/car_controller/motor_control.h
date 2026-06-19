@@ -1,8 +1,8 @@
 /**
  * 智能车控制系统 - 函数式编程风格
- * 基于 ESP32-C6，使用 L298N 驱动 4 个电机，SG90 舵机控制转向
+ * 基于 ESP32-S3（Freenove FNK0085），使用 L298N 驱动 4 个电机
  * 作者：智能车项目团队
- * 版本：1.2.0
+ * 版本：1.3.0
  */
 
 #ifndef MOTOR_CONTROL_H
@@ -61,25 +61,25 @@ struct VehicleMotion {
 };
 
 // ============================================
-// 引脚配置常量
+// 引脚配置常量（ESP32-S3 引脚分配，避开摄像头 GPIO 4-18 与 SPI Flash GPIO 26-37）
 // ============================================
 namespace PinConfig {
     // L298N 模块1（控制左侧两个电机）
-    constexpr uint8_t L298N_1_IN1 = 4;   // 左侧输入1
-    constexpr uint8_t L298N_1_IN2 = 5;   // 左侧输入2
-    constexpr uint8_t L298N_1_EN = 6;    // 左侧使能(PWM)
-    
+    constexpr uint8_t L298N_1_IN1 = 38;  // 左侧输入1（S3 GPIO 38）
+    constexpr uint8_t L298N_1_IN2 = 39;  // 左侧输入2（S3 GPIO 39）
+    constexpr uint8_t L298N_1_EN = 40;   // 左侧使能(PWM)（S3 GPIO 40）
+
     // L298N 模块2（控制右侧两个电机）
-    constexpr uint8_t L298N_2_IN1 = 7;   // 右侧输入1
-    constexpr uint8_t L298N_2_IN2 = 8;   // 右侧输入2
-    constexpr uint8_t L298N_2_EN = 9;    // 右侧使能(PWM)
+    constexpr uint8_t L298N_2_IN1 = 41;  // 右侧输入1（S3 GPIO 41）
+    constexpr uint8_t L298N_2_IN2 = 42;  // 右侧输入2（S3 GPIO 42）
+    constexpr uint8_t L298N_2_EN = 21;   // 右侧使能(PWM)（S3 GPIO 21）
 
     // 别名：左侧电机使用 L298N 模块1
-    constexpr uint8_t MOTOR_LEFT_IN1 = L298N_1_IN1;   // 左侧输入1 (GPIO 4)
-    constexpr uint8_t MOTOR_LEFT_IN2 = L298N_1_IN2;   // 左侧输入2 (GPIO 5)
+    constexpr uint8_t MOTOR_LEFT_IN1 = L298N_1_IN1;   // 左侧输入1 (GPIO 38)
+    constexpr uint8_t MOTOR_LEFT_IN2 = L298N_1_IN2;   // 左侧输入2 (GPIO 39)
     // 别名：右侧电机使用 L298N 模块2
-    constexpr uint8_t MOTOR_RIGHT_IN1 = L298N_2_IN1;  // 右侧输入1 (GPIO 7)
-    constexpr uint8_t MOTOR_RIGHT_IN2 = L298N_2_IN2;  // 右侧输入2 (GPIO 8)
+    constexpr uint8_t MOTOR_RIGHT_IN1 = L298N_2_IN1;  // 右侧输入1 (GPIO 41)
+    constexpr uint8_t MOTOR_RIGHT_IN2 = L298N_2_IN2;  // 右侧输入2 (GPIO 42)
 }
 
 // ============================================

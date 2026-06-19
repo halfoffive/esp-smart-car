@@ -33,6 +33,7 @@ namespace ReceiverConfig {
     constexpr uint32_t SERIAL_BAUD = 921600;   // 串口波特率（高速传输）
     constexpr uint32_t BUFFER_SIZE = 32768;    // 缓冲区大小（32KB，匹配后端帧上限）
     constexpr uint32_t HEARTBEAT_INTERVAL = 1000; // 心跳间隔
+    constexpr uint32_t LINK_STATUS_INTERVAL = 5000; // 链路状态上报间隔（5秒）
 }
 
 // ============================================
@@ -98,6 +99,12 @@ uint32_t g_lastHeartbeat = 0;
 /// BLE 扫描是否正在进行
 bool g_bleScanning = false;
 
+/// 上次收到车载 ESP-NOW 数据的时间戳（0 表示从未收到）
+static uint32_t g_lastCarDataTime = 0;
+
+/// 上次发送链路状态的时间戳
+static uint32_t g_lastLinkStatus = 0;
+
 // ============================================
 // 纯函数：串口命令解析
 // ============================================
@@ -128,6 +135,8 @@ inline SerialCommand parseSerialCommand(const char input) {
         case 'T': case 't':  // 行走模式切换（专属命令字节，与 MAC_CONFIG 的 'M' 不冲突）
             return SerialCommand(input, 0, true);
         case 'B': case 'b':  // BLE 扫描
+            return SerialCommand(input, 0, true);
+        case 'P': case 'p':  // 链路状态探测（本地处理，不转发到车载）
             return SerialCommand(input, 0, true);
         case '1': case '2': case '3':
         case '4': case '5': case '6':
@@ -403,6 +412,43 @@ void performBleScan() {
 }
 
 // ============================================
+// 链路状态上报
+// ============================================
+
+/**
+ * 输出链路状态 JSON
+ * 格式: {"t":"link","dongle":"ok","car_paired":true/false,"last_odom_ms":...}
+ *
+ * 字段说明：
+ * - t: 固定 "link"
+ * - dongle: 固定 "ok"（dongle 自身总是 ok，否则无法响应）
+ * - car_paired: 基于 esp_now_is_peer_exist(CAR_MAC) 返回值
+ * - last_odom_ms: 距离上次收到车载数据的毫秒数，从未收到则为 -1
+ *
+ * 触发时机：
+ * 1. 收到 'P' 探测命令时立即调用
+ * 2. loop() 中每 5 秒周期性调用
+ */
+inline void sendLinkStatus() {
+    // 检查车载端是否已配对（ESP-NOW peer 表中是否存在 CAR_MAC）
+    const bool carPaired = esp_now_is_peer_exist(WirelessConfig::CAR_MAC);
+
+    // 计算距离上次收到车载数据的毫秒数
+    // g_lastCarDataTime == 0 表示从未收到车载数据，输出 -1（对应 uint32_t 0xFFFFFFFF）
+    int32_t lastOdomMs;
+    if (g_lastCarDataTime == 0) {
+        lastOdomMs = -1;  // 从未收到车载数据
+    } else {
+        lastOdomMs = static_cast<int32_t>(millis() - g_lastCarDataTime);
+    }
+
+    // 输出 JSON 行（带换行符，便于后端按行解析）
+    Serial.printf("{\"t\":\"link\",\"dongle\":\"ok\",\"car_paired\":%s,\"last_odom_ms\":%d}\n",
+                  carPaired ? "true" : "false",
+                  lastOdomMs);
+}
+
+// ============================================
 // 视频处理
 // ============================================
 
@@ -500,6 +546,8 @@ void onReceiverDataRecv(const esp_now_recv_info* info, const uint8_t* data, int 
                 // 校验和不匹配，丢弃损坏的包
                 return;
             }
+            // 更新上次收到车载数据的时间戳（用于链路状态上报）
+            g_lastCarDataTime = millis();
             handleVideoPacket(data, len);
             return;
         }
@@ -512,6 +560,8 @@ void onReceiverDataRecv(const esp_now_recv_info* info, const uint8_t* data, int 
         if (odomPacket->magic == WirelessConfig::MAGIC_BYTE && 
             odomPacket->version == WirelessConfig::PROTOCOL_VERSION &&
             odomPacket->type == CommandType::ODOMETRY) {
+            // 更新上次收到车载数据的时间戳（用于链路状态上报）
+            g_lastCarDataTime = millis();
             // 转发测速数据到PC端，使用JSON格式便于后端解析
             // 格式: {"t":"odom","ls":左速度,"rs":右速度,"hd":航向,"dist":距离}\n
             Serial.printf("{\"t\":\"odom\",\"ls\":%d,\"rs\":%d,\"hd\":%d,\"dist\":%u}\n",
@@ -596,6 +646,12 @@ void loop() {
                 return;  // 不转发到车载端
             }
 
+            // 链路状态探测命令：立即输出链路状态，不转发到车载端
+            if (cmd.cmd == 'P' || cmd.cmd == 'p') {
+                sendLinkStatus();
+                return;  // 不转发到车载端
+            }
+
             // 转发到车载控制器
             forwardToCar(cmd);
         }
@@ -611,6 +667,13 @@ void loop() {
         sendToCar(heartbeat);
     }
     
-    // 3. 小延迟
+    // 3. 周期性上报链路状态（每 5 秒）
+    // 即使未收到 'P' 探测命令，也主动上报链路状态，便于后端感知车载在线状态
+    if (currentTime - g_lastLinkStatus > ReceiverConfig::LINK_STATUS_INTERVAL) {
+        g_lastLinkStatus = currentTime;
+        sendLinkStatus();
+    }
+    
+    // 4. 小延迟
     delay(1);
 }

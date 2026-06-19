@@ -1,6 +1,6 @@
 /**
  * 测速模块 - 函数式编程风格
- * 基于 ESP32-C6，使用霍尔编码器或红外编码器测量轮速
+ * 基于 ESP32-S3（Freenove FNK0085），使用霍尔编码器或红外编码器测量轮速
  * 
  * 功能：
  * 1. 中断方式读取编码器脉冲
@@ -9,12 +9,12 @@
  * 4. 提供测速数据供PID控制器使用
  * 
  * 硬件：
- * - 左轮编码器: GPIO 0 (中断引脚)
- * - 右轮编码器: GPIO 1 (中断引脚)
+ * - 左轮编码器: GPIO 1 (中断引脚，S3 安全 GPIO)
+ * - 右轮编码器: GPIO 2 (中断引脚，S3 安全 GPIO)
  * - 编码器: 霍尔传感器或红外对管，每圈N个脉冲
  * 
  * 作者：智能车项目团队
- * 版本：1.2.0
+ * 版本：1.3.0
  */
 
 #ifndef ODOMETER_H
@@ -94,9 +94,9 @@ struct SpeedCalibration {
 // 引脚和常量配置
 // ============================================
 namespace OdometerConfig {
-    // 编码器引脚（GPIO 0 和 GPIO 1 支持中断）
-    constexpr uint8_t LEFT_ENCODER_PIN = 0;
-    constexpr uint8_t RIGHT_ENCODER_PIN = 1;
+    // 编码器引脚（ESP32-S3 GPIO 1 和 GPIO 2 支持中断，避开摄像头占用的 GPIO 4-18）
+    constexpr uint8_t LEFT_ENCODER_PIN = 1;
+    constexpr uint8_t RIGHT_ENCODER_PIN = 2;
     
     // 编码器参数（根据实际硬件调整）
     constexpr uint8_t PULSES_PER_REV = 20;       // 每圈脉冲数

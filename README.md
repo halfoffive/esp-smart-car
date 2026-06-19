@@ -2,6 +2,8 @@
 
 基于 ESP32 的智能车控制系统，包含嵌入式固件、无线通信、视频传输和 Web 控制界面。
 
+**架构**：ESP32-S3 单芯片车载控制器（Freenove FNK0085）+ ESP32-C6 接收器 Dongle，S3 同时承担摄像头采集、电机控制、编码器测速、PID、ESP-NOW 收发、BLE 广播全部车载功能。
+
 ## 项目结构
 
 ```
@@ -11,24 +13,22 @@ esp-smart-car/
 │   │   └── wireless_protocol/   # 无线通信协议库（ESP-NOW + 视频分包）
 │   │       └── src/
 │   │           └── wireless.h   # 共享头文件
-│   ├── car_controller/          # 车载控制器（ESP32-C6）
+│   ├── car_controller/          # 车载控制器（ESP32-S3，Freenove FNK0085）
 │   │   ├── motor_control.h      # 电机控制（函数式编程，差速支持）
 │   │   ├── odometer.h           # 编码器测速模块
 │   │   ├── pid_control.h        # PID控制器（直线修正+航向锁定）
-│   │   └── car_controller.ino   # 主程序（含 HardwareSerial Serial1 视频帧接收）
-│   ├── camera_module/           # 摄像头模块（ESP32-S3 CAM）
-│   │   ├── camera_config.h      # 摄像头配置
-│   │   ├── video_stream.h       # 视频流传输（Serial1 发送）
-│   │   └── camera_module.ino    # 主程序
+│   │   ├── camera_config.h      # 摄像头配置（OV2640）
+│   │   ├── video_stream.h       # 视频流传输（ESP-NOW 直发）
+│   │   └── car_controller.ino   # 主程序
 │   └── receiver_dongle/         # 电脑端接收器（ESP32-C6）
-│       └── receiver_dongle.ino  # 主程序（含测速数据转发、BLE 扫描）
+│       └── receiver_dongle.ino  # 主程序（含测速数据转发、BLE 扫描、链路状态上报）
 ├── desktop/                     # 桌面端控制界面
 │   ├── backend/                 # Rust 后端
 │   │   ├── Cargo.toml
 │   │   └── src/
 │   │       ├── main.rs          # 主程序
-│   │       ├── serial.rs        # 串口通信（含测速数据解析）
-│   │       ├── websocket.rs     # WebSocket 处理（含测速广播）
+│   │       ├── serial.rs        # 串口通信（含测速/链路状态解析）
+│   │       ├── websocket.rs     # WebSocket 处理（含测速/链路状态广播）
 │   │       └── api.rs           # HTTP API
 │   └── frontend/                # Vue 前端
 │       ├── package.json
@@ -46,7 +46,8 @@ esp-smart-car/
 │               ├── useWebSocket.ts
 │               ├── useKeyboard.ts
 │               ├── useApi.ts
-│               └── useStatus.ts
+│               ├── useStatus.ts
+│               └── useBackendHealth.ts
 └── docs/                        # 文档
     └── hardware.md              # 硬件接线说明
 ```
@@ -54,12 +55,11 @@ esp-smart-car/
 ## 硬件需求
 
 ### 主控板
-- **ESP32-C6 开发板** x2
-  - 1个：车载控制器（连接电机、软串口摄像头）
-  - 1个：电脑端接收器（USB 连接电脑，支持 BLE 扫描）
+- **ESP32-S3 开发板**（Freenove FNK0085）x1
+  - 车载控制器：单芯片承担摄像头采集 + 电机控制 + 编码器测速 + PID + ESP-NOW 收发 + BLE 广播
 
-- **ESP32-S3 CAM** x1
-  - 摄像头模块（通过软串口连接车载控制器）
+- **ESP32-C6 开发板** x1
+  - 电脑端接收器（USB 连接电脑，支持 BLE 扫描 + 链路状态上报）
 
 ### 驱动模块
 - **L298N 电机驱动模块** x2
@@ -90,16 +90,19 @@ esp-smart-car/
 - 模式：无连接广播
 - 延迟：< 10ms
 - 距离：~100m
-
-#### 软串口（摄像头通信）
-- 引脚：GPIO 14 (RX) / GPIO 15 (TX)
-- 波特率：921600
-- 帧格式：[0xAA][0x55][帧大小4字节][帧数据]
+- 用途：车载 S3 ↔ 接收器 C6 双向通信（视频帧、命令、测速、状态）
 
 #### BLE 扫描
 - 接收器支持 BLE 设备扫描
 - 通过 'B' 命令触发扫描
+- 车载 S3 BLE 广播嵌入 WiFi MAC（Manufacturer Data）
 - 扫描结果通过 WebSocket 推送到前端
+
+#### 链路状态探测
+- 接收器收到 'P' 命令时立即上报 `{"t":"link",...}` JSON
+- 接收器每 5 秒主动上报一次链路状态（周期性心跳）
+- 后端 `connect_serial` 成功后发送 'P' 探测命令
+- 前端显示 4 级链路状态：探测中 → Dongle 已连接 → 车载已配对 → 车载在线
 
 #### 数据包格式
 ```
@@ -110,6 +113,8 @@ esp-smart-car/
 ```
 [帧头 0xAA 0x55] [帧大小 4字节] [帧数据 N字节]
 ```
+
+S3 单芯片直接 ESP-NOW 分包发送视频帧到接收器（每包 128 字节），不再经过 Serial1 桥接。
 
 ### 命令类型
 
@@ -125,6 +130,7 @@ esp-smart-car/
 | 1-9 | 速度设置 | 1-9 |
 | T | 行走模式切换 | 1字节模式值(0/1/2) |
 | B | BLE 扫描 | - |
+| P | 链路状态探测 | - |
 
 ## 安装说明
 
@@ -141,8 +147,8 @@ esp-smart-car/
    - ESP32Camera
    - ESP-NOW
 5. 选择开发板：
-   - ESP32-C6："ESP32C6 Dev Module"
-   - ESP32-S3："ESP32S3 Dev Module"
+   - 车载控制器（ESP32-S3，Freenove FNK0085）："ESP32S3 Dev Module"
+   - 接收器 Dongle（ESP32-C6）："ESP32C6 Dev Module"
 6. 上传固件
 
 ### 桌面端
@@ -176,12 +182,12 @@ bun run build
 
 ## 启动顺序
 
-1. 启动车载控制器（ESP32-C6）
-2. 启动摄像头模块（ESP32-S3 CAM）
-3. 连接电脑端接收器（ESP32-C6）到电脑 USB
-4. 启动 Rust 后端（自动提供前端页面）
-5. 在浏览器中打开 `http://localhost:8080`
-6. 在 Web UI 中连接串口（串口列表会自动通过 WebSocket 实时推送）
+1. 启动车载控制器（ESP32-S3，Freenove FNK0085）— 单芯片承担摄像头 + 电机 + 编码器 + ESP-NOW + BLE
+2. 连接电脑端接收器（ESP32-C6）到电脑 USB
+3. 启动 Rust 后端（自动提供前端页面）
+4. 在浏览器中打开 `http://localhost:8080`
+5. 前端自动探测后端可用性，不可用时显示红色横幅
+6. 在 Web UI 中连接串口（串口列表会自动通过 WebSocket 实时推送，连接后自动发送 'P' 探测链路状态）
 
 ## 开发说明
 
@@ -221,34 +227,51 @@ void applyVehicleMotion(const VehicleMotion& motion) {
 
 ```bash
 cd desktop/backend
-cargo test         # 运行所有 43 个 Rust 测试（无需硬件连接）
+cargo test         # 运行所有 58 个 Rust 测试（无需硬件连接）
 cargo clippy       # 静态分析检查
 ```
 
 ## 故障排除
 
 ### 无线通信失败
-- 检查 MAC 地址配置
-- 确认信道一致
+- 检查 MAC 地址配置（BLE 扫描复制 WiFi MAC，不是 BLE MAC）
+- 确认信道一致（固定信道 1）
 - 检查距离和干扰
 
-### 摄像头串口通信失败
-- 检查 GPIO 14/15 接线（RX/TX 交叉连接）
-- 确认波特率一致（921600）
-- 确保线长不超过 30cm
-- 检查共地连接
+### 链路状态异常
+- 串口连接后前端应显示 4 级链路状态：探测中 → Dongle 已连接 → 车载已配对 → 车载在线
+- 若停留在"探测中"：检查 Dongle 固件是否支持 'P' 命令
+- 若停留在"Dongle 已连接"：检查车载 S3 是否启动、ESP-NOW 配对是否成功
+- 若停留在"车载已配对"：检查车载 S3 是否在发送数据（测速/视频帧）
+
+### 后端不可用
+- 前端启动时自动探测 `/api/status`（1 秒超时）
+- 不可用时顶部显示红色横幅，所有控制 UI 禁用
+- 检查后端 exe 是否运行、端口 8080 是否占用
 
 ### 视频传输卡顿
 - 降低分辨率
 - 降低帧率
-- 检查软串口连接质量
+- 检查 ESP-NOW 信号质量（距离、干扰）
 
 ### 电机不转
 - 检查电源电压
-- 检查 L298N 接线
+- 检查 L298N 接线（GPIO 38/39/40 左侧，41/42/21 右侧）
 - 检查 PWM 信号
 
+### 紧急停止无响应
+- 紧急停止改为长按 500ms 触发（防误触），单击无效
+- 检查 WebSocket 连接是否正常
+
 ## 版本历史
+
+- v1.9.1 - 2026-06-18
+  - **S3 平台整合与可观测性增强**：砍掉车载 ESP32-C6，由 ESP32-S3（Freenove FNK0085）单芯片承担全部车载功能（摄像头 + 电机 + 编码器 + PID + ESP-NOW + BLE）
+  - 固件：car_controller 目标板 C6→S3，合并 camera_module 代码，删除 Serial1 桥接，启用 ESP-NOW 视频直发，删除 servo_control.h；motor_control 引脚改 GPIO 38/39/40/41/42/21；odometer 编码器引脚改 GPIO 1/2；receiver_dongle 新增 'P' 命令链路状态上报 + 5 秒周期心跳
+  - 后端：新增 LinkStatus 结构体、链路状态解析、首帧/周期摘要/命令转发/链路状态日志、read_next 返回 Vec、video_task 共享哈希、get_ble_devices 补 wifi_mac、status WS 推送
+  - 前端：新增 useBackendHealth 后端健康检测、4 级链路状态 UI、useStatus 移除轮询改 WS 推送、WS_URL 子路径支持、紧急停止长按 500ms、useKeyboard select 检查、版本 v1.3.0
+  - Breaking: 车载控制器目标板 C6→S3；firmware/camera_module/ 目录删除；前端 /api/status 轮询移除改 WS 推送；紧急停止改长按 500ms
+  - 验证: cargo clippy 0 warnings；cargo test 58 测试全过；bun run build 成功
 
 - v1.8.1 - 2026-06-13
   - 修复 camera_module.ino Serial1.begin 参数错误（`SERIAL_8N1` 被误作 `rxPin`）

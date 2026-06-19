@@ -1,156 +1,34 @@
 /**
- * 状态轮询组合式函数
- * 统一管理 /api/status 轮询，避免多组件重复请求同一端点
+ * 状态组合式函数
+ * 统一管理系统状态的消费，供多组件共享
+ *
+ * 历史设计：原本通过 setInterval 每 1 秒轮询 /api/status
+ * 当前设计：改为消费 useWebSocket().status（由后端 WS status 消息推送）
  *
  * 功能：
- * 1. 单一 1 秒轮询间隔，所有组件共享数据
- * 2. 引用计数自动启停轮询
- * 3. 提供响应式状态供组件消费
+ * 1. 提供 useWebSocket().status 的便捷访问入口
+ * 2. 保持向后兼容（组件无需修改 import 路径）
  *
- * 设计模式：闭包 + 单例 + 引用计数
- * - 首个组件挂载时启动轮询，最后一个组件卸载时停止
- * - 避免多个组件各自轮询造成请求浪费
+ * 设计说明：
+ * - 数据来自 WS 推送，无需引用计数启停轮询
+ * - 单例由 useWebSocket 管理，本 composable 仅做透传
  */
 
-import { ref, onMounted, onUnmounted } from 'vue'
-import type { Ref } from 'vue'
-import { useApi } from './useApi'
+import { useWebSocket } from './useWebSocket'
+import type { StatusData } from './useWebSocket'
 
-/** 状态数据接口（与后端 StatusResponse 对齐） */
-export interface StatusData {
-  serial_status: string
-  port_name: string | null
-  baud_rate: number | null
-  frame_count: number
-  bytes_sent: number
-  current_speed: number
-  ws_clients: number
-  uptime: number
-  version: string
-  left_speed: number
-  right_speed: number
-  heading: number
-  total_distance: number
-  command_count: number
-}
-
-const POLL_INTERVAL = 1000 // 1 秒轮询间隔
-
-/** 创建状态轮询实例（工厂函数） */
-function createStatusPoller() {
-  const { get } = useApi()
-
-  // 响应式状态（初始值将在首次 fetchStatus 时从后端覆盖）
-  const status: Ref<StatusData> = ref({
-    serial_status: '未连接',
-    port_name: null,
-    baud_rate: null,
-    frame_count: 0,
-    bytes_sent: 0,
-    current_speed: 0,
-    ws_clients: 0,
-    uptime: 0,
-    version: '',
-    left_speed: 0,
-    right_speed: 0,
-    heading: 0,
-    total_distance: 0,
-    command_count: 0,
-  })
-  const isPolling = ref(false)
-
-  // 内部可变状态
-  let interval: ReturnType<typeof setInterval> | null = null
-  let refCount = 0 // 引用计数
-
-  /** 拉取一次状态 */
-  const fetchStatus = async () => {
-    try {
-      const data = await get<StatusData>('/api/status')
-      status.value = data
-    } catch (error) {
-      // 仅在开发环境输出错误日志，避免生产环境控制台污染
-      if (import.meta.env.DEV) {
-        console.error('[useStatus] 状态查询失败:', error)
-      }
-    }
-  }
-
-  /** 启动轮询 */
-  const startPolling = async () => {
-    if (interval !== null) return
-    isPolling.value = true
-    // 先同步获取一次状态，确保首次渲染有真实数据而非硬编码零值
-    await fetchStatus()
-    // await 期间 refCount 可能已归零（组件已卸载），避免创建孤立轮询器
-    if (refCount === 0) {
-      isPolling.value = false
-      return
-    }
-    interval = setInterval(fetchStatus, POLL_INTERVAL)
-  }
-
-  /** 停止轮询 */
-  const stopPolling = () => {
-    if (interval !== null) {
-      clearInterval(interval)
-      interval = null
-    }
-    isPolling.value = false
-  }
-
-  /** 增加引用计数 */
-  const addRef = () => {
-    refCount++
-    if (refCount === 1) {
-      startPolling()
-    }
-  }
-
-  /** 减少引用计数 */
-  const releaseRef = () => {
-    refCount = Math.max(0, refCount - 1)
-    if (refCount === 0) {
-      stopPolling()
-    }
-  }
-
-  return { status, isPolling, addRef, releaseRef }
-}
-
-/** 单例实例 */
-let instance: ReturnType<typeof createStatusPoller> | null = null
-
-/** 获取或创建单例实例 */
-function getInstance(): ReturnType<typeof createStatusPoller> {
-  if (!instance) {
-    instance = createStatusPoller()
-  }
-  return instance
-}
+// 重新导出 StatusData 类型，保持向后兼容
+export type { StatusData }
 
 /**
- * 状态轮询组合式函数
+ * 状态组合式函数
  *
- * 自动管理轮询生命周期：组件挂载时增加引用计数并启动轮询，
- * 卸载时减少引用计数，最后一个组件卸载后停止轮询。
+ * 返回 useWebSocket 单例中的 status ref，供组件消费
+ * 多组件共享同一份状态（来自 WS 推送）
  *
- * @returns status - 响应式状态数据
- * @returns isPolling - 是否正在轮询
+ * @returns status - 响应式状态数据（来自 WS 推送）
  */
 export function useStatus() {
-  const poller = getInstance()
-
-  onMounted(() => {
-    poller.addRef()
-  })
-
-  onUnmounted(() => {
-    poller.releaseRef()
-  })
-
-  return {
-    status: poller.status,
-    isPolling: poller.isPolling,
-  }
+  const { status } = useWebSocket()
+  return { status }
 }

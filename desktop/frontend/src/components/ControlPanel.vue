@@ -4,8 +4,8 @@
       控制面板
     </div>
     
-    <!-- 连接设置 -->
-    <div class="flex flex-col gap-2">
+    <!-- 连接设置（后端不可用时隐藏） -->
+    <div v-if="backendAvailable" class="flex flex-col gap-2">
       <div class="flex gap-2 items-center">
         <select
           v-model="selectedPort"
@@ -50,7 +50,7 @@
         <h3 class="text-xs font-medium text-dark-300">速度控制</h3>
         <span class="text-sm text-primary-400 font-mono font-bold">{{ speedPercent }}%</span>
       </div>
-      
+
       <!-- 无极速度滑块 -->
       <div class="flex items-center gap-2">
         <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">1</span>
@@ -64,6 +64,7 @@
             class="speed-slider w-full"
             :style="{ background: sliderBackground }"
             @input="handleSpeedInput"
+            :disabled="!backendAvailable"
             aria-label="速度控制滑块"
           />
         </div>
@@ -80,6 +81,7 @@
           @mouseup="sendCommand(' ')"
           @mouseleave="sendCommand(' ')"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('Q') }]"
+          :disabled="!backendAvailable"
           title="原地左转"
           aria-label="原地左转"
         >
@@ -90,6 +92,7 @@
           @mouseup="sendCommand(' ')"
           @mouseleave="sendCommand(' ')"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('W') }]"
+          :disabled="!backendAvailable"
           title="前进"
           aria-label="前进"
         >
@@ -100,6 +103,7 @@
           @mouseup="sendCommand(' ')"
           @mouseleave="sendCommand(' ')"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('E') }]"
+          :disabled="!backendAvailable"
           title="原地右转"
           aria-label="原地右转"
         >
@@ -111,6 +115,7 @@
           @mouseup="sendCommand(' ')"
           @mouseleave="sendCommand(' ')"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('A') }]"
+          :disabled="!backendAvailable"
           title="左转"
           aria-label="左转"
         >
@@ -121,6 +126,7 @@
           @mouseup="sendCommand(' ')"
           @mouseleave="sendCommand(' ')"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('S') }]"
+          :disabled="!backendAvailable"
           title="后退"
           aria-label="后退"
         >
@@ -131,12 +137,13 @@
           @mouseup="sendCommand(' ')"
           @mouseleave="sendCommand(' ')"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('D') }]"
+          :disabled="!backendAvailable"
           title="右转"
           aria-label="右转"
         >
           D
         </button>
-        
+
       </div>
     </div>
     
@@ -151,6 +158,7 @@
               'px-2 py-0.5 text-[10px] rounded transition-colors',
               driveMode === 0 ? 'bg-primary-500 text-white' : 'bg-dark-700 text-dark-400 hover:bg-dark-600'
             ]"
+            :disabled="!backendAvailable"
             aria-label="普通模式"
           >普通</button>
           <button
@@ -159,6 +167,7 @@
               'px-2 py-0.5 text-[10px] rounded transition-colors',
               driveMode === 1 ? 'bg-green-500 text-white' : 'bg-dark-700 text-dark-400 hover:bg-dark-600'
             ]"
+            :disabled="!backendAvailable"
             aria-label="直线修正模式"
           >直线</button>
           <button
@@ -167,6 +176,7 @@
               'px-2 py-0.5 text-[10px] rounded transition-colors',
               driveMode === 2 ? 'bg-cyan-500 text-white' : 'bg-dark-700 text-dark-400 hover:bg-dark-600'
             ]"
+            :disabled="!backendAvailable"
             aria-label="航向锁定模式"
           >锁定</button>
         </div>
@@ -176,8 +186,8 @@
       </p>
     </div>
 
-    <!-- 设备链接（BLE 扫描 / MAC 手动输入） -->
-    <div>
+    <!-- 设备链接（BLE 扫描 / MAC 手动输入） — 后端不可用时隐藏 -->
+    <div v-if="backendAvailable">
       <div class="flex items-center justify-between mb-1.5">
         <h3 class="text-xs font-medium text-dark-300">设备链接</h3>
         <button
@@ -240,13 +250,19 @@
       <p v-else class="text-[9px] text-dark-600">点击扫描发现周围蓝牙设备</p>
     </div>
 
-    <!-- 紧急停止 -->
-    <button 
-      @click="emergencyStop"
-      class="btn-danger w-full py-2 text-sm font-bold"
-      aria-label="紧急停止所有运动"
+    <!-- 紧急停止（长按 500ms 触发，防误触） -->
+    <button
+      @mousedown="startEmergencyStop"
+      @mouseup="cancelEmergencyStop"
+      @mouseleave="cancelEmergencyStop"
+      :class="[
+        'btn-danger w-full py-2 text-sm font-bold select-none transition-all',
+        { 'opacity-70 scale-95': isEmergencyStopPressing }
+      ]"
+      :disabled="!backendAvailable"
+      aria-label="长按 500ms 紧急停止所有运动"
     >
-      ⚠ 紧急停止
+      ⚠ 长按紧急停止
     </button>
     
     <!-- 系统日志 -->
@@ -268,10 +284,12 @@ import { useWebSocket } from '../composables/useWebSocket'
 import { useKeyboard } from '../composables/useKeyboard'
 import { useApi } from '../composables/useApi'
 import { useStatus } from '../composables/useStatus'
+import { useBackendHealth } from '../composables/useBackendHealth'
 
 const { sendCommand: wsSendCommand, sendSpeed, isConnected, sendDriveMode, availablePorts: wsAvailablePorts, connect: wsConnect, disconnect: wsDisconnect, bleDevices, sendBleScan, sendMacConfig } = useWebSocket(true)
 const { post, get } = useApi()
 const { status } = useStatus()
+const { backendAvailable } = useBackendHealth()
 
 const selectedPort = ref('')
 /** 手动扫描获取的串口列表（兜底，WebSocket 未连接时也可用） */
@@ -284,10 +302,10 @@ const displayedPorts = computed(() => {
 const currentSpeed = ref(5)
 /** 连接进行中状态标志 */
 const isConnecting = ref(false)
-/** 串口是否已连接（基于后端 /api/status 轮询，解决 WebSocket 断开时按钮状态不一致） */
-const serialConnected = computed(() => status.value.serial_status === '已连接')
+/** 串口是否已连接（基于 WS status 推送，解决 WebSocket 断开时按钮状态不一致） */
+const serialConnected = computed(() => status.value.serialStatus === '已连接')
 /** 串口是否正在连接中 */
-const serialConnecting = computed(() => status.value.serial_status === '连接中')
+const serialConnecting = computed(() => status.value.serialStatus === '连接中')
 /** 串口扫描进行中状态标志 */
 const isScanning = ref(false)
 
@@ -315,6 +333,13 @@ const filteredBleDevices = computed(() => {
     (d.wifiMac && d.wifiMac.toLowerCase().includes(filter))
   )
 })
+
+/** 紧急停止长按定时器：500ms 后触发停止命令，防止误触 */
+let emergencyStopTimer: number | null = null
+/** 紧急停止是否正在长按中（用于 UI 反馈） */
+const isEmergencyStopPressing = ref(false)
+/** 紧急停止长按触发阈值（毫秒） */
+const EMERGENCY_STOP_DELAY = 500
 
 /** 点击 BLE 设备：选中并发送 MAC 配置到接收器，用于泵项目设备链接 */
 const selectBleDevice = (device: { name: string; mac: string; rssi: number; wifiMac?: string }) => {
@@ -396,14 +421,14 @@ const addLog = (message: string, type: 'info' | 'warning' | 'error' = 'info') =>
     warning: 'text-yellow-400',
     error: 'text-red-400'
   }
-  
+
   logs.value.unshift({
     id: Date.now(),
     time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
     message,
     color: colors[type]
   })
-  
+
   if (logs.value.length > 30) {
     logs.value.pop()
   }
@@ -414,7 +439,7 @@ const sendCommand = (cmd: string) => {
     addLog('未连接，无法发送命令', 'warning')
     return
   }
-  
+
   wsSendCommand(cmd)
   // 注：高频命令发送不记录日志，避免日志洪流
 }
@@ -447,15 +472,15 @@ const connect = async () => {
     addLog('请选择串口', 'warning')
     return
   }
-  
+
   isConnecting.value = true
-  
+
   try {
     const result = await post('/api/connect', {
       port_name: selectedPort.value,
       baud_rate: 921600
     })
-    
+
     if (result.success) {
       addLog('串口连接成功', 'info')
       // 串口连接成功后自动连接 WebSocket（await 确保异常可被 catch 捕获）
@@ -479,7 +504,7 @@ const connect = async () => {
 const disconnect = async () => {
   try {
     const result = await post('/api/disconnect')
-    
+
     if (result.success) {
       addLog('串口已断开')
     }
@@ -490,9 +515,28 @@ const disconnect = async () => {
   wsDisconnect()
 }
 
-const emergencyStop = () => {
-  sendCommand(' ')
-  addLog('紧急停止！', 'error')
+/**
+ * 紧急停止长按开始：启动 500ms 定时器
+ * 定时器触发时发送停止命令，防止误触
+ */
+const startEmergencyStop = () => {
+  if (emergencyStopTimer !== null) return
+  isEmergencyStopPressing.value = true
+  emergencyStopTimer = window.setTimeout(() => {
+    sendCommand(' ')
+    addLog('紧急停止！', 'error')
+    emergencyStopTimer = null
+    isEmergencyStopPressing.value = false
+  }, EMERGENCY_STOP_DELAY)
+}
+
+/** 紧急停止长按取消：清除定时器（未到 500ms 释放则不触发） */
+const cancelEmergencyStop = () => {
+  if (emergencyStopTimer !== null) {
+    clearTimeout(emergencyStopTimer)
+    emergencyStopTimer = null
+  }
+  isEmergencyStopPressing.value = false
 }
 
 /** 扫描可用串口：调用 /api/ports 获取列表并填充下拉框（兜底手动扫描） */
@@ -530,6 +574,11 @@ onUnmounted(() => {
   if (speedDebounceTimer !== null) {
     clearTimeout(speedDebounceTimer)
     speedDebounceTimer = null
+  }
+  // 清理紧急停止长按定时器
+  if (emergencyStopTimer !== null) {
+    clearTimeout(emergencyStopTimer)
+    emergencyStopTimer = null
   }
   // 断开连接
   if (serialConnected.value) {
