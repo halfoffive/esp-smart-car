@@ -1,6 +1,6 @@
 /**
  * 视频流传输系统 - 函数式编程风格
- * 基于 ESP32-S3 CAM（Freenove FNK0085），视频帧通过 ESP-NOW 分包直发到接收器
+ * 基于 ESP32-S3 CAM（Freenove FNK0085），视频帧通过 WiFi UDP 分包直发到接收器
  * 支持动态质量调整和帧率控制
  * 
  * 作者：智能车项目团队
@@ -11,6 +11,7 @@
 #define VIDEO_STREAM_H
 
 #include <Arduino.h>
+#include <WiFiUdp.h>
 #include "esp_camera.h"
 #include "../libraries/wireless_protocol/src/wireless.h"  // 复用无线通信协议（Arduino 库）
 
@@ -68,6 +69,8 @@ inline StreamState g_streamState(false, 0, 0, 0, 0, 0);
 inline uint16_t g_frameId = 0;
 /// 连续帧捕获失败计数（用于错误恢复）
 inline uint8_t g_consecutiveFailures = 0;
+/// 全局遥测 UDP 对象，由 car_controller.ino 定义
+extern WiFiUDP g_udpTelemetry;
 /// 连续失败超过此阈值时重启摄像头
 constexpr uint8_t CAMERA_RESTART_THRESHOLD = 10;
 
@@ -131,7 +134,7 @@ inline uint8_t adjustQuality(const uint32_t frameSize) {
 
 /**
  * 发送视频帧
- * 将大帧分割为多个小包通过 ESP-NOW 传输到接收器
+ * 将大帧分割为多个小包通过 WiFi UDP 传输到接收器
  * S3 单芯片架构下由 car_controller.ino 的 loop() 直接调用
  */
 inline void sendVideoFrame(const FrameState& frame) {
@@ -183,11 +186,15 @@ inline void sendVideoFrame(const FrameState& frame) {
             packet.data[packetLen] = sum;
         }
 
-        // 发送到接收器（指定 MAC 地址，避免广播给车载端造成误解析）
-        sendRawPacket(WirelessConfig::RECEIVER_MAC,
-                     reinterpret_cast<const uint8_t*>(&packet),
-                     sendSize);
-        
+        // 通过 WiFi UDP 发送到接收器（AP 的固定 IP）
+        IPAddress apIp(NetworkConfig::AP_IP[0], NetworkConfig::AP_IP[1],
+                       NetworkConfig::AP_IP[2], NetworkConfig::AP_IP[3]);
+        g_udpTelemetry.beginPacket(apIp, UdpConfig::TELEMETRY_PORT);
+        g_udpTelemetry.write(reinterpret_cast<const uint8_t*>(&packet), sendSize);
+        if (!g_udpTelemetry.endPacket()) {
+            Serial.println("[UDP] 视频分包发送失败");
+        }
+
         // 短暂延迟避免拥塞
         delayMicroseconds(50);
     }

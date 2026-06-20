@@ -3,13 +3,12 @@
  * 基于函数式编程思想，使用Arduino IDE开发
  * 
  * 功能：
- * 1. 接收ESP-NOW无线命令（来自接收器）
- * 2. 控制L298N驱动4个电机
+ * 1. 通过 WiFi STA + UDP 接收无线命令（来自接收器/AP）
+ * 2. 控制L298N驱动2个电机（左/右双电机）
  * 3. 测速模块：编码器读取+速度计算
  * 4. PID控制：直线修正+精确方向
  * 5. 发送状态反馈（含测速数据）
- * 6. 摄像头采集视频帧并通过 ESP-NOW 直发到接收器（S3 单芯片，无 Serial1 桥接）
- * 7. BLE 广播（让接收器可扫描到本机 MAC，Manufacturer Data 嵌入 WiFi MAC）
+ * 6. 摄像头采集视频帧并通过 WiFi/UDP 直发到接收器（S3 单芯片，无 Serial1 桥接）
  *
  * 硬件接线（ESP32-S3 WROOM CAM，Freenove FNK0085）：
  * - 摄像头（OV2640）: GPIO 4-18（除 GPIO 14 外，均为摄像头专用引脚）
@@ -19,7 +18,7 @@
  * - 右编码器: GPIO2（中断引脚）
  * 
  * 作者：智能车项目团队
- * 版本：1.5.0（S3 单芯片整合，砍除 C6 + Serial1 桥接）
+ * 版本：1.7.0（S3 单芯片：WiFi STA + UDP，速度统一为 0-255 PWM）
  */
 
 #include "motor_control.h"
@@ -27,10 +26,13 @@
 #include "odometer.h"
 #include "pid_control.h"
 #include "camera_config.h"
+#include <WiFi.h>
+#include <WiFiUdp.h>
 #include "video_stream.h"
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEAdvertising.h>
+
+// UDP 套接字（video_stream.h 中通过 extern 声明，在同一 sketch 中定义即可）
+WiFiUDP g_udpControl;
+WiFiUDP g_udpTelemetry;
 
 // ============================================
 // 调试配置（条件编译开关）
@@ -54,11 +56,10 @@
 VehicleMotion g_currentMotion = createStopState();
 
 /**
- * 当前速度值（0-255）
- * 初始值 141 对应前端默认速度等级 5（接收器 map(5, 1, 9, 28, 255) = 141）
- * 避免首次连接未发送速度命令前车速与前端显示不一致
+ * 当前速度值（PWM 0-255）
+ * 初始值 128 对应中速，避免首次连接未发送速度命令前车速与前端显示不一致
  */
-uint8_t g_currentSpeed = 141;
+uint8_t g_currentSpeed = 128;
 
 /**
  * 最后命令接收时间
@@ -91,6 +92,9 @@ bool g_smartDriveEnabled = false;
  * 摄像头配置（运行时复用，错误恢复时重新初始化）
  */
 CameraConfiguration g_cameraConfig = createDefaultConfig();
+
+uint32_t g_lastReconnectAttempt = 0;
+bool g_wifiWasConnected = false;
 
 // ============================================
 // 编码器中断服务函数（定义在此处而非 odometer.h，避免 inline + IRAM_ATTR 导致的 literal pool 重定位错误）
@@ -147,7 +151,7 @@ void handleMoveCommand(const char cmd) {
   g_lastCmdTime = millis();
 
 #if DEBUG_MOTOR
-  Serial.printf("[运动命令] 执行: %c, 速度: %d, 智能修正: %s\n",
+  Serial.printf("[运动命令] 执行: %c, 速度(PWM 0-255): %d, 智能修正: %s\n",
                 cmd, g_currentSpeed,
                 g_smartDriveEnabled ? "ON" : "OFF");
 #endif
@@ -155,13 +159,13 @@ void handleMoveCommand(const char cmd) {
 
 /**
  * 处理速度命令
- * 输入：速度值
+ * 输入：速度值（PWM 0-255）
  */
 void handleSpeedCommand(const uint8_t speed) {
   g_currentSpeed = speed;
   g_lastCmdTime = millis();  // 更新时间戳，防止超时自动停止
 #if DEBUG_MOTOR
-  Serial.printf("[速度设置] 新速度: %d\n", g_currentSpeed);
+  Serial.printf("[速度设置] 新速度(PWM 0-255): %d\n", g_currentSpeed);
 #endif
 }
 
@@ -220,7 +224,7 @@ void handleDriveModeCommand(const uint8_t mode) {
 
 /**
  * 发送测速数据到接收器
- * 通过ESP-NOW发送OdometryPacket
+ * 通过 WiFi UDP 发送 OdometryPacket
  */
 void sendOdometryData() {
   const OdometryData odom = getCurrentOdometry();
@@ -265,19 +269,21 @@ void sendOdometryData() {
     packet.leftSpeedMmps, packet.rightSpeedMmps,
     packet.headingX100, packet.totalDistMm, checksum);
 
-  // 发送到接收器
-  // 注意：直接发送 OdometryPacket（12字节），通过通用发送函数避免 reinterpret_cast UB
-  sendRawPacket(WirelessConfig::RECEIVER_MAC,
-                reinterpret_cast<const uint8_t*>(&finalPacket),
-                sizeof(finalPacket));
+  // 通过 UDP 发送测速数据到接收器（AP）
+  IPAddress apIp(NetworkConfig::AP_IP[0], NetworkConfig::AP_IP[1], NetworkConfig::AP_IP[2], NetworkConfig::AP_IP[3]);
+  g_udpTelemetry.beginPacket(apIp, UdpConfig::TELEMETRY_PORT);
+  g_udpTelemetry.write(reinterpret_cast<const uint8_t*>(&finalPacket), sizeof(finalPacket));
+  if (!g_udpTelemetry.endPacket()) {
+    Serial.println("[UDP] 测速包发送失败");
+  }
 }
 
 // ============================================
-// 摄像头视频帧采集与 ESP-NOW 直发
+// 摄像头视频帧采集与 WiFi UDP 直发
 // ============================================
 
 /**
- * 采集一帧视频并通过 ESP-NOW 分包发送到接收器
+ * 采集一帧视频并通过 WiFi UDP 分包发送到接收器
  * 包含帧率控制（30 FPS = 33ms 间隔）、错误恢复（连续 10 次失败重启摄像头）、
  * 动态质量调整（根据帧大小自适应 JPEG 压缩率）
  * 
@@ -319,7 +325,7 @@ bool captureAndSendVideoFrame() {
   // 帧捕获成功，重置连续失败计数
   g_consecutiveFailures = 0;
 
-  // 通过 ESP-NOW 分包发送到接收器（S3 单芯片直发，无 Serial1 桥接）
+  // 通过 WiFi UDP 分包发送到接收器（S3 单芯片直发，无 Serial1 桥接）
   sendVideoFrame(frame);
 
   // 动态调整质量（根据帧大小自适应压缩率）
@@ -355,54 +361,66 @@ bool captureAndSendVideoFrame() {
 }
 
 // ============================================
-// ESP-NOW 接收回调
+// UDP 控制命令接收处理
 // ============================================
 
-void onDataRecv(const esp_now_recv_info* info, const uint8_t* incomingData, int len) {
-  // 非标准长度包日志（调试用，生产环境通过 DEBUG_WIRELESS 开关控制）
-  if (len != sizeof(WirelessPacket)) {
-#if DEBUG_WIRELESS
-    Serial.printf("[无线通信] 收到非标准长度包: %d 字节（期望 %d）\n",
-                  len, static_cast<int>(sizeof(WirelessPacket)));
-#endif
+void handleUdpControlPacket() {
+  int len = g_udpControl.parsePacket();
+  if (len != sizeof(WirelessPacket) && len > 0) {
+    Serial.printf("[UDP] 收到非标准控制包: %d\n", len);
     return;
   }
+  if (len == sizeof(WirelessPacket)) {
+    WirelessPacket packet;
+    g_udpControl.read((uint8_t*)&packet, sizeof(packet));
 
-  const WirelessPacket* packet = reinterpret_cast<const WirelessPacket*>(incomingData);
+    if (!validatePacket(packet)) {
+      Serial.println("[UDP] 收到无效控制包");
+      return;
+    }
 
-  if (!validatePacket(*packet)) {
-#if DEBUG_WIRELESS
-    Serial.println("[无线通信] 收到无效数据包");
-#endif
-    return;
+    // 处理命令
+    switch (packet.type) {
+      case CommandType::MOVE:
+        g_emergencyStop = false;  // 运动命令显式解除紧急停止
+        handleMoveCommand(static_cast<char>(packet.data));
+        break;
+      case CommandType::SPEED:
+        handleSpeedCommand(packet.speed);
+        break;
+      case CommandType::STOP:
+        handleStopCommand();
+        break;
+      case CommandType::STATUS:
+        // 心跳命令只更新时间戳，防止超时自动停止
+        // 测速数据已由 loop() 中的 200ms 定时器独立发送，无需重复发送
+        g_lastCmdTime = millis();
+        break;
+      case CommandType::CALIBRATE:
+        handleCalibrateCommand();
+        break;
+      case CommandType::DRIVE_MODE:
+        handleDriveModeCommand(packet.data);
+        g_lastCmdTime = millis();
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+void checkWiFiConnection() {
+  if (WiFi.status() == WL_CONNECTED && !g_wifiWasConnected) {
+    g_wifiWasConnected = true;
+    Serial.printf("[WiFi_STA] 已连接，IP: %s\n", WiFi.localIP().toString().c_str());
   }
 
-  // 处理命令
-  switch (packet->type) {
-    case CommandType::MOVE:
-      g_emergencyStop = false;  // 运动命令显式解除紧急停止
-      handleMoveCommand(static_cast<char>(packet->data));
-      break;
-    case CommandType::SPEED:
-      handleSpeedCommand(packet->speed);
-      break;
-    case CommandType::STOP:
-      handleStopCommand();
-      break;
-    case CommandType::STATUS:
-      // 心跳命令只更新时间戳，防止超时自动停止
-      // 测速数据已由 loop() 中的 200ms 定时器独立发送，无需重复发送
-      g_lastCmdTime = millis();
-      break;
-    case CommandType::CALIBRATE:
-      handleCalibrateCommand();
-      break;
-    case CommandType::DRIVE_MODE:
-      handleDriveModeCommand(packet->data);
-      g_lastCmdTime = millis();
-      break;
-    default:
-      break;
+  if (WiFi.status() != WL_CONNECTED && millis() - g_lastReconnectAttempt > 5000) {
+    Serial.println("[WiFi_STA] 检测到断线，尝试重连...");
+    g_wifiWasConnected = false;
+    WiFi.disconnect();
+    WiFi.begin(NetworkConfig::AP_SSID, NetworkConfig::AP_PASSWORD);
+    g_lastReconnectAttempt = millis();
   }
 }
 
@@ -417,7 +435,7 @@ void setup() {
 
   Serial.println("\n================================");
   Serial.println("智能车控制系统 - ESP32-S3（Freenove FNK0085）");
-  Serial.println("版本: 1.5.0 (S3 单芯片：摄像头+电机+编码器+PID+ESP-NOW+BLE)");
+  Serial.println("版本: 1.7.0 (S3 单芯片：摄像头+电机+编码器+PID+WiFi STA+UDP，速度 0-255 PWM)");
   Serial.println("================================\n");
 
   // PSRAM 诊断（摄像头 DMA 缓冲依赖 PSRAM）
@@ -441,43 +459,28 @@ void setup() {
   initializePIDController();
   delay(100);
 
-  // 初始化无线通信（ESP-NOW）
-  if (!initializeWireless(DeviceRole::CAR)) {
-    Serial.println("[初始化] 无线通信初始化失败，重启中...");
-    delay(1000);
-    ESP.restart();
+  // 初始化 WiFi STA（连接 AP 热点）
+  WiFi.mode(WIFI_STA);
+  IPAddress carIp(NetworkConfig::CAR_IP[0], NetworkConfig::CAR_IP[1], NetworkConfig::CAR_IP[2], NetworkConfig::CAR_IP[3]);
+  IPAddress gateway(NetworkConfig::GATEWAY[0], NetworkConfig::GATEWAY[1], NetworkConfig::GATEWAY[2], NetworkConfig::GATEWAY[3]);
+  IPAddress subnet(NetworkConfig::SUBNET[0], NetworkConfig::SUBNET[1], NetworkConfig::SUBNET[2], NetworkConfig::SUBNET[3]);
+  WiFi.config(carIp, gateway, subnet);
+  WiFi.begin(NetworkConfig::AP_SSID, NetworkConfig::AP_PASSWORD);
+  Serial.println("[WiFi_STA] 正在连接热点...");
+  uint32_t wifiStart = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 10000) {
+    delay(100);
+    Serial.print(".");
   }
-
-  // 注册接收回调
-  if (esp_now_register_recv_cb(onDataRecv) != ESP_OK) {
-    Serial.println("[无线通信] 注册接收回调失败");
+  Serial.println();
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("[WiFi_STA] 已连接，IP: %s\n", WiFi.localIP().toString().c_str());
+    g_wifiWasConnected = true;
+  } else {
+    Serial.println("[WiFi_STA] 初始连接失败，将在 loop 中重连");
   }
-
-  // 打印 ESP-NOW 通信用的 WiFi MAC（与 BLE MAC 不同，必须区分）
-  uint8_t wifiMacBytes[6];
-  WiFi.macAddress(wifiMacBytes);  // 获取原始 6 字节 WiFi MAC
-  Serial.print("[初始化] ESP-NOW MAC: ");
-  Serial.println(WiFi.macAddress());
-  Serial.println("[初始化] ⚠ 此 MAC 用于 ESP-NOW 连接，与 BLE 扫描显示的 MAC 不同");
-
-  // 初始化 BLE 设备并启动广播（让接收器可扫描到本机）
-  BLEDevice::init("智能车");
-  BLEServer* pServer = BLEDevice::createServer();  // 创建 BLE 服务器
-  (void)pServer;                                   // 仅需存在即可，后续不需要引用
-  BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
-  // 将 WiFi MAC 嵌入 BLE 广播的 Manufacturer Data 中
-  // 格式: [Company ID 2字节=0xFFFF] + [WiFi MAC 6字节] = 共 8 字节
-  // 接收器扫描时可提取 WiFi MAC，用于 ESP-NOW 连接配置
-  // NimBLE API: 通过 BLEAdvertisementData 设置 manufacturer data（Arduino String）
-  BLEAdvertisementData oAdvertisementData;
-  String mfgStr;
-  mfgStr += char(0xFF);  // Company ID 低字节（0xFFFF = 测试用）
-  mfgStr += char(0xFF);  // Company ID 高字节
-  for (int i = 0; i < 6; i++) mfgStr += char(wifiMacBytes[i]);
-  oAdvertisementData.setManufacturerData(mfgStr);
-  pAdvertising->setAdvertisementData(oAdvertisementData);
-  pAdvertising->start();  // 开始广播
-  Serial.println("[初始化] BLE 广播已启动 (设备名: 智能车, 含 WiFi MAC)");
+  g_udpControl.begin(UdpConfig::CONTROL_PORT);
+  g_udpTelemetry.begin(UdpConfig::TELEMETRY_PORT);
 
   // 初始化摄像头（S3 单芯片架构：摄像头与电机/编码器/PID 共用同一 MCU）
   if (!initializeCamera(g_cameraConfig)) {
@@ -488,12 +491,12 @@ void setup() {
 
   // 启动视频流（标记流状态为活跃，loop() 中按 30 FPS 采集发送）
   startStreaming();
-  Serial.println("[初始化] 摄像头视频流已启动（ESP-NOW 直发接收器）");
+  Serial.println("[初始化] 摄像头视频流已启动（WiFi UDP 直发接收器）");
 
   // 初始化状态
   g_currentMotion = createStopState();
-  // 与前端默认速度等级 5 对应（接收器 map(5, 1, 9, 28, 255) = 141）
-  g_currentSpeed = 141;
+  // 默认中速（PWM 128），与前端默认值一致
+  g_currentSpeed = 128;
   g_emergencyStop = false;
   // g_smartDriveEnabled 保持全局声明时的初始值 false，匹配前端默认 OFF
 
@@ -502,7 +505,7 @@ void setup() {
   Serial.println("  WASD: 移动控制");
   Serial.println("  Q/E: 原地旋转");
   Serial.println("  空格: 停止");
-  Serial.println("  1-9: 速度设置");
+  Serial.println("  速度: 0-255 PWM");
   Serial.println("  智能修正: 默认关闭");
 }
 
@@ -513,7 +516,11 @@ void setup() {
 void loop() {
   const uint32_t currentTime = millis();
 
-  // 1. 采集摄像头视频帧并通过 ESP-NOW 直发到接收器（30 FPS = 33ms 间隔）
+  // 0. 检查 WiFi 连接并处理 UDP 控制命令
+  checkWiFiConnection();
+  handleUdpControlPacket();
+
+  // 1. 采集摄像头视频帧并发送到接收器（30 FPS = 33ms 间隔）
   //    包含错误恢复（连续 10 次失败重启摄像头）和动态质量调整
   (void)captureAndSendVideoFrame();
 

@@ -77,8 +77,8 @@ desktop/frontend/
 ### ControlPanel
 - **Props**: 无
 - **Emits**: `command`, `speed`
-- **State**: `activeKeys`, `currentSpeed`, `logs`, `driveMode`
-- **Features**: WASD 控制、速度调节、三态行走模式（普通/直线/锁定）、BLE 扫描、系统日志
+- **State**: `activeKeys`, `currentSpeed` (0-255 PWM), `logs`, `driveMode`
+- **Features**: WASD 控制、速度调节（0-255 PWM）、三态行走模式（普通/直线/锁定）、BLE 扫描、系统日志
 
 ### SpeedDashboard
 - **Props**: 无（从 useWebSocket 获取测速数据）
@@ -87,8 +87,8 @@ desktop/frontend/
 
 ### StatusBar
 - **Props**: 无
-- **State**: `isConnected`, `serialConnected`, `fps`, `currentSpeed`, `frameCount`
-- **Features**: 连接状态、帧率、速度显示
+- **State**: `isConnected`, `serialConnected`, `fps`, `currentSpeed` (0-255 PWM), `frameCount`
+- **Features**: 连接状态、帧率、速度显示（0-255 PWM）
 
 ## Anti-Patterns
 
@@ -119,7 +119,8 @@ bun run preview      # 预览生产构建
 - **代理**：Vite 配置代理 `/api` 和 `/ws` 到后端（端口 8080）
 - **视频帧**：WebSocket 接收 Base64 JPEG，显示为 `data:image/jpeg;base64,...`
 - **测速数据**：WebSocket 接收 `odometry` 类型消息，包含左右轮速度、航向、距离
-- **键盘**：支持 WASD + 空格 + Q/E + 1-9
+- **键盘**：支持 WASD + 空格 + Q/E；数字键 1-9 作为 0-255 PWM 快捷档位
+- **速度语义**：WebSocket `speed` 消息与 `StatusData.currentSpeed` 均为 0-255 PWM
 - **智能修正**：通过 WebSocket 发送 `drive_mode` 命令切换
 - **响应式**：全屏100vh布局，右侧面板含控制+测速模块
 - **主题**：深色模式，使用 `dark-` 颜色系列

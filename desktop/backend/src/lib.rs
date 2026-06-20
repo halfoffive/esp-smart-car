@@ -22,7 +22,7 @@ pub struct BleDevice {
 }
 
 use std::collections::HashMap;
-use std::sync::atomic::AtomicU8;
+use std::sync::atomic::{AtomicU16, AtomicU8};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tracing::{info, warn};
 
@@ -62,8 +62,10 @@ pub struct AppState {
     /// 视频帧哈希值（共享，避免每客户端重复计算）
     pub video_frame_hash: Arc<std::sync::Mutex<Option<u64>>>,
 
-    /// 当前速度（使用 AtomicU8，单字节无锁原子操作）
+    /// 当前速度 PWM 值（0-255，使用 AtomicU8 无锁原子操作）
     pub current_speed: AtomicU8,
+    /// 二进制数据包序列号（用于 WirelessPacket 的 seq 字段）
+    pub packet_seq: AtomicU16,
     /// 测速数据（使用 std::sync::Mutex，不跨 .await 持锁）
     pub odometry: Arc<std::sync::Mutex<OdometryData>>,
     /// 链路状态（Dongle ↔ 车载 ESP-NOW 配对状态、车载在线状态）
@@ -100,7 +102,8 @@ impl AppState {
             video_frame_b64: Arc::new(std::sync::Mutex::new(None)),
             video_frame_hash: Arc::new(std::sync::Mutex::new(None)),
 
-            current_speed: AtomicU8::new(5),
+            current_speed: AtomicU8::new(128),
+            packet_seq: AtomicU16::new(0),
             odometry: Arc::new(std::sync::Mutex::new(OdometryData::default())),
             link_status: Arc::new(std::sync::Mutex::new(LinkStatus::default())),
             last_heartbeat: Arc::new(std::sync::Mutex::new(std::time::Instant::now())),

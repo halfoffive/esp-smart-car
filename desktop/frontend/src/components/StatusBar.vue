@@ -55,7 +55,7 @@
       <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
       </svg>
-      <span class="font-mono">{{ currentSpeed }}/9</span>
+      <span class="font-mono">{{ currentSpeedPercent }}%</span>
     </div>
 
     <!-- 帧数 -->
@@ -78,11 +78,8 @@ const { status } = useStatus()
 
 const serialConnected = computed(() => status.value.serialStatus === '已连接')
 const fps = computed(() => videoFps.value || 0)
-const currentSpeed = computed(() => {
-  const speed = status.value.currentSpeed
-  // currentSpeed 可能为 0（未初始化），使用显式 null/undefined 检查避免 0 被错误替换为 5
-  return Math.min(9, Math.max(1, speed !== null && speed !== undefined ? speed : 5))
-})
+const currentSpeed = computed(() => status.value.currentSpeed || 0)
+const currentSpeedPercent = computed(() => Math.round((currentSpeed.value / 255) * 100))
 const frameCount = computed(() => status.value.frameCount || 0)
 
 /** 链路状态等级样式（4 级 + 串口未连接） */

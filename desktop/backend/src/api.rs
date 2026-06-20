@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::serial::{SerialConnectionState, DEFAULT_BAUD_RATE};
+use crate::websocket::build_wireless_packet;
 use crate::{AppState, MutexExt};
 
 /// 命令请求
@@ -40,7 +41,7 @@ pub struct StatusResponse {
     pub frame_count: u32,
     /// 已发送字节数
     pub bytes_sent: u64,
-    /// 当前速度
+    /// 当前速度 PWM 值（0-255）
     pub current_speed: u8,
     /// WebSocket连接数
     pub ws_clients: usize,
@@ -99,6 +100,55 @@ pub async fn handle_command(
     State(state): State<Arc<AppState>>,
     Json(request): Json<CommandRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
+    // 处理 S:<pwm> 速度设置命令
+    if let Some(pwm_str) = request.command.strip_prefix("S:") {
+        match pwm_str.trim().parse::<u8>() {
+            Ok(speed) => {
+                let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
+                let packet = build_wireless_packet(2, 0, speed, seq);
+                let send_result = {
+                    let mut manager = state.serial_manager.lock_or_recover("serial_manager");
+                    manager.send_packet(&packet)
+                };
+
+                return match send_result {
+                    Ok(()) => {
+                        state.current_speed.store(speed, Ordering::Relaxed);
+                        info!("设置速度 PWM: {}", speed);
+                        (
+                            StatusCode::OK,
+                            Json(ApiResponse {
+                                success: true,
+                                message: format!("速度已设置为 {}", speed),
+                            }),
+                        )
+                    }
+                    Err(e) => {
+                        warn!("发送速度命令失败: {}", e);
+                        (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(ApiResponse {
+                                success: false,
+                                message: format!("发送失败: {}", e),
+                            }),
+                        )
+                    }
+                };
+            }
+            Err(_) => {
+                warn!("S: 命令中的 PWM 值无效: {}", pwm_str);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse {
+                        success: false,
+                        message: format!("PWM 值无效: {}", pwm_str),
+                    }),
+                );
+            }
+        }
+    }
+
+    // 单字符命令
     let cmd = match request.command.as_bytes().first().copied() {
         Some(c) => c,
         None => {
@@ -113,19 +163,37 @@ pub async fn handle_command(
         }
     };
 
+    let (type_value, data, speed) = match cmd {
+        b'W' | b'A' | b'S' | b'D' | b'Q' | b'E' | b' ' => {
+            let speed = state.current_speed.load(Ordering::Relaxed);
+            (1, cmd, speed)
+        }
+        b'B' => (10, 0, 0),
+        b'P' => (11, 0, 0),
+        _ => {
+            warn!("未知命令: {}", request.command);
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ApiResponse {
+                    success: false,
+                    message: format!("未知命令: {}", request.command),
+                }),
+            );
+        }
+    };
+
+    let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
+    let packet = build_wireless_packet(type_value, data, speed, seq);
+
     // 在独立作用域中发送命令，确保 std::sync::MutexGuard 在 .await 前释放
     let send_result = {
         let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-        manager.send_command(cmd)
+        manager.send_packet(&packet)
     }; // manager 锁在此处释放
 
     match send_result {
         Ok(()) => {
             info!("发送命令: {}", request.command);
-            // 如果是速度等级命令(1-9)，同步更新 current_speed
-            if (b'1'..=b'9').contains(&cmd) {
-                state.current_speed.store(cmd - b'0', Ordering::Relaxed);
-            }
             (
                 StatusCode::OK,
                 Json(ApiResponse {
@@ -241,11 +309,13 @@ pub async fn connect_serial(
     match connect_result {
         Ok(Ok(())) => {
             info!("串口连接成功: {} @ {}", port_name, baud_rate);
-            // 连接成功后立即发送 'P' 探测命令，触发 Dongle 上报链路状态 JSON
+            // 连接成功后立即发送 LINK_STATUS 探测包，触发 Dongle 上报链路状态 JSON
             // 用户可感知"连接 = 链路打通"，避免连接后无反馈
             {
+                let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
+                let packet = build_wireless_packet(11, 0, 0, seq);
                 let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                if let Err(e) = manager.send_command(b'P') {
+                if let Err(e) = manager.send_packet(&packet) {
                     warn!("发送探测命令 'P' 失败: {}", e);
                 }
             }
@@ -381,7 +451,7 @@ mod tests {
             baud_rate: None,
             frame_count: 0,
             bytes_sent: 0,
-            current_speed: 5,
+            current_speed: 128,
             ws_clients: 0,
             uptime: 42,
             version: "1.2.0".to_string(),
@@ -393,7 +463,7 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).expect("StatusResponse 序列化失败");
         assert!(json.contains("\"serial_status\":\"未连接\""));
-        assert!(json.contains("\"current_speed\":5"));
+        assert!(json.contains("\"current_speed\":128"));
         assert!(json.contains("\"version\":\"1.2.0\""));
     }
 
@@ -436,26 +506,26 @@ mod tests {
             "空格命令无串口时应返回 503"
         );
 
-        // 测试换行符命令
+        // 测试换行符命令（不在合法单字符命令集中，应返回 400）
         let request = CommandRequest {
             command: "\n".to_string(),
         };
         let (status, _) = handle_command(State(state.clone()), Json(request)).await;
         assert_eq!(
             status,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "换行符命令无串口时应返回 503"
+            StatusCode::BAD_REQUEST,
+            "换行符命令应返回 400"
         );
 
-        // 测试 Unicode 字符命令
+        // 测试 Unicode 字符命令（不在合法单字符命令集中，应返回 400）
         let request = CommandRequest {
             command: "你".to_string(),
         };
         let (status, _) = handle_command(State(state.clone()), Json(request)).await;
         assert_eq!(
             status,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Unicode 命令无串口时应返回 503"
+            StatusCode::BAD_REQUEST,
+            "Unicode 命令应返回 400"
         );
 
         // 测试空命令（应返回 400 Bad Request）

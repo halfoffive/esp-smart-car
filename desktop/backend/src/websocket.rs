@@ -498,6 +498,37 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     }
 }
 
+/// 构建 8 字节 WirelessPacket 二进制数据包
+///
+/// 布局（与 firmware/libraries/wireless_protocol/src/wireless.h 中的
+/// `struct __attribute__((packed)) WirelessPacket` 完全一致）：
+/// - bytes[0] = 0xA5 (magic)
+/// - bytes[1] = 1 (version)
+/// - bytes[2] = type_value (CommandType discriminant)
+/// - bytes[3] = data
+/// - bytes[4] = speed
+/// - bytes[5..7] = seq (little-endian u16)
+/// - bytes[7] = checksum（bytes[0..7] 累加和的低 8 位）
+pub(crate) fn build_wireless_packet(
+    type_value: u8,
+    data: u8,
+    speed: u8,
+    seq: u16,
+) -> [u8; 8] {
+    let mut packet = [0u8; 8];
+    packet[0] = 0xA5;
+    packet[1] = 1;
+    packet[2] = type_value;
+    packet[3] = data;
+    packet[4] = speed;
+    let seq_bytes = seq.to_le_bytes();
+    packet[5] = seq_bytes[0];
+    packet[6] = seq_bytes[1];
+    let checksum = packet[0..7].iter().fold(0u8, |acc, &b| acc.wrapping_add(b));
+    packet[7] = checksum;
+    packet
+}
+
 /// 处理消息
 async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()> {
     let message: serde_json::Value = serde_json::from_str(text)?;
@@ -507,40 +538,43 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
 
     match msg_type {
         "command" => {
-            // 转发命令到串口
+            // 根据首字符生成对应 WirelessPacket
             if let Some(cmd_byte) = data.bytes().next() {
-                // 先获取 serial_manager 锁（与 get_status 锁顺序一致：serial_manager → current_speed）
+                let (type_value, packet_data, packet_speed) = match cmd_byte {
+                    b'W' | b'A' | b'S' | b'D' | b'Q' | b'E' | b' ' => {
+                        let speed = state.current_speed.load(Ordering::Relaxed);
+                        (1, cmd_byte, speed)
+                    }
+                    b'B' => (10, 0, 0),
+                    b'P' => (11, 0, 0),
+                    _ => {
+                        warn!("未知命令字符: {}", cmd_byte as char);
+                        return Ok(());
+                    }
+                };
+
+                let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
+                let packet = build_wireless_packet(type_value, packet_data, packet_speed, seq);
+
                 {
                     let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                    if let Err(e) = manager.send_command(cmd_byte) {
+                    if let Err(e) = manager.send_packet(&packet) {
                         warn!("命令发送失败: {}", e);
                         return Err(anyhow::anyhow!("命令发送失败: {}", e));
                     }
                     // 节流式命令转发日志：相同命令 1 秒内只记一次
                     state.log_command_forward(cmd_byte);
-                } // 显式释放 serial_manager 锁
-
-                // 如果是速度等级命令(1-9)，同步更新 current_speed
-                if (b'1'..=b'9').contains(&cmd_byte) {
-                    state
-                        .current_speed
-                        .store(cmd_byte - b'0', Ordering::Relaxed);
                 }
             }
         }
         "speed" => {
-            // 速度等级命令（1-9）：同步更新内存状态并通过串口发送
-            // 与 command 消息中的 '1'-'9' 行为一致，确保 sendSpeed() API 可用
+            // 速度设置（0-255 PWM）：生成 SPEED 数据包并通过串口发送
             if let Ok(speed) = data.parse::<u8>() {
-                if !(1..=9).contains(&speed) {
-                    warn!("速度值无效: {} (有效范围 1-9)", speed);
-                    return Ok(());
-                }
-                // 向串口发送速度等级字符
+                let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
+                let packet = build_wireless_packet(2, 0, speed, seq);
                 {
                     let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                    // 速度等级字符：1-9 映射为 '1'-'9'
-                    if let Err(e) = manager.send_command(b'0' + speed) {
+                    if let Err(e) = manager.send_packet(&packet) {
                         warn!("速度命令发送失败: {}", e);
                         return Err(anyhow::anyhow!("速度命令发送失败: {}", e));
                     }
@@ -555,15 +589,15 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             *last = std::time::Instant::now();
         }
         "drive_mode" => {
-            // 行走模式切换：原子发送 [T, mode] 双字节，防止中间插入其他命令导致DRIVE_MODE失效
-            // 'T' 是 DRIVE_MODE 专属命令字节，与 MAC_CONFIG 的 'M' 不冲突
+            // 行走模式切换：生成 DRIVE_MODE 数据包并通过串口发送
             if let Some(mode) = message["mode"].as_u64() {
                 // 未知模式回退到普通模式（0），防止固件收到无法识别的模式值
                 let mode_value = if mode <= 2 { mode as u8 } else { 0u8 };
+                let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
+                let packet = build_wireless_packet(9, mode_value, 0, seq);
                 {
                     let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                    // 使用 send_bytes 确保 [T, mode] 双字节原子发送
-                    if let Err(e) = manager.send_bytes(&[b'T', mode_value]) {
+                    if let Err(e) = manager.send_packet(&packet) {
                         warn!("行走模式命令发送失败: {}", e);
                         return Err(anyhow::anyhow!("行走模式命令发送失败: {}", e));
                     }
@@ -603,10 +637,12 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             }
         }
         "ble_scan" => {
-            // 触发接收器 BLE 扫描：通过串口发送 'B' 命令
+            // 触发接收器 BLE 扫描：通过串口发送 BLE_SCAN 数据包
+            let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
+            let packet = build_wireless_packet(10, 0, 0, seq);
             {
                 let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                if let Err(e) = manager.send_command(b'B') {
+                if let Err(e) = manager.send_packet(&packet) {
                     warn!("BLE 扫描命令发送失败: {}", e);
                     return Err(anyhow::anyhow!("BLE 扫描命令发送失败: {}", e));
                 }
@@ -705,14 +741,14 @@ mod tests {
         );
     }
 
-    /// 测试 handle_message 处理速度等级命令（'1'-'9'），无串口时返回错误
+    /// 测试 handle_message 处理速度设置命令（0-255 PWM），无串口时返回错误
     #[tokio::test]
     async fn test_handle_message_speed_command_updates_state() {
         let state = create_test_state();
-        let msg = r#"{"type":"command","data":"7"}"#;
+        let msg = r#"{"type":"speed","data":"200"}"#;
 
         let result = handle_message(msg, &state).await;
-        // 无串口连接时，send_command 失败，handle_message 返回错误
+        // 无串口连接时，send_packet 失败，handle_message 返回错误
         assert!(
             result.is_err(),
             "无串口连接时处理速度命令应返回错误: {:?}",

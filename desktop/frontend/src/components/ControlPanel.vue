@@ -56,14 +56,14 @@
 
       <!-- 无极速度滑块 -->
       <div class="flex items-center gap-2">
-        <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">1</span>
+        <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">0</span>
         <div class="flex-1 relative">
           <input
             v-model.number="currentSpeed"
             type="range"
-            min="1"
-            max="9"
-            step="0.1"
+            min="0"
+            max="255"
+            step="1"
             class="speed-slider w-full"
             :style="{ background: sliderBackground }"
             @input="handleSpeedInput"
@@ -71,7 +71,7 @@
             aria-label="速度控制滑块"
           />
         </div>
-        <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">9</span>
+        <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">255</span>
       </div>
     </div>
     
@@ -302,7 +302,7 @@ const displayedPorts = computed(() => {
   const merged = new Set([...scannedPorts.value, ...wsAvailablePorts.value])
   return [...merged].sort()
 })
-const currentSpeed = ref(5)
+const currentSpeed = ref(128)
 /** 连接进行中状态标志 */
 const isConnecting = ref(false)
 /** 串口是否已连接（基于 WS status 推送，解决 WebSocket 断开时按钮状态不一致） */
@@ -400,10 +400,10 @@ const scanBleDevices = async () => {
     addLog('蓝牙扫描结束', 'info')
   }, 12000)
 }
-const speedPercent = computed(() => Math.round((currentSpeed.value / 9) * 100))
+const speedPercent = computed(() => Math.round((currentSpeed.value / 255) * 100))
 
 const sliderBackground = computed(() => {
-  const percent = ((currentSpeed.value - 1) / 8) * 100
+  const percent = (currentSpeed.value / 255) * 100
   return `linear-gradient(to right, #0ea5e9 0%, #0ea5e9 ${percent}%, #374151 ${percent}%, #374151 100%)`
 })
 
@@ -460,9 +460,6 @@ const sendCommand = (cmd: string) => {
   // 注：高频命令发送不记录日志，避免日志洪流
 }
 
-// 使用重构后的 useKeyboard：自动管理生命周期，无需手动清理
-const { activeKeys } = useKeyboard(sendCommand)
-
 /** 速度滑块输入处理（带 200ms 防抖）：只发送最终值，不发送中间值 */
 const handleSpeedInput = () => {
   if (speedDebounceTimer !== null) {
@@ -474,14 +471,17 @@ const handleSpeedInput = () => {
   }, 200)
 }
 
-const setSpeed = () => {
+const setSpeed = (pwm?: number) => {
   if (!isConnected.value) {
     addLog('WebSocket 未连接，无法设置速度', 'warning')
     return
   }
-  const speed = Math.round(currentSpeed.value)
+  const speed = pwm !== undefined ? Math.round(pwm) : Math.round(currentSpeed.value)
   sendSpeed(speed)
 }
+
+// 使用重构后的 useKeyboard：自动管理生命周期，无需手动清理
+const { activeKeys } = useKeyboard(sendCommand, setSpeed)
 
 const connect = async () => {
   if (!selectedPort.value) {

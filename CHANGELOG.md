@@ -21,8 +21,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **编码器中断修复** — `odometer.h` 中 ISR 改为声明，定义移至 `car_controller.ino`（非 `inline`），修复 `inline + IRAM_ATTR` 导致的 `dangerous relocation: l32r` 链接错误；触发沿从 `RISING` 改为 `FALLING`，对齐参考博客光电编码器设计
 - **AGENTS.md 同步** — 更新电机控制描述为双电机、编码器描述为光电编码器（光栅码盘 + 光敏元件），移除四电机残留表述
 
+### 破坏性变更
+- 无线传输协议从 ESP-NOW 改为 WiFi UDP：C6 作为固定 AP，S3 作为 STA 连接
+- S3 删除 BLE 广播功能；接收器 BLE 扫描仅保留为通用扫描，不再用于发现车载设备
+- 废弃 `MAC_CONFIG` 命令与动态 MAC 配置；热点 SSID/密码固定硬编码
+
+### 变更
+- `wireless.h` 重构为纯应用层包格式定义，新增 UDP 端口与固定网络常量
+- `receiver_dongle.ino` 改为 WiFi AP + UDP 中继：控制命令通过 UDP 9000 转发给 S3，遥测/视频通过 UDP 9001 接收后转发给 PC 串口
+- `car_controller.ino` 改为 WiFi STA + UDP：监听 UDP 9000 控制命令，通过 UDP 9001 发送测速与视频；断线后自动重连
+- `video_stream.h` 视频分包改为通过 WiFi UDP 端口 9001 发送
+- 链路状态 `car_paired` 改为基于最近收到 S3 UDP 遥测包的时间判断
+- 两端串口输出完整 WiFi 连接/断开/重连与 UDP 收发日志
+
 ### 已知问题
 - `cargo test`/`cargo build` 在当前 Windows 环境（Rust 1.96.0 + Windows 11 Build 26200）下因 `std::process::Command::output` 返回 `Os { code: 0 }` 而失败，与本项目代码无关；完整复现报告见 `%TEMP%\rust_panic_report.md`
+
+## [1.4.0] - 2026-06-20
+
+### 破坏性变更
+- **无极速度 0-255 PWM + 统一二进制串口协议**
+  - 速度控制从 1-9 档位改为 0-255 PWM 无极调节；`WirelessPacket.speed` 直接携带 PWM 值。
+  - PC → receiver_dongle 串口协议从单字符命令改为 12 字节二进制 `WirelessPacket`，与 receiver_dongle → car_controller 的 UDP 载荷格式一致。
+  - 键盘数字键 1-9 改为 0-255 PWM 快捷档位（内部映射为近似 PWM 值）。
+  - `CommandType::BLE_SCAN = 10` 与 `CommandType::LINK_STATUS = 11` 作为接收器本地命令，不再以单字符 'B'/'P' 形式处理。
+
+### 变更
+- `desktop/frontend/src/components/ControlPanel.vue` — 速度滑块范围改为 0-255，百分比基于 255 计算。
+- `desktop/frontend/src/composables/useWebSocket.ts` — `sendSpeed` 增加 0-255 校验；`StatusData.currentSpeed` 语义改为 0-255 PWM。
+- `desktop/backend/src/websocket.rs` / `api.rs` / `serial.rs` — 运动/速度/行走模式命令统一生成并发送 12 字节 `WirelessPacket`。
+- `desktop/backend/src/lib.rs` — `current_speed` 注释改为 0-255 PWM。
+- `firmware/receiver_dongle/receiver_dongle.ino` — 串口输入改为读取并校验完整 `WirelessPacket`，本地处理 `BLE_SCAN`/`LINK_STATUS`，其余类型转发到 S3。
+- `firmware/car_controller/car_controller.ino` — `handleSpeedCommand` 直接接受 0-255 PWM；`g_currentSpeed` 初始值改为 128。
 
 ## [1.3.0] - 2026-06-18
 
@@ -593,6 +623,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 [Unreleased]: https://github.com/halfoffive/esp-smart-car/compare/v1.8.0...HEAD
+[1.4.0]: https://github.com/halfoffive/esp-smart-car/compare/v1.3.0...v1.4.0
 [1.8.0]: https://github.com/halfoffive/esp-smart-car/compare/v1.7.4...v1.8.0
 [1.7.4]: https://github.com/halfoffive/esp-smart-car/compare/v1.3.0...v1.7.4
 [1.3.0]: https://github.com/halfoffive/esp-smart-car/compare/v1.2.2...v1.3.0

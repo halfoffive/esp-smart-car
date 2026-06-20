@@ -142,7 +142,7 @@ mod tests {
         let current_speed = state
             .current_speed
             .load(std::sync::atomic::Ordering::Relaxed);
-        assert_eq!(current_speed, 5);
+        assert_eq!(current_speed, 128);
         let video_frame = state.video_frame.lock_or_recover("video_frame");
         assert!(video_frame.is_none());
         let video_frame_b64 = state.video_frame_b64.lock_or_recover("video_frame_b64");

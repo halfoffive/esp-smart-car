@@ -10,8 +10,8 @@
 esp-smart-car/
 ├── firmware/              # Embedded firmware (Arduino IDE)
 │   ├── libraries/         # Arduino libraries (shared across sketches)
-│   │   └── wireless_protocol/  # ESP-NOW wireless protocol library
-│   ├── car_controller/     # Vehicle controller (ESP32-S3, Freenove FNK0085)
+│   │   └── wireless_protocol/  # WiFi/UDP application-layer packet format library
+│   ├── car_controller/     # Vehicle controller (ESP32-S3, Freenove FNK0085, WiFi STA + UDP)
 │   └── receiver_dongle/   # USB receiver (ESP32-C6)
 ├── desktop/               # Desktop control interface
 │   ├── backend/           # Rust backend (Axum + WebSocket)
@@ -24,9 +24,9 @@ esp-smart-car/
 | Task | Location | Notes |
 |------|----------|-------|
 | Add motor control logic | `firmware/car_controller/motor_control.h` | Functional programming style |
-| Modify wireless protocol | `firmware/libraries/wireless_protocol/src/wireless.h` | ESP-NOW protocol (Arduino library) |
+| Modify wireless protocol | `firmware/libraries/wireless_protocol/src/wireless.h` | WiFi/UDP application-layer packet format; C6 AP / S3 STA; ports 9000/9001 |
 | Add camera config | `firmware/car_controller/camera_config.h` | OV2640 configuration |
-| Add video streaming | `firmware/car_controller/video_stream.h` | Frame packetization (ESP-NOW direct) |
+| Add video streaming | `firmware/car_controller/video_stream.h` | Frame packetization (WiFi UDP direct) |
 | Add serial communication | `desktop/backend/src/serial.rs` | USB serial port |
 | Add WebSocket handlers | `desktop/backend/src/websocket.rs` | Real-time video |
 | Add REST API endpoints | `desktop/backend/src/api.rs` | HTTP API |
@@ -38,10 +38,10 @@ esp-smart-car/
 
 | Symbol | Type | Location | Role |
 |--------|------|----------|------|
-| `MotorControl` | namespace | `firmware/car_controller/motor_control.h` | 4-motor differential drive (ESP32-S3) |
-| `WirelessProtocol` | namespace | `wireless.h` (Arduino library) | ESP-NOW communication |
+| `MotorControl` | namespace | `firmware/car_controller/motor_control.h` | 2-motor differential drive (left/right) |
+| `wireless.h` | library | `firmware/libraries/wireless_protocol/src/wireless.h` | WiFi/UDP application-layer packet format definitions |
 | `CameraConfig` | struct | `firmware/car_controller/camera_config.h` | OV2640 configuration |
-| `VideoStream` | namespace | `firmware/car_controller/video_stream.h` | Frame transmission (ESP-NOW direct) |
+| `video_stream.h` | library | `firmware/car_controller/video_stream.h` | Frame transmission (WiFi UDP direct) |
 | `SerialManager` | struct | `serial.rs` | USB serial communication |
 | `WebSocketManager` | struct | `websocket.rs` | Client connection management |
 | `AppState` | struct | `lib.rs` | Shared application state |
@@ -83,12 +83,13 @@ esp-smart-car/
 ## Unique Styles
 
 - **Functional C++**: Value semantics preferred, state changes via function returns; `static` globals allowed only when confined to a single translation unit (e.g. `video_stream.h`, `wireless.h`)
-- **Binary protocol**: Custom 12-byte packet format for ESP-NOW communication
-- **Frame packetization**: Video frames split into 128-byte chunks for ESP-NOW wireless transmission; S3 单芯片直接 ESP-NOW 分包发送到接收器（Serial1 桥接已移除）
+- **Binary protocol**: Custom 12-byte `WirelessPacket` format used for both WiFi/UDP and PC → receiver_dongle USB serial communication
+- **Frame packetization**: Video frames split into 128-byte chunks for WiFi UDP transmission to receiver telemetry port 9001; control commands use separate UDP port 9000
 - **Differential steering**: Left/right motor speed differential for turning
-- **S3 单芯片架构**: ESP32-S3 (Freenove FNK0085) 同时承担摄像头采集 + 电机控制 + 编码器测速 + PID + ESP-NOW 收发 + BLE 广播全部车载功能
-- **BLE advertising**: car_controller (S3) 启动 BLE 广播（设备名"智能车"），Manufacturer Data 嵌入 WiFi MAC，receiver_dongle 可通过 BLE 扫描发现车载 S3 的 ESP-NOW MAC 地址
-- **链路状态探测**: receiver_dongle 收到 'P' 命令时上报 `{"t":"link",...}` JSON，且每 5 秒周期性主动上报；后端 `connect_serial` 成功后发送 'P' 探测；前端显示 4 级链路状态
+- **S3 单芯片架构**: ESP32-S3 (Freenove FNK0085) 同时承担摄像头采集 + 电机控制 + 编码器测速 + PID + WiFi STA UDP 收发；S3 不再进行 BLE 广播
+- **Speed control**: Motor PWM is controlled directly as 0-255 via the `WirelessPacket.speed` field; keyboard keys 1-9 are convenience shortcuts mapped to PWM values
+- **BLE scan**: receiver_dongle handles `CommandType::BLE_SCAN = 10` locally to perform generic peripheral scanning; S3 不再广播 Manufacturer Data，固定热点 SSID/密码取代 MAC 配对
+- **链路状态探测**: receiver_dongle handles `CommandType::LINK_STATUS = 11` locally and reports `{"t":"link",...}` JSON on request and every 5 seconds; 后端 `connect_serial` 成功后发送 LINK_STATUS 探测；前端显示 4 级链路状态
 - **后端健康检测**: 前端 `useBackendHealth` 启动时探测 `/api/status`，1 秒无响应标记后端不可用，禁用所有控制 UI
 
 ## Commands
@@ -122,11 +123,11 @@ See `docs/hardware.md` for complete pinout diagram.
 Key connections:
 - **L298N #1（左侧电机）**: IN1=GPIO 38, IN2=GPIO 39, EN=GPIO 40 (PWM)
 - **L298N #2（右侧电机）**: IN1=GPIO 41, IN2=GPIO 42, EN=GPIO 21 (PWM)
-- **左编码器**: GPIO 1（RISING 中断）
-- **右编码器**: GPIO 2（RISING 中断）
+- **左编码器**: GPIO 1（FALLING 中断）
+- **右编码器**: GPIO 2（FALLING 中断）
 - **Camera（OV2640，板载排线）**: GPIO 4-18（除 14），14=LED 闪光灯（可选）
-- **BLE 广播**: ESP32-S3 内置天线
-- **ESP-NOW**: ESP32-S3 内置 WiFi 天线
+- **BLE 扫描**: ESP32-S3 不再广播，接收器仅做通用周边设备扫描
+- **WiFi UDP**: ESP32-S3 内置 WiFi 天线
 - **板载约束（Freenove FNK0085）**: GPIO 26-37（SPI Flash）/19/20（USB）/43/44（USB-Serial）/45/46（Strapping）不可用或受限
 
 ## Notes
@@ -134,12 +135,14 @@ Key connections:
 - **Power isolation**: Motor power and logic power must be separate
 - **Ground common**: All devices must share common ground
 - **Baud rate**: 921600 for USB serial (high-speed video)
-- **S3 单芯片架构**: 车载 ESP32-S3 (Freenove FNK0085) 同时承担摄像头采集 + 电机控制 + 编码器测速 + PID + ESP-NOW 收发 + BLE 广播，无需 C6 中转
-- **ESP-NOW channel**: Fixed channel 1 for all devices
+- **S3 单芯片架构**: 车载 ESP32-S3 (Freenove FNK0085) 同时承担摄像头采集 + 电机控制 + 编码器测速 + PID + WiFi STA UDP 收发；S3 不再进行 BLE 广播
+- **WiFi 链路**: C6 作为固定 AP（SSID "ESP-SmartCar" / 密码 "SmartCar2024" / IP 192.168.4.1 / 最大功率），S3 作为 STA 使用静态 IP 192.168.4.2
+- **UDP 端口**: 控制命令走 9000（C6→S3），遥测/视频走 9001（S3→C6），应用层继续使用 WirelessPacket/OdometryPacket/VideoPacket
 - **Video buffer**: 32768 bytes for frame reassembly
 - **Timeout protection**: 1-second auto-stop if no commands received
-- **BLE scan**: Receiver supports BLE device scanning ('B' command)
-- **链路状态探测**: receiver_dongle 收到 'P' 命令上报 `{"t":"link",...}` JSON，5 秒周期心跳；后端 `connect_serial` 成功后发送 'P' 探测；前端 4 级链路状态显示
+- **Speed control**: `WirelessPacket.speed` carries motor PWM directly as 0-255; keyboard keys 1-9 are shortcuts mapped to PWM values
+- **BLE scan**: Receiver handles `CommandType::BLE_SCAN = 10` locally for generic peripheral scanning
+- **链路状态探测**: receiver_dongle handles `CommandType::LINK_STATUS = 11` locally and reports `{"t":"link",...}` JSON on request and every 5 seconds; 后端 `connect_serial` 成功后发送 LINK_STATUS 探测；前端 4 级链路状态显示
 - **后端健康检测**: 前端 `useBackendHealth` 启动时探测 `/api/status`（1 秒超时），不可用时禁用所有控制 UI 并显示红色横幅
 - **紧急停止**: 前端长按 500ms 触发（防误触）
 - **Arduino library**: `wireless.h` is installed as an Arduino library in `firmware/libraries/wireless_protocol/` to avoid duplication across sketches
@@ -176,7 +179,7 @@ Key connections:
 **修复** — 砍掉车载 C6，由 ESP32-S3 (Freenove FNK0085) 单芯片承担全部车载功能，新增链路探测与可观测性增强：
 
 - **固件变更**:
-  - `car_controller.ino` — 目标板从 ESP32-C6 改为 ESP32-S3（Freenove FNK0085），合并 camera_module 代码，删除 Serial1 桥接，启用 ESP-NOW 视频直发，删除 servo_control.h
+  - `car_controller.ino` — 目标板从 ESP32-C6 改为 ESP32-S3（Freenove FNK0085），合并 camera_module 代码，删除 Serial1 桥接，启用无线视频直发，删除 servo_control.h
   - `motor_control.h` — PinConfig 引脚从 GPIO 4-9 改为 GPIO 38/39/40/41/42/21（避开摄像头引脚 GPIO 4-18）
   - `odometer.h` — 编码器引脚从 GPIO 0/1 改为 GPIO 1/2
   - `camera_config.h` + `video_stream.h` — 从 `firmware/camera_module/` 移入 `firmware/car_controller/`，`sendVideoFrame` 取消"已废弃"标记
@@ -206,18 +209,18 @@ Key connections:
 
 ### 2026-06-14 - BLE/WiFi MAC 区分 + 串口引脚修复（全链路）
 
-**问题**: ESP32-C6 的 BLE MAC ≠ WiFi MAC，用户从 BLE 扫描复制 MAC 配置 ESP-NOW → 数据包无法到达车载 C6，无反应无画面。
+**问题**: ESP32-C6 的 BLE MAC ≠ WiFi MAC，用户从 BLE 扫描复制 MAC 配置无线连接 → 数据包无法到达车载 C6，无反应无画面。
 
 **修复** — 将 WiFi MAC 嵌入 BLE 广播 Manufacturer Data，全链路透传：
 
-- `car_controller.ino` — BLE 广播通过 `BLEAdvertisementData` 嵌入 WiFi MAC（CompanyID=0xFFFF + 6B），启动日志标注 "ESP-NOW MAC" 与 BLE MAC 区分。版本 1.3.0 → 1.4.0
+- `car_controller.ino` — BLE 广播通过 `BLEAdvertisementData` 嵌入 WiFi MAC（CompanyID=0xFFFF + 6B），启动日志标注 "无线 MAC" 与 BLE MAC 区分。版本 1.3.0 → 1.4.0
 - `receiver_dongle.ino` — `BleDeviceInfo` 新增 `wifiMac[6]` + `hasWifiMac`；`onResult()` 解析 manufacturer data 提取 WiFi MAC；JSON 输出条件性增加 `wifi_mac` 字段；MAC 地址打印移至 WiFi 初始化后，修复 00:00:00:00:00:00 显示。版本 1.2.0 → 1.3.0
 - `camera_module.ino` — `SoftwareSerial.h` 编译失败（ESP32-S3 core 不含此库），改用 `Serial1.begin(921600, SERIAL_8N1, -1, 14)`（HardwareSerial TX=GPIO14），保持与车载 C6 RX=GPIO2 的物理接线。版本 1.3.0 → 1.4.0
 - `lib.rs` — `BleDevice` 新增 `wifi_mac: Option<String>`
 - `serial.rs` — `parse_ble_line` 解析可选 `wifi_mac` JSON 字段
 - `websocket.rs` — `ble_devices` 广播条件性追加 `wifi_mac`
 - `useWebSocket.ts` — `BleDevice` 接口新增 `wifiMac?: string`，消息处理映射 `wifi_mac`→`wifiMac`
-- `ControlPanel.vue` — `selectBleDevice` 优先使用 `wifiMac` 连接 ESP-NOW，列表显示 📡 标注
+- `ControlPanel.vue` — `selectBleDevice` 优先使用 `wifiMac` 连接无线，列表显示 📡 标注
 - `docs/hardware.md` — 更新串口引脚（Camera TX=GPIO14 → Car RX=GPIO2）
 
 **验证**: `cargo clippy` 0 warnings；`cargo test` 48 测试全过；`vue-tsc` + `vite build` 通过
@@ -239,7 +242,7 @@ Key connections:
   - 接收器新增 BLE 扫描功能
 - **固件变更**:
   - car_controller — 移除舵机代码，新增软串口视频帧接收/转发
-  - camera_module — 移除 ESP-NOW，改为 Serial1 发送视频帧
+  - camera_module — 移除无线协议，改为 Serial1 发送视频帧
   - receiver_dongle — 新增 BLE 扫描（'B' 命令触发）
   - wireless.h — 移除 CommandType::SERVO、DeviceRole::CAMERA、CAMERA_MAC 等
 - **后端变更**:
@@ -292,7 +295,7 @@ Key connections:
   - `useWebSocket.ts` — `videoFps` ref 添加实际更新逻辑：视频帧到达时按秒统计帧数更新，StatusBar FPS 指示器恢复正常
   - `car_controller.ino` — `loop()` 中 `delay(10)` → `delay(1)`，舵机平滑更新粒度从 ~100Hz 提升至 ~1000Hz，命令响应延迟降低
 - **P2（3项）**:
-  - `websocket.rs` — `speed` 消息类型现在也通过串口发送速度等级字符，消除 `sendSpeed()` API 死代码
+  - `websocket.rs` — `speed` 消息类型现在通过串口发送 `WirelessPacket(SPEED, speed=0-255)` 二进制包，消除 `sendSpeed()` API 死代码
   - `car_controller.ino` + `receiver_dongle.ino` — setup() 注释中云台按键从 `U/D/L/R/C` 修正为 `U/J/H/K/C`
   - `pid_control.h` — `g_driveMode` 静态初始值从 `STRAIGHT_LINE` → `NORMAL`，与 `initializePIDController()` 运行时赋值一致
 - **P3（2项）**:
@@ -362,7 +365,7 @@ Key connections:
 ### 2026-06-13 - 综合代码审计修复 v5（68项修复）
 - **范围**: 嵌入式固件 + 后端 Rust + 前端 Vue 三部分全面审查，修复 6 项 P0 严重缺陷、15 项 P1 高优先级问题、8 项 P2 中优先级问题、5 项 P3 低优先级问题
 - **P0 严重修复（6项）**:
-  - `wireless.h` — Receiver 角色初始化时同时添加 Car 和 Camera 两个 ESP-NOW Peer，修复云台控制转发静默失败
+  - `wireless.h` — Receiver 角色初始化时同时添加 Car 和 Camera 两个无线 Peer，修复云台控制转发静默失败
   - `websocket.rs` + `receiver_dongle.ino` + `car_controller.ino` — 行走模式协议重构：DRIVE_MODE 分配专属命令字节 'T'，消除与 MAC_CONFIG 的 'M' 冲突；接收器实现 DRIVE_MODE 转发逻辑
   - `serial.rs` — 串口数据流解析器重构：引入 BufReader + 统一缓冲状态机，修复帧头重叠遗漏（0xAA 0xAA 0x55）和视频/测速数据互斥吞没问题
   - `ControlPanel.vue` — 串口连接成功后自动触发 WebSocket 连接，补齐实时数据推送入口
@@ -430,7 +433,7 @@ Key connections:
   - `receiver_dongle.ino` — H/J/K 云台命令未被识别，`parseSerialCommand` 和 `getCommandType` 添加支持，**云台控制此前完全失效**
   - `servo_control.h` — `parseGimbalCommand` 缺少 'J' 云台下处理，添加 `case 'J': case 'j':` 与 'D' 相同逻辑
   - `pid_control.h` — `initializePIDController()` 初始状态与 `car_controller.ino` 不一致：`g_straightLineEnabled` 改为 `false`，`g_driveMode` 改为 `NORMAL`
-  - `video_stream.h` — ESP-NOW 广播视频帧给所有设备，car_controller 收到视频包误解析，改为指定接收器 MAC 地址
+  - `video_stream.h` — 无线广播视频帧给所有设备，car_controller 收到视频包误解析，改为指定接收器 MAC 地址
 - **高优先级修复（P1 - 5项）**:
   - `receiver_dongle.ino` — `VideoFrameBuffer` 用 `new[]` 分配但从未 `delete[]`，改为静态数组消除内存泄漏
   - `api.rs` — `connect_serial` 中 `serialport::open()` 阻塞 I/O 在 `MutexGuard` 内，移入 `spawn_blocking`
@@ -489,7 +492,7 @@ Key connections:
   - `motor_control.h` / `servo_control.h` / `odometer.h` / `pid_control.h` / `video_stream.h` — 移除所有状态结构体的 `const` 成员，修复 "use of deleted function 'operator='" 编译错误
   - `odometer.h` — `volatile uint32_t g_leftPulses++` 改为 `g_leftPulses += 1`，消除 C++20 `volatile` 弃用警告
   - `video_stream.h` — 移除 `VideoPacket` / `StreamConfig` 定义，改为 `#include <wireless.h>`（Arduino 库），新增 `VideoStreamConfig` 命名空间存放视频流特有常量
-  - `car_controller.ino` / `receiver_dongle.ino` / `camera_module.ino` — 修改所有 ESP-NOW 回调签名匹配新版 API；`car_controller.ino` `#include "wireless.h"` 改为 `#include <wireless.h>`
+  - `car_controller.ino` / `receiver_dongle.ino` / `camera_module.ino` — 修改所有无线回调签名匹配新版 API；`car_controller.ino` `#include "wireless.h"` 改为 `#include <wireless.h>`
 
 ### 2026-06-09 - 全面代码排查与优化 v3（27项修复）
 - **范围**: 前端 Vue + 后端 Rust + 嵌入式固件三部分全面审查，启用 karpathy-guidelines 和 frontend-design 深度审计，修复 10 项严重问题、9 项高优先级问题、8 项一般问题
@@ -600,9 +603,9 @@ Key connections:
 - **问题**: 速度显示 1422%（`current_speed` 初始值为 128 导致），速度滑块与快速按钮宽度不对齐
 - **修复文件**:
   - `desktop/backend/src/main.rs` — `current_speed` 初始值从 128 改为 5
-  - `desktop/backend/src/websocket.rs` — 收到速度命令 '1'-'9' 时同步更新 `current_speed`
+  - `desktop/backend/src/websocket.rs` — 收到速度命令 0-255 PWM 时同步更新 `current_speed`
   - `desktop/frontend/src/components/SpeedDashboard.vue` — 改用 WebSocket odometry 数据显示实际轮速（cm/s）
-  - `desktop/frontend/src/components/StatusBar.vue` — 添加 clamp 保护确保速度等级在 1-9 范围
+  - `desktop/frontend/src/components/StatusBar.vue` — 添加 clamp 保护确保速度 PWM 在 0-255 范围
   - `desktop/frontend/src/components/ControlPanel.vue` — 修复滑块与按钮宽度对齐（统一左右边距）
   - `desktop/frontend/src/style.css` — 移除轨道背景色避免覆盖动态渐变
 
@@ -644,7 +647,7 @@ Key connections:
 - **高优先级修复（后端）**:
   - `websocket.rs` — 帧哈希改用多点采样（首4+中4+尾4字节+长度），修复同尺寸帧碰撞丢帧
   - `serial.rs` — `SerialTaskResult` 所有变体携带 buffer，非视频路径恢复 `frame_buffer`，避免重复分配
-  - `api.rs` — REST API 速度命令 '1'-'9' 同步更新 `current_speed`，与 WebSocket 行为一致
+  - `api.rs` — REST API 速度命令 0-255 PWM 同步更新 `current_speed`，与 WebSocket 行为一致
   - `serial.rs` — `connect()` 失败时状态恢复为 `Disconnected`，不再残留 `Connecting`
 - **高优先级修复（前端）**:
   - `useWebSocket.ts` — `connect()` 先关闭旧连接再创建新的，防止状态腐败

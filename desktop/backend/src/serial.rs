@@ -10,7 +10,7 @@
  * 5. 解析数据帧
  *
  * 数据格式：
- * 发送：单字节命令（W/A/S/D/1-9/空格等）
+ * 发送：8 字节二进制 WirelessPacket（与 UDP 控制载荷格式一致）
  * 接收：[0xAA][0x55][帧大小(4字节)][帧数据]
  */
 use std::collections::hash_map::DefaultHasher;
@@ -272,9 +272,14 @@ impl SerialManager {
         self.state = SerialConnectionState::Disconnected;
     }
 
-    /// 发送单字节命令
+    /// 发送单字节命令（保留用于调试）
     pub fn send_command(&mut self, cmd: u8) -> Result<()> {
         self.send_bytes(&[cmd])
+    }
+
+    /// 发送完整二进制数据包（8 字节 WirelessPacket）
+    pub fn send_packet(&mut self, packet: &[u8]) -> Result<()> {
+        self.send_bytes(packet)
     }
 
     /// 发送多字节数据（使用独立写句柄，与读操作可并发）

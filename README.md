@@ -4,7 +4,7 @@
 
 基于 ESP32 的智能车控制系统，包含嵌入式固件、无线通信、视频传输和 Web 控制界面。
 
-**架构**：ESP32-S3 单芯片车载控制器（Freenove FNK0085）+ ESP32-C6 接收器 Dongle，S3 同时承担摄像头采集、电机控制、编码器测速、PID、ESP-NOW 收发、BLE 广播全部车载功能。
+**架构**：ESP32-S3 单芯片车载控制器（Freenove FNK0085）+ ESP32-C6 接收器 Dongle。S3 承担摄像头采集、电机控制、编码器测速、PID 等全部车载功能；车载 S3 与接收器 C6 之间通过 WiFi UDP 通信。C6 通过 USB 连接电脑，并可在本地进行 BLE 扫描以发现周边设备。
 
 ## 项目结构
 
@@ -12,18 +12,18 @@
 esp-smart-car/
 ├── firmware/                    # 嵌入式固件
 │   ├── libraries/               # Arduino 库（跨 sketch 共享）
-│   │   └── wireless_protocol/   # 无线通信协议库（ESP-NOW + 视频分包）
+│   │   └── wireless_protocol/   # 无线通信协议库（共享 8 字节 WirelessPacket + 视频分包）
 │   │       └── src/
-│   │           └── wireless.h   # 共享头文件
+│   │           └── wireless.h   # 共享头文件（SSID/密码/静态 IP/UDP 端口定义）
 │   ├── car_controller/          # 车载控制器（ESP32-S3，Freenove FNK0085）
 │   │   ├── motor_control.h      # 电机控制（函数式编程，差速支持）
 │   │   ├── odometer.h           # 编码器测速模块
 │   │   ├── pid_control.h        # PID控制器（直线修正+航向锁定）
 │   │   ├── camera_config.h      # 摄像头配置（OV2640）
-│   │   ├── video_stream.h       # 视频流传输（ESP-NOW 直发）
-│   │   └── car_controller.ino   # 主程序
+│   │   ├── video_stream.h       # 视频流 UDP 发送
+│   │   └── car_controller.ino   # 主程序（WiFi STA + UDP 接收/发送）
 │   └── receiver_dongle/         # 电脑端接收器（ESP32-C6）
-│       └── receiver_dongle.ino  # 主程序（含测速数据转发、BLE 扫描、链路状态上报）
+│       └── receiver_dongle.ino  # 主程序（USB 串口 ↔ WiFi AP + UDP 转发、BLE 扫描、链路状态上报）
 ├── desktop/                     # 桌面端控制界面
 │   ├── backend/                 # Rust 后端
 │   │   ├── Cargo.toml
@@ -58,10 +58,10 @@ esp-smart-car/
 
 ### 主控板
 - **ESP32-S3 开发板**（Freenove FNK0085）x1
-  - 车载控制器：单芯片承担摄像头采集 + 电机控制 + 编码器测速 + PID + ESP-NOW 收发 + BLE 广播
+  - 车载控制器：单芯片承担摄像头采集 + 电机控制 + 编码器测速 + PID + WiFi UDP 通信
 
 - **ESP32-C6 开发板** x1
-  - 电脑端接收器（USB 连接电脑，支持 BLE 扫描 + 链路状态上报）
+  - 电脑端接收器（USB 连接电脑，创建 WiFi 热点供车载 S3 接入，支持本地 BLE 扫描 + 链路状态上报）
 
 ### 驱动模块
 - **L298N 电机驱动模块** x2
@@ -88,36 +88,39 @@ esp-smart-car/
 
 ### 通信协议
 
-#### ESP-NOW（无线通信）
-- 协议：2.4GHz WiFi
-- 模式：无连接广播
-- 延迟：< 10ms
-- 距离：~100m
+#### WiFi UDP（无线通信）
+- 协议：2.4GHz WiFi UDP
+- 网络拓扑：C6 作为 SoftAP，S3 作为 STA 接入
+- 热点 SSID：`ESP-SmartCar`，密码：`SmartCar2024`（定义于 `firmware/libraries/wireless_protocol/src/wireless.h`）
+- 静态 IP：C6 `192.168.4.1`，S3 `192.168.4.2`
+- 控制端口：`9000`（C6 → S3 命令）
+- 遥测端口：`9001`（S3 → C6 测速、状态、视频帧）
 - 用途：车载 S3 ↔ 接收器 C6 双向通信（视频帧、命令、测速、状态）
 
 #### BLE 扫描
-- 接收器支持 BLE 设备扫描
-- 通过 'B' 命令触发扫描
-- 车载 S3 BLE 广播嵌入 WiFi MAC（Manufacturer Data）
+- 接收器支持本地 BLE 设备扫描，通过 'B' 命令触发
 - 扫描结果通过 WebSocket 推送到前端
+- BLE 扫描仅作为 C6 接收器的本地功能，**不用于发现小车**
 
 #### 链路状态探测
 - 接收器收到 'P' 命令时立即上报 `{"t":"link",...}` JSON
 - 接收器每 5 秒主动上报一次链路状态（周期性心跳）
-- 后端 `connect_serial` 成功后发送 'P' 探测命令
-- 前端显示 4 级链路状态：探测中 → Dongle 已连接 → 车载已配对 → 车载在线
+- 后端 `connect_serial` 成功后发送 'P' 探测链路状态
+- 前端显示链路状态：探测中 → Dongle 已连接 → 小车 WiFi 在线
 
 #### 数据包格式
 ```
 [魔术字 1字节] [版本 1字节] [类型 1字节] [数据 1字节] [速度 1字节] [序列号 2字节] [校验和 1字节]
 ```
 
+该 8 字节 `WirelessPacket` 同时用于 PC ↔ C6 的 USB 串口通信和 C6 ↔ S3 的 WiFi UDP 通信。
+
 #### 视频帧格式
 ```
 [帧头 0xAA 0x55] [帧大小 4字节] [帧数据 N字节]
 ```
 
-S3 单芯片直接 ESP-NOW 分包发送视频帧到接收器（每包 128 字节），不再经过 Serial1 桥接。
+S3 将视频帧通过 UDP 遥测端口 `9001` 分包发送到 C6 接收器（每包 128 字节），再由 C6 通过 USB 串口转发给电脑后端。
 
 ### 命令类型
 
@@ -130,10 +133,10 @@ S3 单芯片直接 ESP-NOW 分包发送视频帧到接收器（每包 128 字节
 | Q | 原地左转 | - |
 | E | 原地右转 | - |
 | 空格 | 停止 | - |
-| 1-9 | 速度设置 | 1-9 |
+| S/速度 | 速度设置 | 0-255 PWM |
 | T | 行走模式切换 | 1字节模式值(0/1/2) |
-| B | BLE 扫描 | - |
-| P | 链路状态探测 | - |
+| B | BLE 扫描 | 本地接收器命令，不转发到小车 |
+| P | 链路状态探测 | 本地接收器命令，不转发到小车 |
 
 ## 安装说明
 
@@ -148,7 +151,6 @@ S3 单芯片直接 ESP-NOW 分包发送视频帧到接收器（每包 128 字节
    - 方式B：将 `firmware/libraries/wireless_protocol` 复制到 Arduino 的库文件夹（`~/Arduino/libraries/` 或 `%USERPROFILE%\Documents\Arduino\libraries\`）
 4. 安装库：
    - ESP32Camera
-   - ESP-NOW
 5. 选择开发板：
    - 车载控制器（ESP32-S3，Freenove FNK0085）："ESP32S3 Dev Module"
    - 接收器 Dongle（ESP32-C6）："ESP32C6 Dev Module"
@@ -185,8 +187,8 @@ bun run build
 
 ## 启动顺序
 
-1. 启动车载控制器（ESP32-S3，Freenove FNK0085）— 单芯片承担摄像头 + 电机 + 编码器 + ESP-NOW + BLE
-2. 连接电脑端接收器（ESP32-C6）到电脑 USB
+1. 连接电脑端接收器（ESP32-C6）到电脑 USB — C6 自动创建 WiFi 热点 `ESP-SmartCar`
+2. 启动车载控制器（ESP32-S3，Freenove FNK0085）— S3 作为 STA 自动连接 C6 热点，静态 IP `192.168.4.2`
 3. 启动 Rust 后端（自动提供前端页面）
 4. 在浏览器中打开 `http://localhost:8080`
 5. 前端自动探测后端可用性，不可用时显示红色横幅
@@ -223,8 +225,8 @@ void applyVehicleMotion(const VehicleMotion& motion) {
 
 - 键盘：WASD 控制方向
 - 鼠标：点击控制面板按钮
-- 速度：数字键 1-9 或滑块
-- BLE：扫描周围蓝牙设备
+- 速度：滑块 0-255，或键盘 1-9 映射到对应 PWM 值
+- BLE：扫描周围蓝牙设备（C6 接收器本地功能）
 
 ## 测试
 
@@ -237,15 +239,17 @@ cargo clippy       # 静态分析检查
 ## 故障排除
 
 ### 无线通信失败
-- 检查 MAC 地址配置（BLE 扫描复制 WiFi MAC，不是 BLE MAC）
-- 确认信道一致（固定信道 1）
-- 检查距离和干扰
+- 检查 C6 接收器是否正确创建热点 `ESP-SmartCar`（密码 `SmartCar2024`）
+- 确认 S3 已成功作为 STA 接入，静态 IP 为 `192.168.4.2`
+- 检查电脑是否同时为 C6 提供了足够 USB 供电
+- 确认 UDP 端口 `9000`/`9001` 未被防火墙或电脑网络策略拦截
+- 检查距离和 2.4GHz 干扰
 
 ### 链路状态异常
-- 串口连接后前端应显示 4 级链路状态：探测中 → Dongle 已连接 → 车载已配对 → 车载在线
+- 串口连接后前端应显示链路状态：探测中 → Dongle 已连接 → 小车 WiFi 在线
 - 若停留在"探测中"：检查 Dongle 固件是否支持 'P' 命令
-- 若停留在"Dongle 已连接"：检查车载 S3 是否启动、ESP-NOW 配对是否成功
-- 若停留在"车载已配对"：检查车载 S3 是否在发送数据（测速/视频帧）
+- 若停留在"Dongle 已连接"：检查车载 S3 是否启动、是否成功连接 C6 热点
+- 若已显示"小车 WiFi 在线"但无数据：检查 S3 是否在发送数据（测速/视频帧）以及 UDP 遥测端口 `9001` 是否可达
 
 ### 后端不可用
 - 前端启动时自动探测 `/api/status`（1 秒超时）
@@ -255,7 +259,7 @@ cargo clippy       # 静态分析检查
 ### 视频传输卡顿
 - 降低分辨率
 - 降低帧率
-- 检查 ESP-NOW 信号质量（距离、干扰）
+- 检查 WiFi 信号质量（距离、干扰）以及 UDP 端口 `9001` 是否丢包
 
 ### 电机不转
 - 检查电源电压
@@ -267,6 +271,17 @@ cargo clippy       # 静态分析检查
 - 检查 WebSocket 连接是否正常
 
 ## 版本历史
+
+- v1.4.0 - 2026-06-20（未发布）
+  - 无线通信迁移：车载 S3 与接收器 C6 之间从 ESP-NOW 改为 WiFi UDP
+    - C6 作为 SoftAP，SSID `ESP-SmartCar`，密码 `SmartCar2024`，静态 IP `192.168.4.1`
+    - S3 作为 STA 静态 IP `192.168.4.2` 接入 C6 热点
+    - 控制端口 `9000`（C6 → S3），遥测端口 `9001`（S3 → C6，含视频帧）
+  - 速度控制改为 0-255 PWM 连续调速，替换原来的 1-9 档位
+  - PC 到 C6 的串口协议改为 8 字节二进制 `WirelessPacket`，与 UDP 包格式一致
+  - 视频流改为通过 UDP 遥测端口 `9001` 传输
+  - 移除车载 S3 的 BLE 广播功能；BLE 扫描保留为 C6 接收器本地功能
+  - 文档同步更新：`README.md`、`docs/hardware.md` 反映 WiFi UDP 架构与 GPIO 中断沿变更
 
 - v1.3.1 - 2026-06-19（未发布）
   - 后端并发安全：`MutexExt` 锁污染自动恢复、串口 generation 防竞态、`video_task` 可安全取消 + 心跳超时

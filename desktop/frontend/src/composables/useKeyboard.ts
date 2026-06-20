@@ -17,7 +17,7 @@
  * - Q: 原地左转
  * - E: 原地右转
  * - 空格: 停止
- * - 1-9: 速度设置
+ * - 1-9: 速度快捷档位（映射到 0-255 PWM）
  */
 
 import { ref, onMounted, onUnmounted } from 'vue'
@@ -36,13 +36,14 @@ const PREVENT_DEFAULT_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'Arro
 
 /**
  * 键盘控制组合式函数
- * 
+ *
  * 标准 composable 风格：内部自动使用 onMounted/onUnmounted 管理事件监听器生命周期
- * 调用者只需 `useKeyboard(sendCommand)` 即可，无需手动清理
- * 
+ * 调用者只需 `useKeyboard(sendCommand, setSpeed)` 即可，无需手动清理
+ *
  * @param sendCommand - 发送命令的回调函数
+ * @param setSpeed - 设置速度 PWM 的回调函数（接收 0-255 数值）
  */
-export const useKeyboard = (sendCommand: (cmd: string) => void) => {
+export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: number) => void) => {
   // 当前激活的按键（响应式，供 UI 高亮显示）
   const activeKeys = ref<Set<string>>(new Set())
 
@@ -93,9 +94,10 @@ export const useKeyboard = (sendCommand: (cmd: string) => void) => {
       currentDirectionKey = null
       sendCommand(' ')
     }
-    // 处理速度键
+    // 处理速度键：将 1-9 映射为近似 PWM 值（1→28, 9→255）
     else if (key >= '1' && key <= '9') {
-      sendCommand(key)
+      const pwm = Math.round((parseInt(key, 10) - 1) / 8 * 227 + 28)
+      setSpeed(pwm)
     }
   }
 

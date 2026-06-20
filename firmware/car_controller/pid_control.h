@@ -274,8 +274,7 @@ inline void initializePIDController() {
  *
  * 调用上下文要求：本函数读取 OdometerState 中的浮点速度/航向变量，
  * 这些变量由 loop() 中的 updateOdometer() 写入。ESP32 上 32-bit float
- * 读写为硬件原子操作，但在 ESP-NOW 回调（ISR 上下文）中调用时需注意
- * 可能读到 loop() 写入前的旧值。
+ * 读写为硬件原子操作，本函数在 loop() 中调用，不会读到写入前的旧值。
  */
 inline SmartMotorOutput updateSmartControl(
     uint8_t basePwm,

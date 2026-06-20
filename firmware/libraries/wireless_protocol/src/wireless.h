@@ -1,10 +1,10 @@
 /**
- * 无线通信系统 - 函数式编程风格
- * 基于 ESP32，使用 ESP-NOW 协议进行低延迟通信
+ * 无线通信系统 - 应用层数据包格式与 UDP 网络常量
+ * 基于 ESP32，使用 WiFi/UDP 进行低延迟通信
  * 支持命令传输、状态反馈和视频流分包
  * 作者：智能车项目团队
- * 版本：1.2.0
- * 
+ * 版本：2.0.0
+ *
  * 说明：本文件为 Arduino 库，供 car_controller、camera_module、receiver_dongle 共享。
  * 避免复制到各 sketch 目录，减少维护负担。
  */
@@ -13,8 +13,6 @@
 #define WIRELESS_H
 
 #include <Arduino.h>
-#include <WiFi.h>
-#include <esp_now.h>
 
 // ============================================
 // 纯数据类型定义
@@ -27,7 +25,7 @@
 enum class CommandType : uint8_t {
     NONE = 0,        // 无命令
     MOVE = 1,        // 运动控制
-    SPEED = 2,       // 速度设置
+    SPEED = 2,       // 速度设置（speed 字段为 0-255 PWM）
     LIGHT = 3,       // 车灯控制
     HORN = 4,        // 喇叭
     STOP = 5,        // 紧急停止
@@ -35,7 +33,8 @@ enum class CommandType : uint8_t {
     ODOMETRY = 7,    // 测速数据上报
     CALIBRATE = 8,   // 校准命令
     DRIVE_MODE = 9,  // 行走模式切换
-    MAC_CONFIG = 10  // MAC地址配置
+    BLE_SCAN = 10,   // 接收器本地：BLE 扫描（不转发到车载端）
+    LINK_STATUS = 11 // 接收器本地：链路状态探测（不转发到车载端）
 };
 
 /**
@@ -46,15 +45,15 @@ struct __attribute__((packed)) WirelessPacket {
     uint8_t magic;        // 魔术字（0xA5）用于帧同步
     uint8_t version;      // 协议版本
     CommandType type;     // 命令类型
-    uint8_t data;         // 数据字节（如WASD命令或角度）
-    uint8_t speed;        // 速度值
+    uint8_t data;         // 数据字节（如WASD命令或角度/模式值）
+    uint8_t speed;        // 速度值：直接表示 PWM 占空比，范围 0-255
     uint16_t seq;         // 序列号
     uint8_t checksum;     // 校验和
-    
+
     // 默认构造函数（用于声明未初始化的局部变量，后续赋值）
     WirelessPacket() : magic(0), version(0), type(CommandType::NONE),
                        data(0), speed(0), seq(0), checksum(0) {}
-    
+
     // 带参构造函数
     constexpr WirelessPacket(
         uint8_t m, uint8_t v, CommandType t,
@@ -76,7 +75,7 @@ struct __attribute__((packed)) OdometryPacket {
     int16_t headingX100;      // 航向角(弧度*100)，有符号
     uint16_t totalDistMm;     // 总行走距离(mm)
     uint8_t checksum;         // 校验和
-    
+
     constexpr OdometryPacket(
         uint8_t m, uint8_t v, CommandType t,
         int16_t ls, int16_t rs, int16_t hd, uint16_t td, uint8_t c
@@ -99,39 +98,17 @@ struct __attribute__((packed)) VideoPacket {
     uint8_t checksum;     // 校验和
 };
 
-/**
- * 设备角色枚举
- */
-enum class DeviceRole : uint8_t {
-    CAR = 0,        // 车载端
-    RECEIVER = 1    // 接收器端
-};
-
-/**
- * 通信状态
- */
-struct WirelessState {
-    DeviceRole role;           // 本机角色
-    uint8_t peerCount;         // 已配对设备数
-    
-    constexpr WirelessState(
-        DeviceRole r, uint8_t pc
-    ) : role(r), peerCount(pc) {}
-};
-
 // ============================================
 // 常量定义
 // ============================================
 namespace WirelessConfig {
     constexpr uint8_t MAGIC_BYTE = 0xA5;      // 帧同步魔术字
     constexpr uint8_t PROTOCOL_VERSION = 1;   // 协议版本
-    constexpr uint8_t MAX_PEERS = 5;          // 最大配对设备数
-    constexpr uint8_t CHANNEL = 1;            // 通信信道
-    
-    // 接收器MAC地址（需与接收器固件一致）
-    inline uint8_t RECEIVER_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x01};
-    // 车载端MAC地址（非 const，支持运行时修改）
-    inline uint8_t CAR_MAC[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x02};
+}
+
+namespace SpeedConfig {
+    constexpr uint8_t MIN_PWM = 0;    // 最小 PWM 占空比
+    constexpr uint8_t MAX_PWM = 255;  // 最大 PWM 占空比
 }
 
 namespace StreamConfig {
@@ -144,15 +121,19 @@ namespace StreamConfig {
     constexpr uint8_t JPEG_QUALITY_MAX = 50;  // 最大JPEG质量
 }
 
-// ============================================
-// 全局状态（可修改，非纯函数）
-// ============================================
-// 注意：使用 inline 确保头文件被多个翻译单元包含时只有一个定义
-// g_peerInfo 仅在 initializeWireless() 中用于添加 ESP-NOW peer，初始化后不再读取
-inline WirelessState g_wirelessState(
-    DeviceRole::CAR, 0
-);
-inline esp_now_peer_info_t g_peerInfo{};
+namespace UdpConfig {
+    constexpr uint16_t CONTROL_PORT = 9000;   // 控制命令 UDP 端口
+    constexpr uint16_t TELEMETRY_PORT = 9001; // 遥测数据 UDP 端口
+}
+
+namespace NetworkConfig {
+    constexpr const char* AP_SSID = "ESP-SmartCar";      // 软接入点 SSID
+    constexpr const char* AP_PASSWORD = "SmartCar2024";  // 软接入点密码
+    constexpr uint8_t AP_IP[4] = {192, 168, 4, 1};       // 接入点 IP
+    constexpr uint8_t CAR_IP[4] = {192, 168, 4, 2};      // 车载端固定 IP
+    constexpr uint8_t GATEWAY[4] = {192, 168, 4, 1};     // 默认网关
+    constexpr uint8_t SUBNET[4] = {255, 255, 255, 0};    // 子网掩码
+}
 
 // ============================================
 // 纯函数：数据包操作
@@ -185,7 +166,7 @@ inline bool validatePacket(const WirelessPacket& packet) {
 }
 
 /**
- * 创建命令数据包（非纯函数，内部维护序列号计数器）
+ * 创建命令数据包（非纯函数：内部维护序列号计数器）
  * 输入：命令类型，数据，速度
  * 输出：数据包
  */
@@ -193,7 +174,7 @@ inline WirelessPacket createCommandPacket(
     CommandType type, uint8_t data, uint8_t speed
 ) {
     static uint16_t seqCounter = 0;
-    
+
     WirelessPacket packet(
         WirelessConfig::MAGIC_BYTE,
         WirelessConfig::PROTOCOL_VERSION,
@@ -203,10 +184,9 @@ inline WirelessPacket createCommandPacket(
         ++seqCounter,
         0  // 校验和先设为0
     );
-    
-    // 计算校验和
+
     const uint8_t checksum = calculateChecksum(packet);
-    
+
     return WirelessPacket(
         packet.magic, packet.version, packet.type,
         packet.data, packet.speed, packet.seq,
@@ -233,149 +213,6 @@ inline WirelessPacket createStopPacket() {
  */
 inline WirelessPacket createStatusPacket() {
     return createCommandPacket(CommandType::STATUS, 0, 0);
-}
-
-// ============================================
-// 回调函数声明（由各 sketch 自行实现并注册）
-// ============================================
-
-/**
- * 发送回调函数声明
- * 各 sketch 可定义自己的实现
- */
-extern void onDataSent(const wifi_tx_info_t* info, esp_now_send_status_t status);
-
-/**
- * 接收回调函数声明
- * 各 sketch 必须定义自己的实现
- */
-extern void onDataRecv(const esp_now_recv_info* info, const uint8_t* incomingData, int len);
-
-// ============================================
-// 初始化函数（包含副作用）
-// ============================================
-
-/**
- * 初始化ESP-NOW
- * 输入：本机角色
- * 输出：是否成功
- * 
- * 注意：本函数不注册回调。各 sketch 应在 setup() 中自行调用
- * esp_now_register_send_cb() 和 esp_now_register_recv_cb() 注册自己的回调。
- */
-inline bool initializeWireless(DeviceRole role) {
-    // 初始化WiFi
-    WiFi.mode(WIFI_STA);
-    
-    // 初始化ESP-NOW
-    if (esp_now_init() != ESP_OK) {
-        Serial.println("[无线通信] ESP-NOW 初始化失败");
-        return false;
-    }
-    
-    // 添加配对设备
-    memset(&g_peerInfo, 0, sizeof(g_peerInfo));
-    
-    switch (role) {
-        case DeviceRole::CAR:
-            // 车载端配对接收器
-            memcpy(g_peerInfo.peer_addr, WirelessConfig::RECEIVER_MAC, 6);
-            break;
-        case DeviceRole::RECEIVER:
-            // 接收器配对车载端
-            memcpy(g_peerInfo.peer_addr, WirelessConfig::CAR_MAC, 6);
-            break;
-    }
-    
-    g_peerInfo.channel = WirelessConfig::CHANNEL;
-    g_peerInfo.encrypt = false;
-    
-    if (esp_now_add_peer(&g_peerInfo) != ESP_OK) {
-        Serial.println("[无线通信] 添加配对设备失败");
-        return false;
-    }
-    
-    Serial.println("[无线通信] ESP-NOW 初始化成功");
-    return true;
-}
-
-/**
- * 发送数据包
- * 输入：目标MAC，数据包
- * 输出：是否发送成功
- */
-inline bool sendPacket(const uint8_t* peerMac, const WirelessPacket& packet) {
-    // 使用局部缓冲区拷贝 MAC，避免 const_cast 修改只读数据
-    uint8_t macBuffer[6];
-    memcpy(macBuffer, peerMac, 6);
-    
-    const esp_err_t result = esp_now_send(
-        macBuffer,
-        reinterpret_cast<const uint8_t*>(&packet),
-        sizeof(packet)
-    );
-    
-    return result == ESP_OK;
-}
-
-/**
- * 通用原始数据发送函数
- * 用于发送非 WirelessPacket 类型的数据（如 OdometryPacket、VideoPacket）
- */
-inline bool sendRawPacket(const uint8_t* peerMac, const uint8_t* data, size_t len) {
-    uint8_t macBuffer[6];
-    memcpy(macBuffer, peerMac, 6);
-    
-    const esp_err_t result = esp_now_send(macBuffer, data, len);
-    return result == ESP_OK;
-}
-
-/**
- * 发送命令到接收器
- */
-inline bool sendToReceiver(const WirelessPacket& packet) {
-    return sendPacket(WirelessConfig::RECEIVER_MAC, packet);
-}
-
-/**
- * 发送命令到车载端
- */
-inline bool sendToCar(const WirelessPacket& packet) {
-    return sendPacket(WirelessConfig::CAR_MAC, packet);
-}
-
-/**
- * 设置目标车载端MAC地址
- * 输入：6字节MAC地址指针
- */
-inline void setTargetCarMac(const uint8_t* newMac) {
-    // 如果新MAC与当前MAC相同，跳过操作避免不必要的删除+重新添加
-    if (memcmp(WirelessConfig::CAR_MAC, newMac, 6) == 0) {
-        Serial.println("[无线通信] 车载端MAC未变化，跳过更新");
-        return;
-    }
-
-    // 保存旧 MAC，删除旧 peer，再添加新 peer
-    // esp_now_mod_peer 按 peer_addr 查找，用新 MAC 查不到旧 peer，需先删后加
-    uint8_t oldMac[6];
-    memcpy(oldMac, WirelessConfig::CAR_MAC, 6);
-
-    if (esp_now_del_peer(oldMac) != ESP_OK) {
-        Serial.println("[无线通信] 删除旧车载端配对信息失败");
-    }
-
-    esp_now_peer_info_t peerInfo = {};
-    memcpy(peerInfo.peer_addr, newMac, 6);
-    peerInfo.channel = WirelessConfig::CHANNEL;
-    peerInfo.encrypt = false;
-
-    if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-        Serial.println("[无线通信] 添加新车载端配对信息失败，MAC未更新");
-        return;  // 失败时不更新全局 MAC，避免指向未注册的 peer
-    }
-
-    memcpy(WirelessConfig::CAR_MAC, newMac, 6);
-    Serial.println("[无线通信] 车载端MAC更新成功");
 }
 
 #endif // WIRELESS_H

@@ -63,7 +63,7 @@ export interface BleDevice {
 export interface StatusData {
   serialStatus: string    // 串口连接状态（"未连接"/"连接中"/"已连接"/"错误: ..."）
   frameCount: number      // 已接收帧数
-  currentSpeed: number    // 当前速度等级（1-9）
+  currentSpeed: number    // 当前速度 PWM 占空比（0-255）
   wsClients: number       // WebSocket 连接数
   uptime: number          // 运行时长（秒）
   commandCount: number    // 已发送命令数
@@ -533,8 +533,12 @@ function createWebSocket() {
     }
   }
 
-  /** 发送速度设置 */
+  /** 发送速度设置（speed 为 0-255 PWM 占空比） */
   const sendSpeed = (speed: number): boolean => {
+    if (speed < 0 || speed > 255) {
+      console.error('[WebSocket] 速度值越界:', speed)
+      return false
+    }
     if (ws.value?.readyState !== WebSocket.OPEN) {
       return false
     }

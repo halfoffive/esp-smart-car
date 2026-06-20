@@ -40,7 +40,7 @@ desktop/backend/
 | `SerialConnectionState` | enum | `serial.rs` | 连接状态 |
 | `BleDevice` | struct | `lib.rs` | BLE 设备信息 |
 | `CommandRequest` | struct | `api.rs` | API 请求体 |
-| `StatusResponse` | struct | `api.rs` | API 响应体 |
+| `StatusResponse` | struct | `api.rs` | API 响应体；`current_speed` 表示 0-255 PWM |
 
 ## Conventions
 
@@ -90,5 +90,7 @@ cargo build --release  # 优化编译
 - **端口**：HTTP 服务器监听 8080，WebSocket 在 `/ws`
 - **串口**：默认 921600 波特率，支持动态连接/断开
 - **视频帧**：通过 WebSocket 发送 Base64 编码的 JPEG
+- **速度语义**：`StatusResponse.current_speed` 与共享状态 `current_speed` 均为 0-255 PWM
+- **串口协议**：PC → receiver_dongle 使用 12 字节二进制 `WirelessPacket`（含 checksum），不再使用单字符命令
 - **心跳**：30 秒间隔，防止连接超时
 - **CORS**：前端开发时启用跨域支持
