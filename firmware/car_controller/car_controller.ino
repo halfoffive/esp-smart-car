@@ -93,6 +93,18 @@ bool g_smartDriveEnabled = false;
 CameraConfiguration g_cameraConfig = createDefaultConfig();
 
 // ============================================
+// 编码器中断服务函数（定义在此处而非 odometer.h，避免 inline + IRAM_ATTR 导致的 literal pool 重定位错误）
+// ============================================
+
+void IRAM_ATTR onLeftEncoderPulse() {
+    OdometerState::g_leftPulses += 1;
+}
+
+void IRAM_ATTR onRightEncoderPulse() {
+    OdometerState::g_rightPulses += 1;
+}
+
+// ============================================
 // 命令处理函数
 // ============================================
 
@@ -108,8 +120,8 @@ void handleMoveCommand(const char cmd) {
   // 如果启用智能修正，应用PID修正
   if (g_smartDriveEnabled && cmd != ' ') {
     // 获取当前运动方向
-    MotorDirection leftDir = g_currentMotion.frontLeft.direction;
-    MotorDirection rightDir = g_currentMotion.frontRight.direction;
+    MotorDirection leftDir = g_currentMotion.left.direction;
+    MotorDirection rightDir = g_currentMotion.right.direction;
 
     // 只有前后运动才做直线修正（转弯不需要）
     if ((leftDir == MotorDirection::FORWARD && rightDir == MotorDirection::FORWARD) || (leftDir == MotorDirection::BACKWARD && rightDir == MotorDirection::BACKWARD)) {
@@ -515,7 +527,7 @@ void loop() {
   // 3. 检查通信超时
   if (!g_emergencyStop && (currentTime - g_lastCmdTime) > COMMAND_TIMEOUT_MS) {
     // 超过1秒未收到命令，自动停止
-    if (g_currentMotion.frontLeft.direction != MotorDirection::STOP) {
+    if (g_currentMotion.left.direction != MotorDirection::STOP) {
       g_currentMotion = createStopState();
       applyVehicleMotion(g_currentMotion);
 #if DEBUG_MOTOR

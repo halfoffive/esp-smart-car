@@ -45,19 +45,15 @@ struct MotorState {
 
 /**
  * 整车运动状态
- * 包含4个电机的独立状态
+ * 包含2个电机的独立状态（左/右，每路 L298N 通道并联驱动 2 个电机）
  */
 struct VehicleMotion {
-    MotorState frontLeft;   // 左前轮
-    MotorState frontRight;  // 右前轮
-    MotorState rearLeft;    // 左后轮
-    MotorState rearRight;   // 右后轮
-    
+    MotorState left;    // 左侧电机
+    MotorState right;   // 右侧电机
+
     constexpr VehicleMotion(
-        MotorState fl, MotorState fr,
-        MotorState rl, MotorState rr
-    ) : frontLeft(fl), frontRight(fr),
-        rearLeft(rl), rearRight(rr) {}
+        MotorState l, MotorState r
+    ) : left(l), right(r) {}
 };
 
 // ============================================
@@ -169,13 +165,9 @@ inline MotorState createMotorState(
  */
 inline VehicleMotion createStopState() {
     return VehicleMotion(
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN, 
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::STOP, 0),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN, 
-                   MotorDirection::STOP, 0),
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN, 
-                   MotorDirection::STOP, 0),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN, 
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::STOP, 0)
     );
 }
@@ -190,10 +182,6 @@ inline VehicleMotion createForwardState(const uint8_t speed) {
         MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::FORWARD, speed),
         MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::FORWARD, speed)
     );
 }
@@ -203,10 +191,6 @@ inline VehicleMotion createForwardState(const uint8_t speed) {
  */
 inline VehicleMotion createBackwardState(const uint8_t speed) {
     return VehicleMotion(
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::BACKWARD, speed),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::BACKWARD, speed),
         MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::BACKWARD, speed),
         MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
@@ -223,11 +207,7 @@ inline VehicleMotion createLeftTurnState(const uint8_t speed) {
         MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::BACKWARD, (speed + 1) / 2),  // 左侧慢速后退（奇数保持对称）
         MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::FORWARD, speed),         // 右侧正常前进
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::BACKWARD, (speed + 1) / 2),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::FORWARD, speed)
+                   MotorDirection::FORWARD, speed)          // 右侧正常前进
     );
 }
 
@@ -239,11 +219,7 @@ inline VehicleMotion createRightTurnState(const uint8_t speed) {
         MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::FORWARD, speed),         // 左侧正常前进
         MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::BACKWARD, (speed + 1) / 2),  // 右侧慢速后退（奇数保持对称）
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::BACKWARD, (speed + 1) / 2)
+                   MotorDirection::BACKWARD, (speed + 1) / 2)   // 右侧慢速后退（奇数保持对称）
     );
 }
 
@@ -252,10 +228,6 @@ inline VehicleMotion createRightTurnState(const uint8_t speed) {
  */
 inline VehicleMotion createInPlaceLeftState(const uint8_t speed) {
     return VehicleMotion(
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::BACKWARD, speed),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::FORWARD, speed),
         MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::BACKWARD, speed),
         MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
@@ -271,10 +243,6 @@ inline VehicleMotion createInPlaceRightState(const uint8_t speed) {
         MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    MotorDirection::FORWARD, speed),
         MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::BACKWARD, speed),
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                    MotorDirection::BACKWARD, speed)
     );
 }
@@ -285,10 +253,8 @@ inline VehicleMotion createInPlaceRightState(const uint8_t speed) {
  * 副作用：更新所有电机硬件
  */
 inline void applyVehicleMotion(const VehicleMotion& motion) {
-    applyMotorState(motion.frontLeft);
-    applyMotorState(motion.frontRight);
-    applyMotorState(motion.rearLeft);
-    applyMotorState(motion.rearRight);
+    applyMotorState(motion.left);
+    applyMotorState(motion.right);
 }
 
 /**
@@ -302,10 +268,6 @@ inline VehicleMotion createDifferentialState(
     MotorDirection rightDir, uint8_t rightSpeed
 ) {
     return VehicleMotion(
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   leftDir, leftSpeed),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   rightDir, rightSpeed),
         MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                    leftDir, leftSpeed),
         MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,

@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **前端定时器泄漏** — `useBackendHealth.ts` 增加 HMR dispose 清理；`useKeyboard.ts` 增加 `visibilitychange` 监听，标签页隐藏时立即停车并清理按键状态
 - **固件命令超时自动停止** — `car_controller.ino` 提取 `COMMAND_TIMEOUT_MS` 常量（1000ms），任何有效命令/心跳刷新时间戳，超时自动停车
 - **固件边界修复** — `car_controller.ino` 修复 `g_currentSpeed` 初始化；`video_stream.h` 修复视频包数组越界；`receiver_dongle.ino` 增加 `dataLen` 校验
+- **双电机模型简化** — `motor_control.h` `VehicleMotion` 从 4 字段（frontLeft/frontRight/rearLeft/rearRight）简化为 2 字段（left/right），匹配实际 2 路 L298N 硬件
+- **编码器中断修复** — `odometer.h` 中 ISR 改为声明，定义移至 `car_controller.ino`（非 `inline`），修复 `inline + IRAM_ATTR` 导致的 `dangerous relocation: l32r` 链接错误；触发沿从 `RISING` 改为 `FALLING`，对齐参考博客光电编码器设计
+- **AGENTS.md 同步** — 更新电机控制描述为双电机、编码器描述为光电编码器（光栅码盘 + 光敏元件），移除四电机残留表述
 
 ### 已知问题
 - `cargo test`/`cargo build` 在当前 Windows 环境（Rust 1.96.0 + Windows 11 Build 26200）下因 `std::process::Command::output` 返回 `Os { code: 0 }` 而失败，与本项目代码无关；完整复现报告见 `%TEMP%\rust_panic_report.md`

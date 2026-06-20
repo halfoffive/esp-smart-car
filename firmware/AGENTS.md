@@ -14,7 +14,7 @@ firmware/
 │           └── wireless.h   # 共享头文件（WirelessPacket、OdometryPacket、VideoPacket）
 ├── car_controller/          # 车载 ESP32-S3（Freenove FNK0085 单芯片架构）
 │   ├── car_controller.ino   # 主程序（摄像头采集 + 电机控制 + ESP-NOW 直发 + BLE 广播）
-│   ├── motor_control.h      # 函数式电机控制（L298N 驱动 4 个电机）
+│   ├── motor_control.h      # 函数式电机控制（L298N 驱动 2 个电机，左/右各一路）
 │   ├── odometer.h           # 编码器测速模块（GPIO 1/2 中断）
 │   ├── pid_control.h        # PID控制器（直线修正 + 航向锁定）
 │   ├── camera_config.h      # OV2640 摄像头配置（ESP32-S3 CAM 标准引脚）
@@ -27,7 +27,7 @@ firmware/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| 修改电机控制 | `car_controller/motor_control.h` | 纯函数，差速控制 |
+| 修改电机控制 | `car_controller/motor_control.h` | 纯函数，差速控制，双电机模型（left/right） |
 | 修改无线协议 | `libraries/wireless_protocol/src/wireless.h` | 12字节数据包 + 测速包 + 视频包 |
 | 修改测速模块 | `car_controller/odometer.h` | 编码器中断+速度计算 |
 | 修改PID控制 | `car_controller/pid_control.h` | 直线修正+航向锁定 |
@@ -41,7 +41,7 @@ firmware/
 | Symbol | Type | Location | Role |
 |--------|------|----------|------|
 | `MotorState` | struct | `motor_control.h` | 单个电机状态 |
-| `VehicleMotion` | struct | `motor_control.h` | 整车运动状态 |
+| `VehicleMotion` | struct | `motor_control.h` | 整车运动状态（left/right 双电机） |
 | `MotorDirection` | enum class | `motor_control.h` | 方向枚举 |
 | `WirelessPacket` | struct | `wireless.h` | 通信数据包（12字节） |
 | `OdometryPacket` | struct | `wireless.h` | 测速数据包 |
@@ -96,3 +96,4 @@ firmware/
 - **BLE 广播**：车载端广播 Manufacturer Data（Company ID 0xFFFF + WiFi MAC 6字节），接收器扫描时提取 WiFi MAC 用于 ESP-NOW 配对
 - **链路状态**：接收器收到 'P' 命令或每 5 秒主动上报 `{"t":"link",...}` JSON，后端解析后推送前端
 - **测速上报**：车载端每 200ms 通过 ESP-NOW 发送 `OdometryPacket`，接收器转为 JSON 转发到 PC
+- **编码器**：光电编码器（光栅码盘 + 光敏元件），GPIO 1/2，20 脉冲/圈，下降沿（FALLING）触发中断；ISR 函数定义在 `car_controller.ino` 中（非 `inline`），避免 `IRAM_ATTR` 重定位错误

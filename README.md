@@ -65,13 +65,14 @@ esp-smart-car/
 
 ### 驱动模块
 - **L298N 电机驱动模块** x2
-  - 控制 4 个直流电机
+  - 控制 2 路电机（左/右各一路，每路并联驱动 2 个直流电机）
   - 支持正转、反转、停止
   - PWM 调速
 
-- **霍尔编码器/红外编码器** x2
+- **光电编码器（光栅码盘 + 光敏元件）** x2
   - 左轮编码器：每圈20脉冲
   - 右轮编码器：每圈20脉冲
+  - 下降沿（FALLING）触发中断
   - 用于测速和直线修正
 
 ### 电机
@@ -271,6 +272,8 @@ cargo clippy       # 静态分析检查
   - 后端并发安全：`MutexExt` 锁污染自动恢复、串口 generation 防竞态、`video_task` 可安全取消 + 心跳超时
   - 前端：WebSocket 重入/心跳/连接超时、ControlPanel 状态回滚与错误提示、useApi 超时与 JSON 解析、定时器清理、标签页隐藏停车
   - 固件：命令超时自动停止常量 `COMMAND_TIMEOUT_MS`、视频包越界修复、receiver_dongle `dataLen` 校验
+  - 固件双电机简化：`motor_control.h` `VehicleMotion` 从 4 字段（frontLeft/frontRight/rearLeft/rearRight）改为 2 字段（left/right）
+  - 固件编码器修复：ISR 定义从 `odometer.h` 移至 `car_controller.ino`（非 `inline`），修复 `dangerous relocation` 链接错误；触发沿 `RISING`→`FALLING`，对齐参考博客光电编码器设计
   - 已知：当前 Windows + Rust 1.96.0 环境下 `cargo build` 因工具链 `Command::output` 返回 `Os { code: 0 }` 失败，与本项目代码无关，详见 `%TEMP%\rust_panic_report.md`
 
 - v1.9.1 - 2026-06-18

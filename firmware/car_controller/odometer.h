@@ -1,6 +1,6 @@
 /**
  * 测速模块 - 函数式编程风格
- * 基于 ESP32-S3（Freenove FNK0085），使用霍尔编码器或红外编码器测量轮速
+ * 基于 ESP32-S3（Freenove FNK0085），使用光电编码器（光栅码盘 + 光敏元件）测量轮速
  * 
  * 功能：
  * 1. 中断方式读取编码器脉冲
@@ -11,7 +11,7 @@
  * 硬件：
  * - 左轮编码器: GPIO 1 (中断引脚，S3 安全 GPIO)
  * - 右轮编码器: GPIO 2 (中断引脚，S3 安全 GPIO)
- * - 编码器: 霍尔传感器或红外对管，每圈N个脉冲
+ * - 编码器: 光电编码器（光栅码盘 + 光敏元件），每圈20个脉冲
  * 
  * 作者：智能车项目团队
  * 版本：1.3.0
@@ -28,7 +28,7 @@
 
 /**
  * 编码器配置
- * 记录编码器的硬件参数
+ * 记录编码器的硬件参数（光电编码器：光栅码盘 + 光敏元件）
  */
 struct EncoderConfig {
     uint8_t pin;              // 中断引脚
@@ -153,18 +153,16 @@ namespace OdometerState {
 /**
  * 左轮编码器中断
  * 每检测到一个脉冲递增计数
+ * 注意：函数定义在 car_controller.ino 中（非 inline），避免 inline + IRAM_ATTR 导致的 literal pool 重定位错误
  */
-inline void IRAM_ATTR onLeftEncoderPulse() {
-    OdometerState::g_leftPulses += 1;
-}
+void IRAM_ATTR onLeftEncoderPulse();
 
 /**
  * 右轮编码器中断
  * 每检测到一个脉冲递增计数
+ * 注意：函数定义在 car_controller.ino 中（非 inline），避免 inline + IRAM_ATTR 导致的 literal pool 重定位错误
  */
-inline void IRAM_ATTR onRightEncoderPulse() {
-    OdometerState::g_rightPulses += 1;
-}
+void IRAM_ATTR onRightEncoderPulse();
 
 // ============================================
 // 初始化函数
@@ -179,9 +177,9 @@ inline void initializeOdometer() {
     pinMode(OdometerConfig::RIGHT_ENCODER_PIN, INPUT_PULLUP);
     
     attachInterrupt(digitalPinToInterrupt(OdometerConfig::LEFT_ENCODER_PIN), 
-                    onLeftEncoderPulse, RISING);
+                    onLeftEncoderPulse, FALLING);
     attachInterrupt(digitalPinToInterrupt(OdometerConfig::RIGHT_ENCODER_PIN), 
-                    onRightEncoderPulse, RISING);
+                    onRightEncoderPulse, FALLING);
     
     OdometerState::g_leftPulses = 0;
     OdometerState::g_rightPulses = 0;
