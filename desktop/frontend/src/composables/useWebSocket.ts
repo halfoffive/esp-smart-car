@@ -20,6 +20,7 @@
 
 import { ref } from 'vue'
 import type { Ref } from 'vue'
+import { DEFAULT_API_TOKEN } from '../config/auth'
 
 /**
  * 构建 WebSocket URL
@@ -275,8 +276,8 @@ function createWebSocket() {
       return Promise.reject(new Error('连接正在进行中，请勿重复调用'))
     }
 
-    // 认证校验：未配置 token 时给出明确错误
-    const token = import.meta.env.VITE_API_TOKEN
+    // 认证校验：优先使用环境变量，否则使用默认 Token
+    const token = (import.meta.env.VITE_API_TOKEN as string | undefined) || DEFAULT_API_TOKEN
     if (!token) {
       isConnecting.value = false
       const error = 'VITE_API_TOKEN 未配置，请在 .env 文件中设置后刷新页面'

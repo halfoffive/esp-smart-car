@@ -16,6 +16,7 @@
 
 import { ref } from 'vue'
 import type { Ref } from 'vue'
+import { DEFAULT_API_TOKEN } from '../config/auth'
 
 /** 探测间隔（毫秒）：每 10 秒重试一次 */
 const CHECK_INTERVAL = 10000
@@ -51,7 +52,7 @@ function createBackendHealth(): BackendHealthInstance {
     if (isChecking) return
     isChecking = true
     try {
-      const token = import.meta.env.VITE_API_TOKEN
+      const token = (import.meta.env.VITE_API_TOKEN as string | undefined) || DEFAULT_API_TOKEN
       const headers: Record<string, string> = token
         ? { Authorization: `Bearer ${token}` }
         : {}

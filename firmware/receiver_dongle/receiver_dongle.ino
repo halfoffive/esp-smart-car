@@ -552,7 +552,8 @@ void setup() {
         ESP.restart();
     }
     WiFi.setTxPower(WIFI_POWER_20dBm);
-    Serial.printf("[WiFi_AP] 热点已启动: %s, IP: %s, 发射功率: 20 dBm\n", NetworkConfig::AP_SSID, WiFi.softAPIP().toString().c_str());
+    Serial.printf("[WiFi_AP] 热点已启动: %s, 密码: %s, IP: %s, 发射功率: 20 dBm\n",
+                  NetworkConfig::AP_SSID, NetworkConfig::AP_PASSWORD, WiFi.softAPIP().toString().c_str());
     
     // 启动 UDP 服务器
     g_udpControl.begin(UdpConfig::CONTROL_PORT);

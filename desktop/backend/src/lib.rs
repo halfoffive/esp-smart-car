@@ -122,7 +122,7 @@ impl AppState {
                 })
                 .or_else(|| {
                     let token = generate_api_token();
-                    info!("未设置 API_TOKEN，已自动生成随机 Token: {}", token);
+                    info!("未设置 API_TOKEN，使用默认 Token（本地开发）: {}", token);
                     Some(Arc::from(token))
                 })
         };
@@ -195,13 +195,10 @@ fn auth_disabled_from_env() -> bool {
         .unwrap_or(false)
 }
 
-fn generate_api_token() -> String {
-    use rand::distributions::Alphanumeric;
-    use rand::Rng;
+/// 默认 API Token（仅用于未显式配置 API_TOKEN 的本地开发/桌面端场景）
+/// 生产环境务必通过环境变量/API_TOKEN 设置强随机 Token
+const DEFAULT_API_TOKEN: &str = "esp-smart-car";
 
-    rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(32)
-        .map(char::from)
-        .collect()
+fn generate_api_token() -> String {
+    DEFAULT_API_TOKEN.to_string()
 }

@@ -253,21 +253,6 @@
       <p v-else class="text-[9px] text-dark-600">点击扫描发现周围蓝牙设备</p>
     </div>
 
-    <!-- 紧急停止（长按 500ms 触发，防误触） -->
-    <button
-      @mousedown="startEmergencyStop"
-      @mouseup="cancelEmergencyStop"
-      @mouseleave="cancelEmergencyStop"
-      :class="[
-        'btn-danger w-full py-2 text-sm font-bold select-none transition-all',
-        { 'opacity-70 scale-95': isEmergencyStopPressing }
-      ]"
-      :disabled="!backendAvailable"
-      aria-label="长按 500ms 紧急停止所有运动"
-    >
-      ⚠ 长按紧急停止
-    </button>
-    
     <!-- 系统日志 -->
     <div class="flex-1 min-h-0 flex flex-col">
       <h3 class="text-xs font-medium text-dark-300 mb-1">系统日志</h3>
@@ -341,12 +326,6 @@ const filteredBleDevices = computed(() => {
   )
 })
 
-/** 紧急停止长按定时器：500ms 后触发停止命令，防止误触 */
-let emergencyStopTimer: number | null = null
-/** 紧急停止是否正在长按中（用于 UI 反馈） */
-const isEmergencyStopPressing = ref(false)
-/** 紧急停止长按触发阈值（毫秒） */
-const EMERGENCY_STOP_DELAY = 500
 /** MAC 地址格式校验：AA:BB:CC:DD:EE:FF */
 const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/
 
@@ -548,30 +527,6 @@ const disconnect = async () => {
   wsDisconnect()
 }
 
-/**
- * 紧急停止长按开始：启动 500ms 定时器
- * 定时器触发时发送停止命令，防止误触
- */
-const startEmergencyStop = () => {
-  if (emergencyStopTimer !== null) return
-  isEmergencyStopPressing.value = true
-  emergencyStopTimer = window.setTimeout(() => {
-    sendCommand(' ')
-    addLog('紧急停止！', 'error')
-    emergencyStopTimer = null
-    isEmergencyStopPressing.value = false
-  }, EMERGENCY_STOP_DELAY)
-}
-
-/** 紧急停止长按取消：清除定时器（未到 500ms 释放则不触发） */
-const cancelEmergencyStop = () => {
-  if (emergencyStopTimer !== null) {
-    clearTimeout(emergencyStopTimer)
-    emergencyStopTimer = null
-  }
-  isEmergencyStopPressing.value = false
-}
-
 /** 扫描可用串口：调用 /api/ports 获取列表并填充下拉框（兜底手动扫描） */
 const scanPorts = async () => {
   isScanning.value = true
@@ -609,11 +564,6 @@ onUnmounted(() => {
   if (speedDebounceTimer !== null) {
     clearTimeout(speedDebounceTimer)
     speedDebounceTimer = null
-  }
-  // 清理紧急停止长按定时器
-  if (emergencyStopTimer !== null) {
-    clearTimeout(emergencyStopTimer)
-    emergencyStopTimer = null
   }
   // 清理 BLE 扫描超时定时器
   if (bleScanTimeoutId !== null) {

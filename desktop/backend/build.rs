@@ -23,8 +23,6 @@ fn main() {
     };
 
     if need_rebuild {
-        println!("cargo:warning=前端构建产物不存在或已过期，正在自动构建前端...");
-
         // 检查 bun 是否可用
         let bun_check = Command::new("bun").arg("--version").output();
 
@@ -90,7 +88,7 @@ fn main() {
 
         match build_result {
             Ok(status) if status.success() => {
-                println!("cargo:warning=前端构建成功");
+                // 构建成功，静默处理
             }
             Ok(status) => {
                 panic!("前端构建失败，退出码: {:?}", status.code());
