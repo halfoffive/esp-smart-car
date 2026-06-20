@@ -42,7 +42,7 @@ esp-smart-car/
 | `wireless.h` | library | `firmware/libraries/wireless_protocol/src/wireless.h` | WiFi/UDP application-layer packet format definitions |
 | `CameraConfig` | struct | `firmware/car_controller/camera_config.h` | OV2640 configuration |
 | `video_stream.h` | library | `firmware/car_controller/video_stream.h` | Frame transmission (WiFi UDP direct) |
-| `SerialManager` | struct | `serial.rs` | USB serial communication |
+| `SerialManager` | struct | serial.rs | USB-CDC/JTAG 虚拟串口通信；维护 `frames_received`/`frames_decoded`/`frames_broadcasted` 帧计数器 |
 | `WebSocketManager` | struct | `websocket.rs` | Client connection management |
 | `AppState` | struct | `lib.rs` | Shared application state |
 | `Assets` | struct | `main.rs` | `rust-embed` static file embedding |
@@ -134,11 +134,12 @@ Key connections:
 
 - **Power isolation**: Motor power and logic power must be separate
 - **Ground common**: All devices must share common ground
-- **Baud rate**: 921600 for USB serial (high-speed video)
+- **USB-CDC/JTAG**: ESP32-C6 的 `Serial` 通过内置 USB Serial/JTAG 控制器输出为 USB-CDC 虚拟串口，并非真实 UART；`921600` 仅为兼容传统串口 API 的波特率参数，实际吞吐由 USB Full Speed 控制器决定
 - **S3 单芯片架构**: 车载 ESP32-S3 (Freenove FNK0085) 同时承担摄像头采集 + 电机控制 + 编码器测速 + PID + WiFi STA UDP 收发；S3 不再进行 BLE 广播
 - **WiFi 链路**: C6 作为固定 AP（SSID "ESP-SmartCar" / 密码 "SmartCar2024" / IP 192.168.4.1 / 最大功率），S3 作为 STA 使用静态 IP 192.168.4.2
 - **UDP 端口**: 控制命令走 9000（C6→S3），遥测/视频走 9001（S3→C6），应用层继续使用 WirelessPacket/OdometryPacket/VideoPacket
 - **Video buffer**: 32768 bytes for frame reassembly
+- **帧计数器**: `SerialManager` 维护 `frames_received`/`frames_decoded`/`frames_broadcasted` 计数器，并通过每秒 `status` WebSocket 消息暴露；固件 `receiver_dongle.ino` 每 5 秒输出 `[STATS] packets=... frames=... bytes=...` 日志
 - **Timeout protection**: 1-second auto-stop if no commands received
 - **Speed control**: `WirelessPacket.speed` carries motor PWM directly as 0-255; keyboard keys 1-9 are shortcuts mapped to PWM values
 - **BLE scan**: Receiver handles `CommandType::BLE_SCAN = 10` locally for generic peripheral scanning

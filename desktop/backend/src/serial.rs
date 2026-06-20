@@ -24,13 +24,13 @@ use base64::Engine;
 use serialport::{SerialPort, SerialPortType};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
-use zune_jpeg::JpegDecoder;
+use webp_rust::{encode_lossy, ImageBuffer};
 use zune_jpeg::zune_core::bytestream::ZCursor;
 use zune_jpeg::zune_core::colorspace::ColorSpace;
 use zune_jpeg::zune_core::options::DecoderOptions;
-use webp_rust::{encode_lossy, ImageBuffer};
+use zune_jpeg::JpegDecoder;
 
-use crate::{AppState, MutexExt};
+use crate::{AppState, MutexExt, SharedVideoFrame};
 
 /// 尝试将 JPEG 帧转码为 WebP（纯 Rust，无需 libwebp）
 /// 成功且体积更小时返回 WebP 字节，否则返回 None
@@ -38,7 +38,7 @@ fn try_encode_webp(jpeg: &[u8]) -> Option<Vec<u8>> {
     let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
     let mut decoder = JpegDecoder::new_with_options(ZCursor::new(jpeg), options);
     let rgba = decoder.decode().ok()?;
-    let info = decoder.info().ok()?;
+    let info = decoder.info()?;
     let width = info.width as usize;
     let height = info.height as usize;
     if rgba.len() != width * height * 4 {
@@ -50,6 +50,34 @@ fn try_encode_webp(jpeg: &[u8]) -> Option<Vec<u8>> {
         rgba,
     };
     encode_lossy(&image, 1, 60, None).ok()
+}
+
+/// 处理一帧视频数据：可选 WebP 转码、Base64 编码、计算哈希
+/// 在 spawn_blocking 中执行，避免阻塞 async 运行时
+pub fn process_video_frame(state: Arc<AppState>, data: Vec<u8>) -> Option<SharedVideoFrame> {
+    // 可选：尝试转码为 WebP，以减小 WebSocket 传输体积
+    let (frame_bytes, frame_format): (Vec<u8>, &str) = if state.use_webp {
+        match try_encode_webp(&data) {
+            Some(webp) if webp.len() < data.len() => (webp, "webp"),
+            _ => (data, "jpeg"),
+        }
+    } else {
+        (data, "jpeg")
+    };
+
+    // Base64 编码视频帧
+    let b64_data = base64::engine::general_purpose::STANDARD.encode(&frame_bytes);
+
+    // 计算哈希
+    let mut hasher = DefaultHasher::new();
+    b64_data.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    Some(SharedVideoFrame {
+        b64: Arc::new(b64_data),
+        format: Arc::from(frame_format),
+        hash,
+    })
 }
 
 /// 测速数据
@@ -166,6 +194,12 @@ pub struct SerialManager {
     pub state: SerialConnectionState,
     /// 已接收的帧数
     pub frame_count: u32,
+    /// 已接收的视频帧数（含解码失败的帧）
+    pub frames_received: u64,
+    /// 已成功解码的视频帧数
+    pub frames_decoded: u64,
+    /// 已成功通过 WebSocket 发送的视频帧数
+    pub frames_broadcasted: u64,
     /// 已发送的字节数
     pub bytes_sent: u64,
     /// 已发送的控制/速度/模式命令数
@@ -193,6 +227,9 @@ impl SerialManager {
             write_port: None,
             state: SerialConnectionState::Disconnected,
             frame_count: 0,
+            frames_received: 0,
+            frames_decoded: 0,
+            frames_broadcasted: 0,
             bytes_sent: 0,
             command_count: 0,
             port_generation: 0,
@@ -527,6 +564,14 @@ impl SerialManager {
                     }
 
                     if b == FRAME_HEADER[0] {
+                        // 仅在行边界（line_buf 为空或以 \n 结尾）时才识别视频帧头，
+                        // 防止 JSON 数据中的 0xAA 0x55 被误解析为视频帧。
+                        let at_boundary = line_buf.is_empty() || line_buf.last() == Some(&b'\n');
+                        if !at_boundary {
+                            line_buf.push(b);
+                            continue;
+                        }
+
                         // 可能是帧头起始，尝试读取第二个字节
                         let mut second = [0u8; 1];
                         match port.read(&mut second) {
@@ -542,7 +587,8 @@ impl SerialManager {
                                     match Self::read_frame_data(port) {
                                         Ok(Some(frame_data)) => {
                                             results.push(SerialReadResult::VideoFrame(frame_data));
-                                            return Ok(results);
+                                            // 继续读取，尽量排空串口积压的帧
+                                            continue;
                                         }
                                         Ok(None) => {
                                             // 无效帧，流对齐恢复已完成
@@ -578,7 +624,8 @@ impl SerialManager {
                                                                     frame_data,
                                                                 ),
                                                             );
-                                                            return Ok(results);
+                                                            // 继续读取，尽量排空串口积压的帧
+                                                            continue;
                                                         }
                                                         Ok(None) => {
                                                             if !results.is_empty() {
@@ -602,10 +649,7 @@ impl SerialManager {
                                                 continue;
                                             }
                                             Err(e) => {
-                                                return Err(anyhow::anyhow!(
-                                                    "串口读取错误: {}",
-                                                    e
-                                                ));
+                                                return Err(anyhow::anyhow!("串口读取错误: {}", e));
                                             }
                                         }
                                     } else {
@@ -663,7 +707,11 @@ impl SerialManager {
             return;
         }
         let buf = std::mem::take(line_buf);
-        if let Ok(line) = String::from_utf8(buf) {
+        if let Ok(mut line) = String::from_utf8(buf) {
+            // 去除 CRLF 中的 \r，兼容固件使用 \r\n 行结束的场景
+            if line.ends_with('\r') {
+                line.pop();
+            }
             results.push(SerialReadResult::OdometryLine(line));
         }
     }
@@ -720,8 +768,12 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                 };
 
                 // 不持锁执行长时间 I/O（5秒拆分为 100ms 短循环，支持 generation 检查）
-                let result =
-                    SerialManager::read_next(&mut port, &state_clone, taken_generation, &read_cancel_clone);
+                let result = SerialManager::read_next(
+                    &mut port,
+                    &state_clone,
+                    taken_generation,
+                    &read_cancel_clone,
+                );
 
                 // 统计本次读取的视频帧数
                 let frame_count_delta: u32 = match &result {
@@ -773,6 +825,13 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                     for item in items {
                         match item {
                             SerialReadResult::VideoFrame(data) => {
+                                // 统计从串口接收到的视频帧数（含后续解码失败的情况）
+                                {
+                                    let mut manager =
+                                        state.serial_manager.lock_or_panic("serial_manager");
+                                    manager.frames_received += 1;
+                                }
+
                                 let size = data.len();
 
                                 // 首帧到达日志
@@ -785,48 +844,31 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                                 frame_count_period += 1;
                                 bytes_total_period += size as u64;
 
-                                // 可选：尝试转码为 WebP，以减小 WebSocket 传输体积
-                                let (frame_bytes, frame_format): (Vec<u8>, &str) = if state.use_webp {
-                                    match try_encode_webp(&data) {
-                                        Some(webp) if webp.len() < data.len() => (webp, "webp"),
-                                        _ => (data, "jpeg"),
+                                // 视频帧处理（WebP 转码 + Base64 + 哈希）是 CPU 密集型操作，
+                                // 且持有 serial_manager 锁期间不应阻塞 async 运行时，
+                                // 因此在 spawn_blocking 中执行。
+                                let state_clone = Arc::clone(&state);
+                                let frame = match tokio::task::spawn_blocking(move || {
+                                    process_video_frame(state_clone, data)
+                                })
+                                .await
+                                {
+                                    Ok(Some(frame)) => Some(frame),
+                                    Ok(None) => None,
+                                    Err(e) => {
+                                        warn!("视频帧处理任务异常: {}", e);
+                                        None
                                     }
-                                } else {
-                                    (data, "jpeg")
                                 };
 
-                                // Base64 编码视频帧，存储共享引用避免每客户端重复编码
-                                let b64_data =
-                                    base64::engine::general_purpose::STANDARD.encode(&frame_bytes);
-
-                                // 计算哈希（共享，避免每客户端重复计算）
-                                let mut hasher = DefaultHasher::new();
-                                b64_data.hash(&mut hasher);
-                                let hash = hasher.finish();
-
-                                let b64_arc = Arc::new(b64_data);
-                                let format_arc: Arc<str> = Arc::from(frame_format);
-
-                                // 存储 Base64 编码结果，供 WebSocket 客户端共享读取
-                                {
-                                    let mut b64 = state
-                                        .video_frame_b64
-                                        .lock_or_recover("video_frame_b64");
-                                    *b64 = Some(b64_arc);
-                                }
-                                // 存储帧格式
-                                {
-                                    let mut fmt = state
-                                        .video_frame_format
-                                        .lock_or_recover("video_frame_format");
-                                    *fmt = format_arc;
-                                }
-                                // 存储哈希值，供 WebSocket 客户端共享读取
-                                {
-                                    let mut h = state
-                                        .video_frame_hash
-                                        .lock_or_recover("video_frame_hash");
-                                    *h = Some(hash);
+                                if let Some(frame) = frame {
+                                    *state.video_frame.lock_or_recover("video_frame") = Some(frame);
+                                    // 统计成功解码的视频帧数
+                                    {
+                                        let mut manager =
+                                            state.serial_manager.lock_or_panic("serial_manager");
+                                        manager.frames_decoded += 1;
+                                    }
                                 }
                             }
                             SerialReadResult::OdometryLine(line) => {
@@ -929,11 +971,15 @@ pub async fn run_port_scan_task(state: std::sync::Arc<AppState>) {
     info!("串口扫描任务启动");
 
     loop {
-        // 获取当前可用串口列表（仅提取端口名称）
-        let new_ports: Vec<String> = SerialManager::list_ports()
-            .into_iter()
-            .map(|(name, _info)| name)
-            .collect();
+        // 串口枚举可能阻塞，放入 spawn_blocking
+        let new_ports: Vec<String> =
+            match tokio::task::spawn_blocking(SerialManager::list_ports).await {
+                Ok(ports) => ports.into_iter().map(|(name, _info)| name).collect(),
+                Err(e) => {
+                    warn!("扫描串口任务异常: {}", e);
+                    Vec::new()
+                }
+            };
 
         // 与上次扫描结果比较
         let changed = {

@@ -175,6 +175,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         let mut last_link_status: Option<crate::serial::LinkStatus> = None;
 
         loop {
+            // 本迭代是否成功发送了新的视频帧
+            let mut frame_sent = false;
+
             // 检查取消信号
             if video_cancel.is_cancelled() {
                 debug!("视频广播任务收到取消信号，优雅退出");
@@ -184,9 +187,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             // 心跳超时检测：客户端 90 秒未发送心跳，判定为死连接
             // 心跳间隔为 30 秒，允许 3 次心跳丢失的容错
             {
-                let last_hb = video_heartbeat
-                    .lock()
-                    .expect("客户端心跳锁不应中毒");
+                let last_hb = video_heartbeat.lock().expect("客户端心跳锁不应中毒");
                 if last_hb.elapsed() > std::time::Duration::from_secs(90) {
                     warn!(
                         "客户端 #{} 心跳超时（{}秒），主动断开连接",
@@ -247,18 +248,16 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
 
-            // 获取视频帧、格式和预计算的哈希值（共享，避免每客户端重复计算）
-            let (frame_b64, frame_hash, frame_format): (Option<Arc<String>>, Option<u64>, Arc<str>) = {
-                let b64 = video_state
-                    .video_frame_b64
-                    .lock_or_recover("video_frame_b64");
-                let h = video_state
-                    .video_frame_hash
-                    .lock_or_recover("video_frame_hash");
-                let fmt = video_state
-                    .video_frame_format
-                    .lock_or_recover("video_frame_format");
-                (b64.clone(), *h, fmt.clone())
+            // 获取共享视频帧（单锁保证 b64/format/hash 三者一致）
+            let (frame_b64, frame_hash, frame_format): (
+                Option<Arc<String>>,
+                Option<u64>,
+                Arc<str>,
+            ) = {
+                let vf = video_state.video_frame.lock_or_recover("video_frame");
+                vf.as_ref()
+                    .map(|f| (Some(f.b64.clone()), Some(f.hash), f.format.clone()))
+                    .unwrap_or((None, None, Arc::from("jpeg")))
             };
 
             if let (Some(b64_data), Some(hash)) = (frame_b64.as_ref(), frame_hash) {
@@ -276,7 +275,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     });
 
                     match video_tx.try_send(Message::Text(message.to_string().into())) {
-                        Ok(()) => {}
+                        Ok(()) => {
+                            frame_sent = true;
+                            let mut manager =
+                                video_state.serial_manager.lock_or_recover("serial_manager");
+                            manager.frames_broadcasted += 1;
+                        }
                         Err(mpsc::error::TrySendError::Full(_)) => {
                             // channel 已满（客户端处理慢），丢弃当前视频帧（视频流可容忍丢帧）
                             video_state.warn_throttled(
@@ -400,7 +404,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             // 状态广播（每秒推送，替代前端 /api/status 轮询）
             if last_status_send.elapsed() >= std::time::Duration::from_secs(1) {
                 last_status_send = Instant::now();
-                let (serial_status, frame_count, command_count) = {
+                let (
+                    serial_status,
+                    frame_count,
+                    command_count,
+                    frames_received,
+                    frames_decoded,
+                    frames_broadcasted,
+                ) = {
                     let manager = video_state.serial_manager.lock_or_recover("serial_manager");
                     let status_str = match &manager.state {
                         SerialConnectionState::Disconnected => "未连接".to_string(),
@@ -410,7 +421,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         }
                         SerialConnectionState::Error(msg) => format!("错误:{}", msg),
                     };
-                    (status_str, manager.frame_count, manager.command_count)
+                    (
+                        status_str,
+                        manager.frame_count,
+                        manager.command_count,
+                        manager.frames_received,
+                        manager.frames_decoded,
+                        manager.frames_broadcasted,
+                    )
                 };
                 let current_speed = video_state.current_speed.load(Ordering::Relaxed);
                 let current_drive_mode = video_state.current_drive_mode.load(Ordering::Relaxed);
@@ -424,6 +442,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     "type": "status",
                     "serial_status": serial_status,
                     "frame_count": frame_count,
+                    "frames_received": frames_received,
+                    "frames_decoded": frames_decoded,
+                    "frames_broadcasted": frames_broadcasted,
                     "current_speed": current_speed,
                     "drive_mode": current_drive_mode,
                     "ws_clients": ws_clients,
@@ -446,13 +467,14 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
 
-            // 使用 select! 等待帧率间隔或取消信号
-            // 间隔缩短到 5ms，让新帧到达后能尽快发出，而不是被 33ms 限制在 ~30 FPS
-            tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_millis(5)) => {}
-                _ = video_cancel.cancelled() => {
-                    debug!("视频广播任务收到取消信号，优雅退出");
-                    break;
+            // 仅在未发送新帧时短暂等待，确保新帧到达后能立即被发出
+            if !frame_sent {
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(1)) => {}
+                    _ = video_cancel.cancelled() => {
+                        debug!("视频广播任务收到取消信号，优雅退出");
+                        break;
+                    }
                 }
             }
         }
@@ -525,12 +547,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 /// - bytes[4] = speed
 /// - bytes[5..7] = seq (little-endian u16)
 /// - bytes[7] = checksum（bytes[0..7] 累加和的低 8 位）
-pub(crate) fn build_wireless_packet(
-    type_value: u8,
-    data: u8,
-    speed: u8,
-    seq: u16,
-) -> [u8; 8] {
+pub(crate) fn build_wireless_packet(type_value: u8, data: u8, speed: u8, seq: u16) -> [u8; 8] {
     let mut packet = [0u8; 8];
     packet[0] = 0xA5;
     packet[1] = 1;
@@ -553,6 +570,34 @@ async fn send_error(tx: &mpsc::Sender<Message>, msg: &str) {
     });
     if let Err(e) = tx.send(Message::Text(error.to_string().into())).await {
         debug!("发送错误消息失败（客户端可能已断开）: {}", e);
+    }
+}
+
+/// 在 spawn_blocking 中执行串口发送，避免阻塞 async 运行时
+async fn send_packet_blocking(
+    state: &Arc<AppState>,
+    packet: [u8; 8],
+    tx: &mpsc::Sender<Message>,
+    error_msg: &str,
+) -> anyhow::Result<()> {
+    let state_clone = Arc::clone(state);
+    match tokio::task::spawn_blocking(move || {
+        let mut manager = state_clone.serial_manager.lock_or_panic("serial_manager");
+        manager.send_packet(&packet)
+    })
+    .await
+    {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => {
+            let msg = format!("{}: {}", error_msg, e);
+            send_error(tx, &msg).await;
+            Err(anyhow::anyhow!(msg))
+        }
+        Err(e) => {
+            let msg = format!("发送任务异常: {}", e);
+            send_error(tx, &msg).await;
+            Err(anyhow::anyhow!(msg))
+        }
     }
 }
 
@@ -595,15 +640,9 @@ async fn handle_message(
             let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
             let packet = build_wireless_packet(type_value, packet_data, packet_speed, seq);
 
-            {
-                let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                if let Err(e) = manager.send_packet(&packet) {
-                    warn!("命令发送失败: {}", e);
-                    return Err(anyhow::anyhow!("命令发送失败: {}", e));
-                }
-                // 节流式命令转发日志：相同命令 1 秒内只记一次
-                state.log_command_forward(cmd_byte);
-            }
+            send_packet_blocking(state, packet, tx, "速度命令发送失败").await?;
+            // 节流式命令转发日志：相同命令 1 秒内只记一次
+            state.log_command_forward(cmd_byte);
         }
         "speed" => {
             // 速度设置（0-255 PWM）：生成 SPEED 数据包并通过串口发送
@@ -617,13 +656,7 @@ async fn handle_message(
 
             let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
             let packet = build_wireless_packet(2, 0, speed, seq);
-            {
-                let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                if let Err(e) = manager.send_packet(&packet) {
-                    warn!("速度命令发送失败: {}", e);
-                    return Err(anyhow::anyhow!("速度命令发送失败: {}", e));
-                }
-            }
+            send_packet_blocking(state, packet, tx, "速度命令发送失败").await?;
             state.current_speed.store(speed, Ordering::Relaxed);
             info!("设置速度: {}", speed);
         }
@@ -649,13 +682,7 @@ async fn handle_message(
 
             let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
             let packet = build_wireless_packet(9, mode, 0, seq);
-            {
-                let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                if let Err(e) = manager.send_packet(&packet) {
-                    warn!("行走模式命令发送失败: {}", e);
-                    return Err(anyhow::anyhow!("行走模式命令发送失败: {}", e));
-                }
-            }
+            send_packet_blocking(state, packet, tx, "行走模式命令发送失败").await?;
             state.current_drive_mode.store(mode, Ordering::Relaxed);
             info!("切换行走模式: {}", mode);
         }
@@ -663,13 +690,7 @@ async fn handle_message(
             // 触发接收器 BLE 扫描：通过串口发送 BLE_SCAN 数据包
             let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
             let packet = build_wireless_packet(10, 0, 0, seq);
-            {
-                let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                if let Err(e) = manager.send_packet(&packet) {
-                    warn!("BLE 扫描命令发送失败: {}", e);
-                    return Err(anyhow::anyhow!("BLE 扫描命令发送失败: {}", e));
-                }
-            }
+            send_packet_blocking(state, packet, tx, "BLE 扫描命令发送失败").await?;
             info!("已触发 BLE 扫描");
         }
         _ => {
@@ -774,7 +795,9 @@ mod tests {
         let (result, messages) = call_handle_message(&state, msg).await;
         assert!(result.is_ok(), "未知命令不应导致 handle_message 返回 Err");
         assert!(
-            messages.iter().any(|m| matches!(m, Message::Text(t) if t.contains("未知命令字符"))),
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::Text(t) if t.contains("未知命令字符"))),
             "未知命令应收到 error 消息"
         );
     }
@@ -800,19 +823,23 @@ mod tests {
         let state = create_test_state();
 
         // 超出 u8 范围
-        let (result, messages) = call_handle_message(&state, r#"{"type":"speed","data":"256"}"#).await;
+        let (result, messages) =
+            call_handle_message(&state, r#"{"type":"speed","data":"256"}"#).await;
         assert!(result.is_ok(), "非法速度不应导致 handle_message 返回 Err");
         assert!(
-            messages.iter().any(|m| matches!(m, Message::Text(t) if t.contains("速度值非法"))),
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::Text(t) if t.contains("速度值非法"))),
             "非法速度应收到 error 消息"
         );
 
         // 非数字
-        let (result, messages) = call_handle_message(&state, r#"{"type":"speed","data":"fast"}"#).await;
+        let (result, messages) =
+            call_handle_message(&state, r#"{"type":"speed","data":"fast"}"#).await;
         assert!(result.is_ok());
-        assert!(
-            messages.iter().any(|m| matches!(m, Message::Text(t) if t.contains("速度值非法")))
-        );
+        assert!(messages
+            .iter()
+            .any(|m| matches!(m, Message::Text(t) if t.contains("速度值非法"))));
     }
 
     /// 测试 handle_message 处理行走模式切换消息（无串口连接时返回错误）
@@ -842,7 +869,9 @@ mod tests {
             call_handle_message(&state, r#"{"type":"drive_mode","mode":3}"#).await;
         assert!(result.is_ok(), "越界模式不应导致 handle_message 返回 Err");
         assert!(
-            messages.iter().any(|m| matches!(m, Message::Text(t) if t.contains("越界"))),
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::Text(t) if t.contains("越界"))),
             "越界模式应收到 error 消息"
         );
 
@@ -850,7 +879,9 @@ mod tests {
         let (result, messages) = call_handle_message(&state, r#"{"type":"drive_mode"}"#).await;
         assert!(result.is_ok());
         assert!(
-            messages.iter().any(|m| matches!(m, Message::Text(t) if t.contains("缺少有效的 mode"))),
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::Text(t) if t.contains("缺少有效的 mode"))),
             "缺少 mode 应收到 error 消息"
         );
     }
@@ -878,7 +909,9 @@ mod tests {
             result
         );
         assert!(
-            messages.iter().any(|m| matches!(m, Message::Text(t) if t.contains("未知消息类型"))),
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::Text(t) if t.contains("未知消息类型"))),
             "未知消息类型应收到 error 消息"
         );
     }
@@ -902,7 +935,10 @@ mod tests {
 
         // 验证按客户端心跳时间已更新
         let updated = *heartbeat.lock().expect("心跳锁不应中毒");
-        assert!(updated.elapsed() < std::time::Duration::from_millis(100), "心跳时间应在处理后更新");
+        assert!(
+            updated.elapsed() < std::time::Duration::from_millis(100),
+            "心跳时间应在处理后更新"
+        );
 
         // 心跳消息不应产生任何回复
         drop(tx);

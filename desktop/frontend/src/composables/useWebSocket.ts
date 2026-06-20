@@ -476,7 +476,8 @@ function createWebSocket() {
           // 首次连接失败时（尚未 resolve），reject Promise
           if (!resolved && !rejected) {
             finalizeReject(event.wasClean ? 'WebSocket 连接已关闭' : 'WebSocket 连接失败')
-            return
+            // 重连失败时不 return，继续执行下方的自动重连逻辑
+            if (!isRetry) return
           }
 
           // 自动重连（仅在非主动断开且未超过最大重试次数时）

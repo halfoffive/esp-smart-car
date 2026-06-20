@@ -63,18 +63,25 @@ impl<T> MutexExt<T> for Mutex<T> {
     }
 }
 
+/// 共享视频帧数据（原子发布给所有 WebSocket 客户端）
+#[derive(Clone)]
+pub struct SharedVideoFrame {
+    /// Base64 编码后的帧数据
+    pub b64: Arc<String>,
+    /// 帧格式："jpeg" 或 "webp"
+    pub format: Arc<str>,
+    /// 帧哈希（用于 WebSocket 去重）
+    pub hash: u64,
+}
+
 /// 应用状态（共享状态）
 pub struct AppState {
     /// 串口连接管理器（使用 std::sync::Mutex，因为串口 I/O 是阻塞的）
     pub serial_manager: Arc<std::sync::Mutex<serial::SerialManager>>,
     /// WebSocket连接管理器（使用 std::sync::Mutex，操作均为内存操作，不跨 .await 持锁）
     pub ws_manager: Arc<std::sync::Mutex<websocket::WebSocketManager>>,
-    /// 视频帧 Base64 编码数据（共享引用，避免每客户端重复编码）
-    pub video_frame_b64: Arc<std::sync::Mutex<Option<Arc<String>>>>,
-    /// 视频帧格式（"jpeg" 或 "webp"）
-    pub video_frame_format: Arc<std::sync::Mutex<Arc<str>>>,
-    /// 视频帧哈希值（共享，避免每客户端重复计算）
-    pub video_frame_hash: Arc<std::sync::Mutex<Option<u64>>>,
+    /// 共享视频帧（Base64、格式、哈希统一保护，避免三锁读到不一致状态）
+    pub video_frame: Arc<std::sync::Mutex<Option<SharedVideoFrame>>>,
     /// 是否启用 WebP 转码（默认 false，通过 USE_WEBP=true 开启）
     pub use_webp: bool,
 
@@ -125,9 +132,8 @@ impl AppState {
                     Arc::from(s)
                 })
                 .or_else(|| {
-                    let token = generate_api_token();
-                    info!("未设置 API_TOKEN，使用默认 Token（本地开发）: {}", token);
-                    Some(Arc::from(token))
+                    info!("未设置 API_TOKEN，使用默认 Token（本地开发）: {}", DEFAULT_API_TOKEN);
+                    Some(Arc::from(DEFAULT_API_TOKEN))
                 })
         };
 
@@ -150,9 +156,7 @@ impl AppState {
         Self {
             serial_manager: Arc::new(std::sync::Mutex::new(serial::SerialManager::new())),
             ws_manager: Arc::new(std::sync::Mutex::new(websocket::WebSocketManager::new())),
-            video_frame_b64: Arc::new(std::sync::Mutex::new(None)),
-            video_frame_format: Arc::new(std::sync::Mutex::new(Arc::from("jpeg"))),
-            video_frame_hash: Arc::new(std::sync::Mutex::new(None)),
+            video_frame: Arc::new(std::sync::Mutex::new(None)),
             use_webp,
 
             current_speed: AtomicU8::new(128),
@@ -208,10 +212,6 @@ fn auth_disabled_from_env() -> bool {
         .unwrap_or(false)
 }
 
-/// 默认 API Token（仅用于未显式配置 API_TOKEN 的本地开发/桌面端场景）
-/// 生产环境务必通过环境变量/API_TOKEN 设置强随机 Token
+/// 默认 API Token（未显式配置 API_TOKEN 时使用）
+/// 生产环境务必通过环境变量 API_TOKEN 显式设置强 Token
 const DEFAULT_API_TOKEN: &str = "esp-smart-car";
-
-fn generate_api_token() -> String {
-    DEFAULT_API_TOKEN.to_string()
-}

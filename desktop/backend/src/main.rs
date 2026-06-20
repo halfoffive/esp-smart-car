@@ -165,13 +165,15 @@ impl axum::serve::Listener for TlsListener {
     fn accept(&mut self) -> impl Future<Output = (Self::Io, Self::Addr)> + Send {
         let acceptor = self.acceptor.clone();
         async move {
-            let (stream, addr) = self
-                .inner
-                .accept()
-                .await
-                .expect("TLS 监听 accept 失败");
-            let stream = acceptor.accept(stream).await.expect("TLS 握手失败");
-            (stream, addr)
+            loop {
+                match self.inner.accept().await {
+                    Ok((stream, addr)) => match acceptor.accept(stream).await {
+                        Ok(stream) => return (stream, addr),
+                        Err(e) => warn!("TLS 握手失败: {}", e),
+                    },
+                    Err(e) => warn!("TLS accept 失败: {}", e),
+                }
+            }
         }
     }
 
@@ -227,7 +229,7 @@ mod tests {
             .current_speed
             .load(std::sync::atomic::Ordering::Relaxed);
         assert_eq!(current_speed, 128);
-        let video_frame_b64 = state.video_frame_b64.lock_or_recover("video_frame_b64");
-        assert!(video_frame_b64.is_none());
+        let video_frame = state.video_frame.lock_or_recover("video_frame");
+        assert!(video_frame.is_none());
     }
 }

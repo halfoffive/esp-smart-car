@@ -24,9 +24,6 @@ tokio-rustls = "0.26"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2"
 
-# Token 生成
-rand = "0.8"
-
 # WebSocket
 futures = "0.3"
 

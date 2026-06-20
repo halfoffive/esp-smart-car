@@ -4,7 +4,7 @@
       <span class="text-sm">实时视频</span>
       <div class="flex items-center gap-2">
         <span v-if="fps > 0" class="text-xs text-primary-400 font-mono">
-          {{ fps }} FPS
+          {{ fps }} FPS / {{ renderFps }} Render FPS
         </span>
       </div>
     </div>
@@ -53,11 +53,23 @@ const { videoFrame, isConnected, videoFps } = useWebSocket()
 const videoSrc = ref<string | null>(null)
 const fps = computed(() => videoFps.value)
 
+const renderedFrames = ref(0)
+const lastRenderCountTime = ref(Date.now())
+const renderFps = ref(0)
+
 const updateVideo = () => {
   if (!videoFrame.value) {
     return
   }
   videoSrc.value = videoFrame.value
+  renderedFrames.value++
+
+  const now = Date.now()
+  if (now - lastRenderCountTime.value >= 1000) {
+    renderFps.value = renderedFrames.value
+    renderedFrames.value = 0
+    lastRenderCountTime.value = now
+  }
 }
 
 const unwatch = watch(videoFrame, updateVideo)

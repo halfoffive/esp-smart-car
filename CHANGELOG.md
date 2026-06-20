@@ -50,6 +50,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 前端健壮性：`desktop/frontend/src/components/ControlPanel.vue` 增加 `navigator.clipboard` 失败日志、串口回滚失败日志、`scanPorts()` 空列表清空；`useWebSocket.ts` 增加 `JSON.parse` 的 `unknown` 类型守卫与 `wifi_mac` 类型守卫
   - 文档同步：更新 `AGENTS.md`、`README.md`、`docs/hardware.md`，修正 ESP-NOW 残留注释、`motor_control.h` 头注释、`last_odom_ms` 语义描述；同步 `package.json` 与 UI 版本号
 
+### 视频帧率与链路可观测性优化
+- **后端串口帧计数与积压清理** — `desktop/backend/src/serial.rs` 的 `SerialManager` 新增 `frames_received`/`frames_decoded`/`frames_broadcasted` 计数器；`run_serial_task` 在读完一帧视频数据后继续读取后续数据以 drain 积压，避免旧帧堆积；计数器通过每秒 `status` WebSocket 消息暴露给前端
+- **后端视频广播低延迟** — `desktop/backend/src/websocket.rs` 的 `video_task` 在刚刚成功广播一帧时跳过 1ms 睡眠，立即进入下一次发送，减少高帧率下的显示延迟
+- **前端渲染帧率可观测** — `desktop/frontend/src/components/VideoPlayer.vue` 新增 `renderFps` 计数器，状态栏显示 "X FPS / Y Render FPS"，区分视频到达帧率与前端实际渲染帧率
+- **固件接收器统计日志** — `firmware/receiver_dongle/receiver_dongle.ino` 新增 `g_videoPacketsReceived`/`g_videoFramesForwarded`/`g_serialBytesWritten` 计数器，每 5 秒输出 `[STATS] packets=... frames=... bytes=...` 日志
+- **固件写串口防阻塞** — `firmware/receiver_dongle/receiver_dongle.ino` 的 `Serial.write` 循环增加 100ms 超时，避免串口缓冲满时无限阻塞主循环
+
+### USB/UART 评估结论
+- **ESP32-C6 实际使用 USB-CDC/JTAG 而非 UART** — 常见 ESP32-C6 开发板上的 `Serial` 通过内置 USB Serial/JTAG 控制器输出为 CDC-ACM 虚拟串口，`Serial.begin(921600)` 的波特率仅为兼容传统串口 API 的参数，实际吞吐由 USB Full Speed 控制器决定
+- **ESP32-C6 不支持 TinyUSB / USB-OTG Bulk 端点** — C6 缺少 USB-OTG 外设，无法运行 TinyUSB 栈或创建自定义 Bulk 端点；若需更高带宽需更换为 ESP32-S3/S2/P4 等带 USB-OTG 的芯片
+- **建议保留现有 USB CDC 方案并优化软件** — 继续提高波特率无法突破 USB FS 实际瓶颈，优先通过降低单帧 JPEG 体积、降低帧率、对齐 USB 包、减少主循环阻塞等软件手段提升视频流畅度；完整评估报告见 `.trae/specs/use-c6-usb-replace-uart/usb_evaluation.md`
+
 ### 修复
 - **后端并发安全** — `lib.rs` 新增 `MutexExt::lock_or_recover`，被污染的 `std::sync::Mutex` 自动恢复，避免线程 panic 拖垮整个进程
 - **串口连接竞态** — `serial.rs` 新增 `port_generation` 计数器，`disconnect`/`reconnect` 时自增，旧串口任务归还端口前校验 generation，防止旧句柄覆盖新连接

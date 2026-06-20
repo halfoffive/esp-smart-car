@@ -258,9 +258,12 @@ cargo clippy       # 静态分析检查
 - 检查后端 exe 是否运行、端口 8080 是否占用
 
 ### 视频传输卡顿
-- 降低分辨率
-- 降低帧率
+- 降低单帧 JPEG 体积：降低分辨率或提高压缩比，使每帧 < 8 KB 最佳，< 16 KB 可接受
+- 降低帧率：监控场景 15 FPS 已足够
 - 检查 WiFi 信号质量（距离、干扰）以及 UDP 端口 `9001` 是否丢包
+- 检查串口链路堆积：观察 `status` 消息中的 `frames_received`/`frames_decoded`/`frames_broadcasted` 以及固件 `[STATS] packets=... frames=... bytes=...` 日志
+- 检查前端渲染帧率：状态栏 "X FPS / Y Render FPS"，若 Render FPS 明显低于 FPS，说明前端解码/渲染是瓶颈
+- 确认 ESP32-C6 使用 USB-CDC/JTAG：当前链路已是原生 USB CDC 虚拟串口，提高波特率不能突破 USB Full Speed 实际瓶颈
 
 ### 电机不转
 - 检查电源电压
@@ -272,6 +275,14 @@ cargo clippy       # 静态分析检查
 - 检查 WebSocket 连接是否正常
 
 ## 版本历史
+
+- v1.5.1 - 2026-06-20（未发布）
+  - 视频帧率与链路可观测性优化
+    - 后端 `serial.rs` 新增 `frames_received`/`frames_decoded`/`frames_broadcasted` 计数器，`run_serial_task` 读取完整视频帧后继续 drain 积压数据，计数器通过 WebSocket `status` 消息暴露
+    - 后端 `websocket.rs` `video_task` 在刚刚广播新帧时跳过 1ms 睡眠，立即发送下一帧
+    - 前端 `VideoPlayer.vue` 新增 `renderFps` 渲染帧率计数器，状态栏显示 "X FPS / Y Render FPS"
+    - 固件 `receiver_dongle.ino` 新增 `g_videoPacketsReceived`/`g_videoFramesForwarded`/`g_serialBytesWritten` 计数器，每 5 秒输出 `[STATS] packets=... frames=... bytes=...`；`Serial.write` 循环增加 100ms 超时防止阻塞主循环
+  - USB/UART 评估结论：ESP32-C6 的 `Serial` 实际为 USB-CDC/JTAG 虚拟串口，并非真实 UART；ESP32-C6 没有 USB-OTG，无法使用 TinyUSB bulk 端点；保持现有 USB CDC 方案并通过软件优化提升流畅度，完整报告见 `.trae/specs/use-c6-usb-replace-uart/usb_evaluation.md`
 
 - v1.5.0 - 2026-06-20（未发布）
   - Karpathy 指南安全审计修复：移除硬编码 Wi-Fi 凭据，改为 `firmware/libraries/wireless_protocol/src/wifi_credentials.example.h` 模板，实际 `wifi_credentials.h` 不进入版本库

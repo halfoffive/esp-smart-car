@@ -36,6 +36,7 @@ namespace ReceiverConfig {
     constexpr uint32_t SERIAL_BAUD = 921600;   // 串口波特率（高速传输）
     constexpr uint32_t BUFFER_SIZE = 32768;    // 缓冲区大小（32KB，匹配后端帧上限）
     constexpr uint32_t LINK_STATUS_INTERVAL = 5000; // 链路状态上报间隔（5秒）
+    constexpr uint32_t MAX_SERIAL_WRITE_WAIT_MS = 100; // 串口写入最大等待时间（毫秒）
 }
 
 // ============================================
@@ -96,6 +97,12 @@ static uint32_t g_lastCarDataTime = 0;
 
 /// 上次发送链路状态的时间戳
 static uint32_t g_lastLinkStatus = 0;
+
+/// 视频/串口转发统计计数器
+static uint32_t g_videoPacketsReceived = 0;
+static uint32_t g_videoFramesForwarded = 0;
+static uint32_t g_serialBytesWritten = 0;
+static uint32_t g_lastCounterLogTime = 0;
 
 /// UDP 控制端口对象（接收器 -> 车载）
 WiFiUDP g_udpControl;
@@ -394,6 +401,9 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
         return;  // 校验失败，丢弃该包
     }
 
+    // 校验通过，统计接收到的视频包
+    g_videoPacketsReceived++;
+
     // 包序号/总数合法性检查
     if (packet->totalPackets == 0 || packet->packetId >= packet->totalPackets) {
         g_videoBuffer.size = 0;
@@ -443,14 +453,21 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
         // 格式: [0xAA][0x55][帧大小(4字节)][帧数据]
         // 取消整帧缓冲空间检查，改为先写 6 字节帧头，再循环分块写出数据，
         // 避免 JPEG 帧因一次可用空间不足被整帧丢弃
+        g_videoFramesForwarded++;
         const uint8_t header[] = {0xAA, 0x55};
         Serial.write(header, 2);
         Serial.write(reinterpret_cast<const uint8_t*>(&g_videoBuffer.size), 4);
+        g_serialBytesWritten += 6;
 
-        // 分块写出帧数据
+        // 分块写出帧数据，限制最大等待时间，避免主循环长期阻塞导致 UDP 丢包
         size_t remaining = g_videoBuffer.size;
         const uint8_t* ptr = g_videoBuffer.data;
+        const uint32_t writeStartMs = millis();
         while (remaining > 0) {
+            if (millis() - writeStartMs > ReceiverConfig::MAX_SERIAL_WRITE_WAIT_MS) {
+                Serial.printf("[视频] 串口写入等待超时，放弃剩余 %u 字节\n", remaining);
+                break;
+            }
             const int avail = Serial.availableForWrite();
             if (avail <= 0) {
                 delay(1);
@@ -461,6 +478,7 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
             if (written == 0) {
                 break;  // 写入异常，放弃剩余数据
             }
+            g_serialBytesWritten += written;
             ptr += written;
             remaining -= written;
         }
@@ -623,7 +641,17 @@ void loop() {
         g_lastLinkStatus = currentTime;
         sendLinkStatus();
     }
-    
+
+    // 4.5 周期性输出视频转发统计（每 5 秒）
+    if (currentTime - g_lastCounterLogTime > ReceiverConfig::LINK_STATUS_INTERVAL) {
+        g_lastCounterLogTime = currentTime;
+        Serial.printf("[STATS] packets=%u frames=%u bytes=%u\n",
+                      g_videoPacketsReceived, g_videoFramesForwarded, g_serialBytesWritten);
+        g_videoPacketsReceived = 0;
+        g_videoFramesForwarded = 0;
+        g_serialBytesWritten = 0;
+    }
+
     // 5. 小延迟
     delay(1);
 }

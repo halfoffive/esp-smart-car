@@ -67,6 +67,11 @@
             class="speed-slider w-full"
             :style="{ background: sliderBackground }"
             @input="handleSpeedInput"
+            @mousedown="isDraggingSpeed = true"
+            @mouseup="isDraggingSpeed = false"
+            @mouseleave="isDraggingSpeed = false"
+            @touchstart="isDraggingSpeed = true"
+            @touchend="isDraggingSpeed = false"
             :disabled="!backendAvailable"
             aria-label="速度控制滑块"
           />
@@ -80,10 +85,12 @@
       <h3 class="text-xs font-medium text-dark-300 mb-1.5">运动控制</h3>
       <div class="grid grid-cols-3 gap-1.5 max-w-[140px] mx-auto">
         <button
-          @mousedown="sendCommand('Q')"
-          @mouseup="sendCommand(' ')"
-          @mouseleave="sendCommand(' ')"
-          :class="['control-key-sm', { 'control-key-active': activeKeys.has('Q') }]"
+          @mousedown="handleButtonPress('Q')"
+          @mouseup="handleButtonRelease()"
+          @mouseleave="handleButtonRelease()"
+          @touchstart.prevent="handleButtonPress('Q')"
+          @touchend.prevent="handleButtonRelease()"
+          :class="['control-key-sm', { 'control-key-active': activeKeys.has('Q') || pressedButton === 'Q' }]"
           :disabled="!backendAvailable"
           title="原地左转"
           aria-label="原地左转"
@@ -91,10 +98,12 @@
           Q
         </button>
         <button
-          @mousedown="sendCommand('W')"
-          @mouseup="sendCommand(' ')"
-          @mouseleave="sendCommand(' ')"
-          :class="['control-key-sm', { 'control-key-active': activeKeys.has('W') }]"
+          @mousedown="handleButtonPress('W')"
+          @mouseup="handleButtonRelease()"
+          @mouseleave="handleButtonRelease()"
+          @touchstart.prevent="handleButtonPress('W')"
+          @touchend.prevent="handleButtonRelease()"
+          :class="['control-key-sm', { 'control-key-active': activeKeys.has('W') || pressedButton === 'W' }]"
           :disabled="!backendAvailable"
           title="前进"
           aria-label="前进"
@@ -102,10 +111,12 @@
           W
         </button>
         <button
-          @mousedown="sendCommand('E')"
-          @mouseup="sendCommand(' ')"
-          @mouseleave="sendCommand(' ')"
-          :class="['control-key-sm', { 'control-key-active': activeKeys.has('E') }]"
+          @mousedown="handleButtonPress('E')"
+          @mouseup="handleButtonRelease()"
+          @mouseleave="handleButtonRelease()"
+          @touchstart.prevent="handleButtonPress('E')"
+          @touchend.prevent="handleButtonRelease()"
+          :class="['control-key-sm', { 'control-key-active': activeKeys.has('E') || pressedButton === 'E' }]"
           :disabled="!backendAvailable"
           title="原地右转"
           aria-label="原地右转"
@@ -114,10 +125,12 @@
         </button>
 
         <button
-          @mousedown="sendCommand('A')"
-          @mouseup="sendCommand(' ')"
-          @mouseleave="sendCommand(' ')"
-          :class="['control-key-sm', { 'control-key-active': activeKeys.has('A') }]"
+          @mousedown="handleButtonPress('A')"
+          @mouseup="handleButtonRelease()"
+          @mouseleave="handleButtonRelease()"
+          @touchstart.prevent="handleButtonPress('A')"
+          @touchend.prevent="handleButtonRelease()"
+          :class="['control-key-sm', { 'control-key-active': activeKeys.has('A') || pressedButton === 'A' }]"
           :disabled="!backendAvailable"
           title="左转"
           aria-label="左转"
@@ -125,10 +138,12 @@
           A
         </button>
         <button
-          @mousedown="sendCommand('S')"
-          @mouseup="sendCommand(' ')"
-          @mouseleave="sendCommand(' ')"
-          :class="['control-key-sm', { 'control-key-active': activeKeys.has('S') }]"
+          @mousedown="handleButtonPress('S')"
+          @mouseup="handleButtonRelease()"
+          @mouseleave="handleButtonRelease()"
+          @touchstart.prevent="handleButtonPress('S')"
+          @touchend.prevent="handleButtonRelease()"
+          :class="['control-key-sm', { 'control-key-active': activeKeys.has('S') || pressedButton === 'S' }]"
           :disabled="!backendAvailable"
           title="后退"
           aria-label="后退"
@@ -136,10 +151,12 @@
           S
         </button>
         <button
-          @mousedown="sendCommand('D')"
-          @mouseup="sendCommand(' ')"
-          @mouseleave="sendCommand(' ')"
-          :class="['control-key-sm', { 'control-key-active': activeKeys.has('D') }]"
+          @mousedown="handleButtonPress('D')"
+          @mouseup="handleButtonRelease()"
+          @mouseleave="handleButtonRelease()"
+          @touchstart.prevent="handleButtonPress('D')"
+          @touchend.prevent="handleButtonRelease()"
+          :class="['control-key-sm', { 'control-key-active': activeKeys.has('D') || pressedButton === 'D' }]"
           :disabled="!backendAvailable"
           title="右转"
           aria-label="右转"
@@ -224,6 +241,8 @@ const displayedPorts = computed(() => {
   return [...merged].sort()
 })
 const currentSpeed = ref(128)
+/** 是否正在拖动速度滑块（拖动时不与后端推送值同步） */
+const isDraggingSpeed = ref(false)
 /** 连接进行中状态标志 */
 const isConnecting = ref(false)
 /** 串口是否已连接（基于 WS status 推送，解决 WebSocket 断开时按钮状态不一致） */
@@ -235,11 +254,17 @@ const isScanning = ref(false)
 
 /** 速度滑块防抖定时器：快速拖动时只发送最终值，不发送中间值 */
 let speedDebounceTimer: number | null = null
+/** 方向按钮按住重发定时器（防止车载端 1 秒超时自动停车） */
+let buttonRepeatTimer: ReturnType<typeof setInterval> | null = null
+/** 当前按下的方向按钮（用于视觉反馈和互斥） */
+const pressedButton = ref<string | null>(null)
 /** 行走模式本地回退状态（后端未推送 drive_mode 时使用） */
 const localDriveMode = ref(0)
 /** 行走模式：0=普通, 1=直线修正, 2=航向锁定；优先使用后端推送值 */
 const driveMode = computed(() => status.value.driveMode ?? localDriveMode.value)
 const logs = ref<{ id: number, time: string, message: string, color: string }[]>([])
+/** 日志 ID 自增计数器（避免 Date.now() 碰撞） */
+let logIdCounter = 0
 
 const speedPercent = computed(() => Math.round((currentSpeed.value / 255) * 100))
 
@@ -283,7 +308,7 @@ const addLog = (message: string, type: 'info' | 'warning' | 'error' = 'info') =>
   }
 
   logs.value.unshift({
-    id: Date.now(),
+    id: ++logIdCounter,
     time: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
     message,
     color: colors[type]
@@ -302,6 +327,36 @@ const sendCommand = (cmd: string) => {
 
   wsSendCommand(cmd)
   // 注：高频命令发送不记录日志，避免日志洪流
+}
+
+/** 停止方向按钮命令重发 */
+const stopButtonRepeat = () => {
+  if (buttonRepeatTimer) {
+    clearInterval(buttonRepeatTimer)
+    buttonRepeatTimer = null
+  }
+}
+
+/** 方向按钮按下：发送命令并开始 300ms 重发 */
+const handleButtonPress = (cmd: string) => {
+  if (!isConnected.value) {
+    addLog('未连接，无法发送命令', 'warning')
+    return
+  }
+  stopButtonRepeat()
+  pressedButton.value = cmd
+  sendCommand(cmd)
+  buttonRepeatTimer = setInterval(() => {
+    sendCommand(cmd)
+  }, 300)
+}
+
+/** 方向按钮释放：停止重发并发送停止命令 */
+const handleButtonRelease = () => {
+  if (!pressedButton.value) return
+  stopButtonRepeat()
+  pressedButton.value = null
+  sendCommand(' ')
 }
 
 /** 速度滑块输入处理（带 200ms 防抖）：只发送最终值，不发送中间值 */
@@ -326,6 +381,13 @@ const setSpeed = (pwm?: number) => {
 
 // 使用重构后的 useKeyboard：自动管理生命周期，无需手动清理
 const { activeKeys } = useKeyboard(sendCommand, setSpeed)
+
+// 速度滑块与后端 currentSpeed 同步（仅在未拖动时）
+watch(() => status.value.currentSpeed, (v) => {
+  if (!isDraggingSpeed.value && typeof v === 'number') {
+    currentSpeed.value = v
+  }
+})
 
 const connect = async () => {
   if (!selectedPort.value) {
@@ -408,11 +470,12 @@ watch(displayedPorts, (newPorts) => {
 })
 
 onUnmounted(() => {
-  // 清理速度防抖定时器
+  // 清理速度防抖定时器和按钮重发定时器
   if (speedDebounceTimer !== null) {
     clearTimeout(speedDebounceTimer)
     speedDebounceTimer = null
   }
+  stopButtonRepeat()
   // 断开连接
   if (serialConnected.value) {
     disconnect().catch((e) => { if (import.meta.env.DEV) console.error('[ControlPanel] 卸载断开失败:', e) })
