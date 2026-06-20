@@ -498,6 +498,7 @@ void setup() {
   IPAddress gateway(NetworkConfig::GATEWAY[0], NetworkConfig::GATEWAY[1], NetworkConfig::GATEWAY[2], NetworkConfig::GATEWAY[3]);
   IPAddress subnet(NetworkConfig::SUBNET[0], NetworkConfig::SUBNET[1], NetworkConfig::SUBNET[2], NetworkConfig::SUBNET[3]);
   WiFi.config(carIp, gateway, subnet);
+  Serial.printf("[WiFi_STA] 连接热点: %s, 密码: %s\n", NetworkConfig::AP_SSID, NetworkConfig::AP_PASSWORD);
   WiFi.begin(NetworkConfig::AP_SSID, NetworkConfig::AP_PASSWORD);
   Serial.println("[WiFi_STA] 正在连接热点...");
   uint32_t wifiStart = millis();

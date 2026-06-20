@@ -95,8 +95,8 @@ interface LinkStatusStyle {
  * 计算 4 级链路状态显示样式：
  * - 串口未连接：灰色
  * - 串口已连接，dongleOk=false：探测中（黄色）
- * - dongleOk=true, carPaired=false：Dongle 已连接（蓝色）
- * - carPaired=true, lastOdomMs > 10000 或 =0（无数据）：车载已配对（黄色）
+ * - dongleOk=true, carPaired=false：Dongle 已连接，车载未上线（蓝色）
+ * - carPaired=true, lastOdomMs > 10000 或 =0（无数据）：车载已上线但离线（黄色）
  * - carPaired=true, lastOdomMs <= 10000：车载在线（绿色）
  */
 const linkStatusStyle = computed<LinkStatusStyle>(() => {
@@ -121,7 +121,7 @@ const linkStatusStyle = computed<LinkStatusStyle>(() => {
   if (!linkStatus.value.carPaired) {
     return {
       text: 'Dongle 已连接',
-      title: 'Dongle 正常，车载 ESP-NOW 未配对',
+      title: 'Dongle 正常，车载未上线',
       bgClass: 'bg-blue-500/20 border-blue-500/30',
       textClass: 'text-blue-400',
       dotClass: 'bg-blue-400',

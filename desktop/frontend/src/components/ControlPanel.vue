@@ -189,70 +189,6 @@
       </p>
     </div>
 
-    <!-- 设备链接（BLE 扫描 / MAC 手动输入） — 后端不可用时隐藏 -->
-    <div v-if="backendAvailable">
-      <div class="flex items-center justify-between mb-1.5">
-        <h3 class="text-xs font-medium text-dark-300">设备链接</h3>
-        <button
-          @click="scanBleDevices"
-          class="px-2 py-0.5 text-[10px] bg-dark-700 hover:bg-dark-600 text-dark-200 rounded border border-dark-600 transition-colors"
-          :disabled="isBleScanning || !serialConnected"
-          :aria-label="isBleScanning ? '扫描中' : '扫描蓝牙设备'"
-        >
-          {{ isBleScanning ? '扫描中...' : '扫描' }}
-        </button>
-      </div>
-      <!-- MAC 手动输入一键链接 -->
-      <div class="flex gap-1.5 mb-1.5">
-        <input
-          v-model="manualMac"
-          type="text"
-          placeholder="MAC: AA:BB:CC:DD:EE:FF"
-          class="flex-1 min-w-0 bg-dark-900 border border-dark-600 rounded px-2 py-1 text-[10px] text-dark-200 placeholder-dark-500 focus:outline-none focus:border-primary-500 font-mono"
-          aria-label="手动输入MAC地址"
-        />
-        <button
-          @click="linkManualMac"
-          class="px-2 py-1 text-[10px] bg-primary-600 hover:bg-primary-500 text-white rounded transition-colors shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
-          :disabled="!manualMac.trim() || !serialConnected"
-        >
-          链接
-        </button>
-      </div>
-      <!-- 设备名过滤 -->
-      <input
-        v-if="bleDevices.length > 0"
-        v-model="bleNameFilter"
-        type="text"
-        placeholder="输入设备名或MAC过滤..."
-        class="w-full bg-dark-900 border border-dark-600 rounded px-2 py-1 mb-1.5 text-[10px] text-dark-200 placeholder-dark-500 focus:outline-none focus:border-primary-500"
-        aria-label="蓝牙设备名过滤"
-      />
-      <div v-if="filteredBleDevices.length > 0" class="space-y-1 max-h-[120px] overflow-y-auto">
-        <div
-          v-for="device in filteredBleDevices"
-          :key="device.mac"
-          @click="selectBleDevice(device)"
-          :class="[
-            'flex items-center justify-between rounded px-2 py-1 text-[10px] cursor-pointer transition-colors',
-            selectedBleMac === (device.wifiMac || device.mac) ? 'bg-primary-600/30 border border-primary-500/50' : 'bg-dark-800 hover:bg-dark-700 border border-transparent'
-          ]"
-          :title="device.wifiMac ? '点击链接 (ESP-NOW MAC: ' + device.wifiMac + ')' : '点击链接设备: ' + device.mac"
-        >
-          <span class="text-dark-200 truncate flex-1 min-w-0">{{ device.name }}</span>
-          <span class="text-dark-500 font-mono ml-2 shrink-0">{{ device.wifiMac || device.mac }}</span>
-          <span v-if="device.wifiMac" class="text-primary-400 font-mono text-[8px] ml-1 shrink-0" title="ESP-NOW WiFi MAC">📡</span>
-          <span :class="device.rssi > -50 ? 'text-green-400' : device.rssi > -70 ? 'text-yellow-400' : 'text-red-400'" class="ml-1 shrink-0">
-            {{ device.rssi }}dBm
-          </span>
-        </div>
-      </div>
-      <p v-else-if="bleDevices.length > 0 && bleNameFilter" class="text-[9px] text-dark-600">
-        无匹配"{{ bleNameFilter }}"的设备（共 {{ bleDevices.length }} 个，可按 MAC 地址过滤）
-      </p>
-      <p v-else class="text-[9px] text-dark-600">点击扫描发现周围蓝牙设备</p>
-    </div>
-
     <!-- 系统日志 -->
     <div class="flex-1 min-h-0 flex flex-col">
       <h3 class="text-xs font-medium text-dark-300 mb-1">系统日志</h3>
@@ -267,14 +203,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
 import { useKeyboard } from '../composables/useKeyboard'
 import { useApi } from '../composables/useApi'
 import { useStatus } from '../composables/useStatus'
 import { useBackendHealth } from '../composables/useBackendHealth'
 
-const { sendCommand: wsSendCommand, sendSpeed, isConnected, connectionError, sendDriveMode, availablePorts: wsAvailablePorts, connect: wsConnect, disconnect: wsDisconnect, bleDevices, sendBleScan, sendMacConfig } = useWebSocket(true)
+const { sendCommand: wsSendCommand, sendSpeed, isConnected, connectionError, sendDriveMode, availablePorts: wsAvailablePorts, connect: wsConnect, disconnect: wsDisconnect } = useWebSocket(true)
 const { post, get } = useApi()
 const { status } = useStatus()
 const { backendAvailable } = useBackendHealth()
@@ -299,96 +235,12 @@ const isScanning = ref(false)
 
 /** 速度滑块防抖定时器：快速拖动时只发送最终值，不发送中间值 */
 let speedDebounceTimer: number | null = null
-/** BLE 扫描自动取消定时器 */
-let bleScanTimeoutId: ReturnType<typeof setTimeout> | null = null
 /** 行走模式本地回退状态（后端未推送 drive_mode 时使用） */
 const localDriveMode = ref(0)
 /** 行走模式：0=普通, 1=直线修正, 2=航向锁定；优先使用后端推送值 */
 const driveMode = computed(() => status.value.driveMode ?? localDriveMode.value)
 const logs = ref<{ id: number, time: string, message: string, color: string }[]>([])
 
-/** BLE 扫描进行中状态 */
-const isBleScanning = ref(false)
-/** 手动输入的 MAC 地址 */
-const manualMac = ref('')
-/** BLE 设备名/MAC 过滤关键词 */
-const bleNameFilter = ref('')
-/** 选中的 BLE 设备 MAC（高亮显示） */
-const selectedBleMac = ref('')
-/** 过滤后的 BLE 设备列表（按名称、MAC 或 WiFi MAC 包含过滤词，大小写不敏感） */
-const filteredBleDevices = computed(() => {
-  const filter = bleNameFilter.value.trim().toLowerCase()
-  if (!filter) return bleDevices.value
-  return bleDevices.value.filter(d =>
-    d.name.toLowerCase().includes(filter) ||
-    d.mac.toLowerCase().includes(filter) ||
-    (d.wifiMac && d.wifiMac.toLowerCase().includes(filter))
-  )
-})
-
-/** MAC 地址格式校验：AA:BB:CC:DD:EE:FF */
-const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/
-
-/** 点击 BLE 设备：选中并发送 MAC 配置到接收器，用于泵项目设备链接 */
-const selectBleDevice = (device: { name: string; mac: string; rssi: number; wifiMac?: string }) => {
-  // 优先使用 WiFi MAC（ESP-NOW 通信），回退到 BLE MAC
-  const targetMac = device.wifiMac || device.mac
-  selectedBleMac.value = targetMac
-  const success = sendMacConfig(targetMac)
-  navigator.clipboard.writeText(targetMac).catch(() => {
-    addLog('MAC 复制失败，请手动复制', 'warning')
-  })
-  const macLabel = device.wifiMac ? `ESP-NOW: ${targetMac}` : targetMac
-  if (success) {
-    addLog(`已链接设备: ${device.name} (${macLabel})`, 'info')
-  } else {
-    addLog(`链接失败: ${device.name}，WebSocket 未连接`, 'error')
-  }
-}
-
-/** 手动输入 MAC 一键链接（复制车载端启动日志中的 MAC 粘贴即可） */
-const linkManualMac = () => {
-  const mac = manualMac.value.trim()
-  if (!mac) return
-  if (!MAC_REGEX.test(mac)) {
-    addLog('MAC 格式错误，应为 AA:BB:CC:DD:EE:FF', 'warning')
-    return
-  }
-  const success = sendMacConfig(mac)
-  if (success) {
-    addLog(`已链接设备: ${mac}`, 'info')
-    selectedBleMac.value = mac
-  } else {
-    addLog('链接失败，请确认已连接串口和 WebSocket', 'error')
-  }
-}
-
-/** 扫描蓝牙设备 */
-const scanBleDevices = async () => {
-  if (!serialConnected.value) {
-    addLog('未连接串口，无法扫描蓝牙设备', 'warning')
-    return
-  }
-  // 清除之前的扫描超时，避免多次点击导致状态异常
-  if (bleScanTimeoutId) {
-    clearTimeout(bleScanTimeoutId)
-    bleScanTimeoutId = null
-  }
-  isBleScanning.value = true
-  const success = sendBleScan()
-  if (!success) {
-    addLog('蓝牙扫描命令发送失败，请检查 WebSocket 连接', 'error')
-    isBleScanning.value = false
-    return
-  }
-  addLog('蓝牙扫描已触发，等待结果...', 'info')
-  // BLE 扫描约 10 秒，12 秒后自动取消扫描状态
-  bleScanTimeoutId = window.setTimeout(() => {
-    bleScanTimeoutId = null
-    isBleScanning.value = false
-    addLog('蓝牙扫描结束', 'info')
-  }, 12000)
-}
 const speedPercent = computed(() => Math.round((currentSpeed.value / 255) * 100))
 
 const sliderBackground = computed(() => {
@@ -548,10 +400,6 @@ const scanPorts = async () => {
   }
 }
 
-onMounted(() => {
-  // 页面加载时无需恢复 MAC 地址（已移除 MAC 地址设置功能）
-})
-
 /** 当可用串口列表变化时，如果当前选中的串口已不在列表中则清除 */
 watch(displayedPorts, (newPorts) => {
   if (selectedPort.value && !newPorts.includes(selectedPort.value)) {
@@ -565,12 +413,6 @@ onUnmounted(() => {
     clearTimeout(speedDebounceTimer)
     speedDebounceTimer = null
   }
-  // 清理 BLE 扫描超时定时器
-  if (bleScanTimeoutId !== null) {
-    clearTimeout(bleScanTimeoutId)
-    bleScanTimeoutId = null
-  }
-  isBleScanning.value = false
   // 断开连接
   if (serialConnected.value) {
     disconnect().catch((e) => { if (import.meta.env.DEV) console.error('[ControlPanel] 卸载断开失败:', e) })

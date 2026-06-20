@@ -52,16 +52,6 @@ export interface OdometryData {
   timestamp: number    // 时间戳
 }
 
-/** BLE 设备接口 */
-export interface BleDevice {
-  name: string
-  /** BLE 广播 MAC 地址 */
-  mac: string
-  /** WiFi (ESP-NOW) MAC 地址，从 Manufacturer Data 提取。仅车载 C6 等设备会广播此字段 */
-  wifiMac?: string
-  rssi: number
-}
-
 /**
  * 系统状态接口（与后端 StatusResponse 对齐，camelCase）
  * 由后端通过 WS status 消息推送，替代前端 /api/status 轮询
@@ -80,7 +70,7 @@ export interface StatusData {
  * 链路状态接口（与后端 LinkStatus 对齐，camelCase）
  * 由后端通过 WS link_status 消息推送
  * - dongleOk: Dongle 是否正常响应探测
- * - carPaired: 车载 ESP-NOW 是否已与 Dongle 配对
+ * - carPaired: 车载是否已上线（Dongle 已收到车载数据）
  * - lastOdomMs: 距上次收到车载数据的毫秒数（>10000 视为离线）
  */
 export interface LinkStatus {
@@ -98,7 +88,6 @@ interface WebSocketInstance {
   videoFps: Ref<number>
   odometry: Ref<OdometryData>
   availablePorts: Ref<string[]>
-  bleDevices: Ref<BleDevice[]>
   status: Ref<StatusData>
   linkStatus: Ref<LinkStatus>
   connect: () => Promise<void>
@@ -106,8 +95,6 @@ interface WebSocketInstance {
   sendCommand: (command: string) => boolean
   sendSpeed: (speed: number) => boolean
   sendDriveMode: (mode: number) => boolean
-  sendMacConfig: (mac: string) => boolean
-  sendBleScan: () => boolean
 }
 
 /**
@@ -129,7 +116,6 @@ function createWebSocket() {
     timestamp: 0
   })
   const availablePorts = ref<string[]>([])
-  const bleDevices = ref<BleDevice[]>([])
   // 系统状态（由后端 WS status 消息推送，替代 /api/status 轮询）
   const status = ref<StatusData>({
     serialStatus: '未连接',
@@ -199,7 +185,6 @@ function createWebSocket() {
       timestamp: 0
     }
     availablePorts.value = []
-    bleDevices.value = []
     status.value = {
       serialStatus: '未连接',
       frameCount: 0,
@@ -461,22 +446,6 @@ function createWebSocket() {
                 }
                 break
 
-              case 'ble_devices':
-                // 接收 BLE 设备列表（wifi_mac 从后端 JSON 映射到 wifiMac）
-                if (Array.isArray(msg.devices)) {
-                  bleDevices.value = msg.devices.filter((d: unknown): d is BleDevice => {
-                    if (typeof d !== 'object' || d === null) return false
-                    const dev = d as Record<string, unknown>
-                    return typeof dev.name === 'string' && typeof dev.mac === 'string' && typeof dev.rssi === 'number'
-                  }).map((d: BleDevice & { wifi_mac?: unknown }) => ({
-                    name: d.name,
-                    mac: d.mac,
-                    rssi: d.rssi,
-                    wifiMac: typeof d.wifi_mac === 'string' ? d.wifi_mac : undefined,
-                  }))
-                }
-                break
-
               default:
                 break
             }
@@ -629,47 +598,6 @@ function createWebSocket() {
     }
   }
 
-  /** 发送MAC地址配置命令 */
-  const sendMacConfig = (mac: string): boolean => {
-    if (ws.value?.readyState !== WebSocket.OPEN) {
-      return false
-    }
-
-    const message = {
-      type: 'mac_config',
-      mac,
-      timestamp: Date.now()
-    }
-
-    try {
-      ws.value.send(JSON.stringify(message))
-      return true
-    } catch (error) {
-      console.error('[WebSocket] 发送MAC配置失败:', error)
-      return false
-    }
-  }
-
-  /** 发送 BLE 扫描命令 */
-  const sendBleScan = (): boolean => {
-    if (ws.value?.readyState !== WebSocket.OPEN) {
-      return false
-    }
-
-    const message = {
-      type: 'ble_scan',
-      timestamp: Date.now()
-    }
-
-    try {
-      ws.value.send(JSON.stringify(message))
-      return true
-    } catch (error) {
-      console.error('[WebSocket] 发送 BLE 扫描命令失败:', error)
-      return false
-    }
-  }
-
   return {
     isConnected,
     isConnecting,
@@ -678,16 +606,13 @@ function createWebSocket() {
     videoFps,
     odometry,
     availablePorts,
-    bleDevices,
     status,
     linkStatus,
     connect,
     disconnect,
     sendCommand,
     sendSpeed,
-    sendDriveMode,
-    sendMacConfig,
-    sendBleScan
+    sendDriveMode
   }
 }
 
@@ -739,15 +664,12 @@ export const useWebSocket = (owner = false): WebSocketInstance => {
     videoFps: state.videoFps,
     odometry: state.odometry,
     availablePorts: state.availablePorts,
-    bleDevices: state.bleDevices,
     status: state.status,
     linkStatus: state.linkStatus,
     connect: safeConnect,
     disconnect: safeDisconnect,
     sendCommand: state.sendCommand,
     sendSpeed: state.sendSpeed,
-    sendDriveMode: state.sendDriveMode,
-    sendMacConfig: state.sendMacConfig,
-    sendBleScan: state.sendBleScan
+    sendDriveMode: state.sendDriveMode
   }
 }
