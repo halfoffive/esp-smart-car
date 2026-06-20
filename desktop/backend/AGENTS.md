@@ -94,3 +94,36 @@ cargo build --release  # 优化编译
 - **串口协议**：PC → receiver_dongle 使用 12 字节二进制 `WirelessPacket`（含 checksum），不再使用单字符命令
 - **心跳**：30 秒间隔，防止连接超时
 - **CORS**：前端开发时启用跨域支持
+
+## 近期修复记录
+
+### 2026-06-20 - Karpathy 审计修复
+
+**背景**: 完成 Karpathy 指南漏洞审计，报告见 `docs/karpathy_vulnerability_report.md`，共发现并修复 52 项问题。
+
+**本模块修复**:
+
+- **P0**:
+  - REST/WebSocket 认证 — `api.rs` / `websocket.rs` 增加统一认证中间件，未携带凭证调用 `/api/command`、`/api/connect`、`/ws` 返回 401/403 或立即断开
+- **P1**:
+  - 串口写操作 `spawn_blocking` — `websocket.rs` / `api.rs` 将 `send_packet` / `send_bytes` 包进 `tokio::task::spawn_blocking`，避免阻塞 async 运行时
+  - 心跳按客户端持有 — `websocket.rs` / `lib.rs` 将全局 `last_heartbeat` 改为每个 WebSocket 连接独立持有
+  - 串口 `Ok(0)` 断开检测 — `serial.rs` `read_next` / `resync_stream` 将 `Ok(0)` 视为 EOF，立即返回错误
+  - 串口重连旧句柄释放 — `serial.rs` / `api.rs` 优化 disconnect → connect 时旧 `SerialPort` 的 Drop 时序，降低 Windows COM 口独占失败概率
+  - TLS/加密配置路径 — `main.rs` / `Cargo.toml` 增加 TLS 证书路径与 `wss://`/`https://` 启动选项
+- **P2**:
+  - JSON 解析健壮性 — `serial.rs` 先 `serde_json::from_str` 再判断 `t` 字段，避免对合法空格/字段顺序敏感
+  - 串口任务退避溢出 — `main.rs` 限制移位量，避免 65 次连续失败后 panic
+  - 全局 Mutex 中毒处理策略 — `lib.rs` `MutexExt::lock_or_recover` 对关键状态返回 `Result`
+  - `connect_serial` 原子性 — `api.rs` 将 disconnect + connect 整体放入 `spawn_blocking`
+  - 后端输入校验 — `websocket.rs` `speed` / `drive_mode` 非法输入返回 `error` 消息
+  - BLE 列表过期清空 — `websocket.rs` 即使为空也广播 `{"type":"ble_devices","devices":[]}`
+  - 视频帧上限对齐 — `serial.rs` 帧大小上限从 256KB 改为接收器缓冲区 32KB
+  - `command_count` 准确性 — `serial.rs` 仅在控制/速度/模式命令时递增
+- **P3**:
+  - `static_handler` 移除 `expect` — `main.rs` 改为保守 500 响应
+  - `tokio` 特性精简 — `Cargo.toml` 从 `full` 改为显式特性列表
+  - BLE 集成测试补充 — `tests/api_integration.rs` 挂载 `/api/ble-devices` 并补充基础 GET 测试
+  - 注释/冗余清理 — 修正 ESP-NOW 遗留描述、移除原始 `video_frame` 冗余字段
+
+**验证**: `cargo check` / `cargo clippy` / `cargo test` 因当前 Windows 环境 Rust 1.96.0 的 `std::process::Command::output` 返回 `Os { code: 0 }` 暂无法运行，与本模块代码无关。

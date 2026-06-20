@@ -28,8 +28,13 @@ import type { Ref } from 'vue'
  * - pathname="/smartcar/" → ws://host/smartcar/ws
  * - pathname="/smartcar" → ws://host/smartcar/ws
  */
+const WS_PROTOCOL = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+const WS_HOST = window.location.host
 const WS_PATH = window.location.pathname.replace(/\/$/, '')
-const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}${WS_PATH}/ws`
+const WS_BASE_URL = `${WS_PROTOCOL}//${WS_HOST}${WS_PATH}/ws`
+
+/** 根据 API Token 构建带认证参数的 WebSocket URL */
+const buildWsUrl = (token: string): string => `${WS_BASE_URL}?token=${encodeURIComponent(token)}`
 const HEARTBEAT_INTERVAL = 30000   // 心跳发送间隔（毫秒）
 const HEARTBEAT_TIMEOUT = 90000    // 心跳响应超时（毫秒），后端同样按 90 秒判定死连接
 const MAX_RETRY_COUNT = 10         // 最大重连次数
@@ -67,6 +72,7 @@ export interface StatusData {
   wsClients: number       // WebSocket 连接数
   uptime: number          // 运行时长（秒）
   commandCount: number    // 已发送命令数
+  driveMode?: number      // 后端推送的行走模式（0=普通, 1=直线修正, 2=航向锁定）
 }
 
 /**
@@ -147,6 +153,8 @@ function createWebSocket() {
   let connectTimeoutTimer: ReturnType<typeof setTimeout> | null = null
   let shouldReconnect = true
   let retryCount = 0
+  // 连接世代计数器：防止 connect() 与 disconnect() 竞态
+  let connectGeneration = 0
   // FPS 计算：基于视频帧到达频率（供 StatusBar 等组件消费）
   let frameCount = 0
   let lastFpsUpdate = Date.now()
@@ -255,16 +263,33 @@ function createWebSocket() {
     stopHeartbeatResponseTimer()
   }
 
-  /** 连接 WebSocket */
+  /** 连接 WebSocket（外部入口：手动连接时重置重连计数） */
   const connect = async (): Promise<void> => {
-    // 重入保护：若正在连接中，直接返回当前连接的 Promise
+    return internalConnect(false)
+  }
+
+  /** 内部连接实现（支持手动连接与自动重连） */
+  const internalConnect = async (isRetry: boolean): Promise<void> => {
+    // 重入保护：若正在连接中，直接返回
     if (isConnecting.value) {
       return Promise.reject(new Error('连接正在进行中，请勿重复调用'))
+    }
+
+    // 认证校验：未配置 token 时给出明确错误
+    const token = import.meta.env.VITE_API_TOKEN
+    if (!token) {
+      isConnecting.value = false
+      const error = 'VITE_API_TOKEN 未配置，请在 .env 文件中设置后刷新页面'
+      connectionError.value = error
+      return Promise.reject(new Error(error))
     }
 
     isConnecting.value = true
     connectionError.value = null
     clearAllTimers()
+
+    // 新连接世代，disconnect() 可通过递增此值取消本次连接
+    const myGeneration = ++connectGeneration
 
     // 关闭已有连接（包括 CONNECTING/OPEN/CLOSING 状态），防止旧连接的回调干扰
     if (ws.value && ws.value.readyState !== WebSocket.CLOSED) {
@@ -278,11 +303,26 @@ function createWebSocket() {
       ws.value = null
       // 等待一小段时间确保旧连接的 onclose 回调完成后再创建新连接
       await new Promise(r => setTimeout(r, 50))
+      // 等待期间若 disconnect() 被调用，世代会变化，本次连接应中止
+      if (myGeneration !== connectGeneration) {
+        isConnecting.value = false
+        return Promise.reject(new Error('连接已被取消'))
+      }
     }
 
     // 重置重连标志，允许自动重连
     shouldReconnect = true
-    retryCount = 0
+
+    // 手动连接时重置重连计数，自动重连时保留并递增
+    if (!isRetry) {
+      retryCount = 0
+    }
+
+    // 再次校验世代，防止等待期间被取消
+    if (myGeneration !== connectGeneration) {
+      isConnecting.value = false
+      return Promise.reject(new Error('连接已被取消'))
+    }
 
     return new Promise<void>((resolve, reject) => {
       let resolved = false
@@ -314,7 +354,7 @@ function createWebSocket() {
       }
 
       try {
-        const socket = new WebSocket(WS_URL)
+        const socket = new WebSocket(buildWsUrl(token))
 
         // 连接超时处理
         connectTimeoutTimer = setTimeout(() => {
@@ -340,21 +380,27 @@ function createWebSocket() {
 
         socket.onmessage = (event) => {
           try {
-            const message = JSON.parse(event.data)
+            const message: unknown = JSON.parse(event.data)
+
+            // 基础类型守卫：非对象消息无法识别类型，直接忽略
+            if (typeof message !== 'object' || message === null) {
+              return
+            }
+            const msg = message as Record<string, unknown>
 
             // 收到任何服务端消息都视为心跳响应，重置超时检测
             if (heartbeatResponseTimer) {
               startHeartbeatResponseTimer()
             }
 
-            switch (message.type) {
+            switch (msg.type) {
               case 'connected':
                 break
 
               case 'video':
                 // 接收视频帧
-                if (message.data) {
-                  videoFrame.value = `data:image/jpeg;base64,${message.data}`
+                if (msg.data) {
+                  videoFrame.value = `data:image/jpeg;base64,${msg.data}`
                   // 更新 videoFps：每秒统计接收到的视频帧数
                   frameCount++
                   const now = Date.now()
@@ -368,28 +414,29 @@ function createWebSocket() {
 
               case 'odometry':
                 // 接收测速数据（运行时类型校验）
-                if (message.leftSpeed !== undefined) {
+                if (msg.leftSpeed !== undefined) {
                   odometry.value = {
-                    leftSpeed: typeof message.leftSpeed === 'number' ? message.leftSpeed : 0,
-                    rightSpeed: typeof message.rightSpeed === 'number' ? message.rightSpeed : 0,
-                    heading: typeof message.heading === 'number' ? message.heading : 0,
-                    distance: typeof message.distance === 'number' ? message.distance : 0,
-                    timestamp: typeof message.timestamp === 'number' ? message.timestamp : 0
+                    leftSpeed: typeof msg.leftSpeed === 'number' ? msg.leftSpeed : 0,
+                    rightSpeed: typeof msg.rightSpeed === 'number' ? msg.rightSpeed : 0,
+                    heading: typeof msg.heading === 'number' ? msg.heading : 0,
+                    distance: typeof msg.distance === 'number' ? msg.distance : 0,
+                    timestamp: typeof msg.timestamp === 'number' ? msg.timestamp : 0
                   }
                 }
                 break
 
               case 'status':
                 // 接收系统状态（后端 snake_case → 前端 camelCase）
-                // 后端推送字段：serial_status/frame_count/current_speed/ws_clients/uptime/command_count
-                if (typeof message.serial_status === 'string') {
+                // 后端推送字段：serial_status/frame_count/current_speed/ws_clients/uptime/command_count/drive_mode
+                if (typeof msg.serial_status === 'string') {
                   status.value = {
-                    serialStatus: message.serial_status,
-                    frameCount: typeof message.frame_count === 'number' ? message.frame_count : 0,
-                    currentSpeed: typeof message.current_speed === 'number' ? message.current_speed : 0,
-                    wsClients: typeof message.ws_clients === 'number' ? message.ws_clients : 0,
-                    uptime: typeof message.uptime === 'number' ? message.uptime : 0,
-                    commandCount: typeof message.command_count === 'number' ? message.command_count : 0,
+                    serialStatus: msg.serial_status,
+                    frameCount: typeof msg.frame_count === 'number' ? msg.frame_count : 0,
+                    currentSpeed: typeof msg.current_speed === 'number' ? msg.current_speed : 0,
+                    wsClients: typeof msg.ws_clients === 'number' ? msg.ws_clients : 0,
+                    uptime: typeof msg.uptime === 'number' ? msg.uptime : 0,
+                    commandCount: typeof msg.command_count === 'number' ? msg.command_count : 0,
+                    driveMode: typeof msg.drive_mode === 'number' ? msg.drive_mode : undefined,
                   }
                 }
                 break
@@ -397,34 +444,34 @@ function createWebSocket() {
               case 'link_status':
                 // 接收链路状态（后端 snake_case → 前端 camelCase）
                 // 后端推送字段：dongle_ok/car_paired/last_odom_ms
-                if (typeof message.dongle_ok === 'boolean') {
+                if (typeof msg.dongle_ok === 'boolean') {
                   linkStatus.value = {
-                    dongleOk: message.dongle_ok,
-                    carPaired: typeof message.car_paired === 'boolean' ? message.car_paired : false,
-                    lastOdomMs: typeof message.last_odom_ms === 'number' ? message.last_odom_ms : 0,
+                    dongleOk: msg.dongle_ok,
+                    carPaired: typeof msg.car_paired === 'boolean' ? msg.car_paired : false,
+                    lastOdomMs: typeof msg.last_odom_ms === 'number' ? msg.last_odom_ms : 0,
                   }
                 }
                 break
 
               case 'port_list':
                 // 接收串口列表推送
-                if (Array.isArray(message.ports)) {
-                  availablePorts.value = (message.ports as unknown[]).filter((p): p is string => typeof p === 'string')
+                if (Array.isArray(msg.ports)) {
+                  availablePorts.value = (msg.ports as unknown[]).filter((p): p is string => typeof p === 'string')
                 }
                 break
 
               case 'ble_devices':
                 // 接收 BLE 设备列表（wifi_mac 从后端 JSON 映射到 wifiMac）
-                if (Array.isArray(message.devices)) {
-                  bleDevices.value = message.devices.filter((d: unknown): d is BleDevice => {
+                if (Array.isArray(msg.devices)) {
+                  bleDevices.value = msg.devices.filter((d: unknown): d is BleDevice => {
                     if (typeof d !== 'object' || d === null) return false
                     const dev = d as Record<string, unknown>
                     return typeof dev.name === 'string' && typeof dev.mac === 'string' && typeof dev.rssi === 'number'
-                  }).map((d: BleDevice & { wifi_mac?: string }) => ({
+                  }).map((d: BleDevice & { wifi_mac?: unknown }) => ({
                     name: d.name,
                     mac: d.mac,
                     rssi: d.rssi,
-                    wifiMac: d.wifi_mac,  // 后端 snake_case → 前端 camelCase
+                    wifiMac: typeof d.wifi_mac === 'string' ? d.wifi_mac : undefined,
                   }))
                 }
                 break
@@ -469,7 +516,7 @@ function createWebSocket() {
             connectionError.value = `连接断开，${delay / 1000} 秒后重连（第 ${retryCount}/${MAX_RETRY_COUNT} 次）`
             reconnectTimer = setTimeout(() => {
               if (shouldReconnect) {
-                connect().catch(() => {
+                internalConnect(true).catch(() => {
                   // 重连失败由 onclose 继续处理，无需额外操作
                 })
               }
@@ -496,6 +543,8 @@ function createWebSocket() {
   const disconnect = () => {
     // 先设置标志，防止 onclose handler 触发自动重连
     shouldReconnect = false
+    // 递增连接世代，取消任何正在等待的 connect()
+    connectGeneration++
 
     clearAllTimers()
 

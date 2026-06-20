@@ -76,11 +76,17 @@ onUnmounted(() => {
 })
 
 const takeSnapshot = () => {
-  if (videoSrc.value) {
-    const link = document.createElement('a')
-    link.download = `snapshot_${Date.now()}.jpg`
-    link.href = videoSrc.value
+  if (!videoSrc.value) return
+  const link = document.createElement('a')
+  link.download = `snapshot_${Date.now()}.jpg`
+  link.href = videoSrc.value
+  document.body.appendChild(link)
+  try {
     link.click()
+  } catch (error) {
+    console.error('[VideoPlayer] 截图下载失败:', error)
+  } finally {
+    document.body.removeChild(link)
   }
 }
 </script>

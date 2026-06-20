@@ -16,8 +16,16 @@ rust-embed = { version = "8.11", features = ["mime-guess"] }
 mime_guess = "2.0"
 
 # 异步运行时
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net", "sync"] }
 tokio-util = "0.7"
+
+# TLS/HTTPS 支持（可选，按 .env 中的 TLS_CERT/TLS_KEY 启用）
+tokio-rustls = "0.26"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
+
+# Token 生成
+rand = "0.8"
 
 # WebSocket
 futures = "0.3"

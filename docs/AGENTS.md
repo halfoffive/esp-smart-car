@@ -32,3 +32,12 @@ docs/
 - 文档使用 Markdown 格式
 - 包含代码块和表格
 - 中文注释
+
+## 近期更新
+
+### 2026-06-20 - 文档同步与 Karpathy 审计报告
+
+- 新增 `docs/karpathy_vulnerability_report.md`，汇总 Karpathy 指南漏洞审计结果：52 项独立问题（P0×4、P1×14、P2×24、P3×10），含修复建议与验证方式
+- 同步更新 `AGENTS.md`（根、`desktop/backend/`、`desktop/frontend/`）中的近期修复记录
+- 修正 `docs/hardware.md` 中 `last_odom_ms` 字段描述为“距离上次收到车载数据的毫秒数”
+- 修正源码中仍使用“ESP-NOW 配对”等已废弃架构描述的注释

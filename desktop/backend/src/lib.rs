@@ -15,7 +15,7 @@ pub struct BleDevice {
     pub name: String,
     /// BLE MAC 地址（扫描到的广播地址）
     pub mac: String,
-    /// WiFi (ESP-NOW) MAC 地址（从 Manufacturer Data 提取，仅车载 C6 等设备会广播）
+    /// WiFi MAC 地址（从 Manufacturer Data 提取，用于固定热点场景）
     pub wifi_mac: Option<String>,
     /// 信号强度
     pub rssi: i16,
@@ -24,16 +24,21 @@ pub struct BleDevice {
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU16, AtomicU8};
 use std::sync::{Arc, Mutex, MutexGuard};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 /// Mutex 中毒恢复扩展 trait
 ///
-/// AGENTS.md 规范要求禁止使用 unwrap/expect。对于 Mutex，poison 时直接 panic 会导致
-/// 单个线程的错误扩散为整个服务崩溃。此 trait 在 poison 时记录警告并恢复锁内的数据，
-/// 让服务继续运行，同时保留诊断信息。
+/// AGENTS.md 规范要求禁止使用 unwrap/expect。对于非关键状态（如缓存、日志节流），
+/// poison 时直接 panic 会导致单个线程的错误扩散为整个服务崩溃。此 trait 在 poison 时
+/// 记录警告并恢复锁内的数据，让服务继续运行，同时保留诊断信息。
+///
+/// 对于关键状态（如 serial_manager），应使用 `lock_or_panic`，确保数据损坏时快速失败。
 pub trait MutexExt<T> {
     /// 获取锁；若 Mutex 已中毒，记录警告并恢复内部数据
     fn lock_or_recover(&self, name: &str) -> MutexGuard<'_, T>;
+
+    /// 获取锁；若 Mutex 已中毒，直接 panic（用于关键状态）
+    fn lock_or_panic(&self, name: &str) -> MutexGuard<'_, T>;
 }
 
 impl<T> MutexExt<T> for Mutex<T> {
@@ -46,6 +51,16 @@ impl<T> MutexExt<T> for Mutex<T> {
             }
         }
     }
+
+    fn lock_or_panic(&self, name: &str) -> MutexGuard<'_, T> {
+        match self.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                error!("关键 Mutex {} 已中毒，状态可能已损坏，终止服务", name);
+                panic!("关键 Mutex {} 已中毒", name);
+            }
+        }
+    }
 }
 
 /// 应用状态（共享状态）
@@ -54,9 +69,6 @@ pub struct AppState {
     pub serial_manager: Arc<std::sync::Mutex<serial::SerialManager>>,
     /// WebSocket连接管理器（使用 std::sync::Mutex，操作均为内存操作，不跨 .await 持锁）
     pub ws_manager: Arc<std::sync::Mutex<websocket::WebSocketManager>>,
-    /// 视频帧数据（使用 std::sync::Mutex，不跨 .await 持锁）
-    /// 内层 Arc 共享引用，避免 clone 整帧数据
-    pub video_frame: Arc<std::sync::Mutex<Option<Arc<Vec<u8>>>>>,
     /// 视频帧 Base64 编码数据（共享引用，避免每客户端重复编码）
     pub video_frame_b64: Arc<std::sync::Mutex<Option<Arc<String>>>>,
     /// 视频帧哈希值（共享，避免每客户端重复计算）
@@ -64,14 +76,14 @@ pub struct AppState {
 
     /// 当前速度 PWM 值（0-255，使用 AtomicU8 无锁原子操作）
     pub current_speed: AtomicU8,
+    /// 当前行走模式（0=普通，1=直线修正，2=航向锁定）
+    pub current_drive_mode: AtomicU8,
     /// 二进制数据包序列号（用于 WirelessPacket 的 seq 字段）
     pub packet_seq: AtomicU16,
     /// 测速数据（使用 std::sync::Mutex，不跨 .await 持锁）
     pub odometry: Arc<std::sync::Mutex<OdometryData>>,
-    /// 链路状态（Dongle ↔ 车载 ESP-NOW 配对状态、车载在线状态）
+    /// 链路状态（Dongle ↔ 车载 WiFi/UDP 在线状态）
     pub link_status: Arc<std::sync::Mutex<LinkStatus>>,
-    /// 最后心跳时间（使用 std::sync::Mutex，不跨 .await 持锁）
-    pub last_heartbeat: Arc<std::sync::Mutex<std::time::Instant>>,
     /// 服务器启动时间（用于计算运行时长）
     pub started_at: std::time::Instant,
     /// 可用串口列表（使用 tokio::sync::Mutex，供 async 端点读取）
@@ -84,6 +96,8 @@ pub struct AppState {
     pub last_cmd_log: Arc<std::sync::Mutex<(u8, std::time::Instant)>>,
     /// 错误日志节流状态（错误类别, 上次记录时间），相同错误 5 秒内只记一次
     pub last_error_log: Arc<std::sync::Mutex<HashMap<String, std::time::Instant>>>,
+    /// API Token（None 表示认证已禁用，仅用于测试）
+    pub api_token: Option<Arc<str>>,
 }
 
 impl Default for AppState {
@@ -93,20 +107,46 @@ impl Default for AppState {
 }
 
 impl AppState {
-    /// 创建新状态
+    /// 创建新状态（生产环境使用）
     pub fn new() -> Self {
+        let api_token = if auth_disabled_from_env() {
+            info!("认证已禁用（DISABLE_AUTH=true 或 --no-auth）");
+            None
+        } else {
+            std::env::var("API_TOKEN")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    info!("使用 .env/API_TOKEN 中的 API Token");
+                    Arc::from(s)
+                })
+                .or_else(|| {
+                    let token = generate_api_token();
+                    info!("未设置 API_TOKEN，已自动生成随机 Token: {}", token);
+                    Some(Arc::from(token))
+                })
+        };
+
+        Self::with_token(api_token)
+    }
+
+    /// 创建测试状态（认证禁用，避免测试需要携带 Token）
+    pub fn new_test() -> Self {
+        Self::with_token(None)
+    }
+
+    fn with_token(api_token: Option<Arc<str>>) -> Self {
         Self {
             serial_manager: Arc::new(std::sync::Mutex::new(serial::SerialManager::new())),
             ws_manager: Arc::new(std::sync::Mutex::new(websocket::WebSocketManager::new())),
-            video_frame: Arc::new(std::sync::Mutex::new(None)),
             video_frame_b64: Arc::new(std::sync::Mutex::new(None)),
             video_frame_hash: Arc::new(std::sync::Mutex::new(None)),
 
             current_speed: AtomicU8::new(128),
+            current_drive_mode: AtomicU8::new(0),
             packet_seq: AtomicU16::new(0),
             odometry: Arc::new(std::sync::Mutex::new(OdometryData::default())),
             link_status: Arc::new(std::sync::Mutex::new(LinkStatus::default())),
-            last_heartbeat: Arc::new(std::sync::Mutex::new(std::time::Instant::now())),
             started_at: std::time::Instant::now(),
             available_ports: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             last_ports: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -118,6 +158,7 @@ impl AppState {
                     .unwrap_or_else(std::time::Instant::now),
             ))),
             last_error_log: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            api_token,
         }
     }
 
@@ -146,4 +187,21 @@ impl AppState {
             warn!("{}", msg);
         }
     }
+}
+
+fn auth_disabled_from_env() -> bool {
+    std::env::var("DISABLE_AUTH")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false)
+}
+
+fn generate_api_token() -> String {
+    use rand::distributions::Alphanumeric;
+    use rand::Rng;
+
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect()
 }

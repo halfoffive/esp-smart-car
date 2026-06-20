@@ -4,7 +4,8 @@
  * 支持动态质量调整和帧率控制
  * 
  * 作者：智能车项目团队
- * 版本：1.4.0
+ * 版本：1.5.0（修复 P1-03 校验和统一、P2-04 发送失败中止并计丢帧）
+ * 日期：2026-06-20
  */
 
 #ifndef VIDEO_STREAM_H
@@ -136,23 +137,23 @@ inline uint8_t adjustQuality(const uint32_t frameSize) {
  * 发送视频帧
  * 将大帧分割为多个小包通过 WiFi UDP 传输到接收器
  * S3 单芯片架构下由 car_controller.ino 的 loop() 直接调用
+ * 返回：true 发送成功，false 发送过程中失败（已中止）
  */
-inline void sendVideoFrame(const FrameState& frame) {
-    if (!frame.isValid) return;
-    
+inline bool sendVideoFrame(const FrameState& frame) {
+    if (!frame.isValid) return false;
+
     const uint8_t* data = frame.frameBuffer->buf;
     const size_t totalLen = frame.frameSize;
-    const uint16_t totalPackets = (totalLen + StreamConfig::MAX_PACKET_SIZE - 1) / 
+    const uint16_t totalPackets = (totalLen + StreamConfig::MAX_PACKET_SIZE - 1) /
                                    StreamConfig::MAX_PACKET_SIZE;
-    
-    // 发送帧头信息
+
     for (uint16_t i = 0; i < totalPackets; i++) {
         const size_t offset = i * StreamConfig::MAX_PACKET_SIZE;
         const uint16_t packetLen = min(
             static_cast<size_t>(StreamConfig::MAX_PACKET_SIZE),
             totalLen - offset
         );
-        
+
         // 构建视频包
         VideoPacket packet = {};
         packet.magic = StreamConfig::VIDEO_MAGIC;
@@ -164,8 +165,6 @@ inline void sendVideoFrame(const FrameState& frame) {
         memcpy(packet.data, data + offset, packetLen);
 
         // 计算实际发送大小：10字节头部 + packetLen字节数据 + 1字节校验和
-        // 与 sizeof(VideoPacket)-128+packetLen 相比多出校验和的1字节，
-        // 确保非满载包（packetLen<128）的校验和也包含在发送范围内
         const size_t sendSize = 10 + packetLen + 1;  // header(10) + data + checksum(1)
 
         // 计算校验和：覆盖发送范围内除校验和字节外的所有字节（0 到 sendSize-2）
@@ -175,16 +174,10 @@ inline void sendVideoFrame(const FrameState& frame) {
             sum += packetData[j];
         }
 
-        // 校验和写入实际发送的最后一个字节位置
-        // packetLen<128 时写入 data[packetLen]（data 数组内偏移）
-        // packetLen=128 时写入 packet.checksum（结构体尾部字段）
-        // 使用条件判断避免 packetLen=128 时 data[128] 数组越界（严格来说是 UB，
-        // 虽然 packed 结构体下 data[128] 与 checksum 地址相同，实际工作正常）
-        if (packetLen >= StreamConfig::MAX_PACKET_SIZE) {
-            packet.checksum = sum;
-        } else {
-            packet.data[packetLen] = sum;
-        }
+        // 统一将校验和写入结构体 checksum 字段，并同步写入实际发送包的最后一个字节
+        packet.checksum = sum;
+        uint8_t* const txChecksumPtr = reinterpret_cast<uint8_t*>(&packet) + sendSize - 1;
+        *txChecksumPtr = sum;
 
         // 通过 WiFi UDP 发送到接收器（AP 的固定 IP）
         IPAddress apIp(NetworkConfig::AP_IP[0], NetworkConfig::AP_IP[1],
@@ -192,12 +185,15 @@ inline void sendVideoFrame(const FrameState& frame) {
         g_udpTelemetry.beginPacket(apIp, UdpConfig::TELEMETRY_PORT);
         g_udpTelemetry.write(reinterpret_cast<const uint8_t*>(&packet), sendSize);
         if (!g_udpTelemetry.endPacket()) {
-            Serial.println("[UDP] 视频分包发送失败");
+            Serial.println("[UDP] 视频分包发送失败，中止该帧");
+            return false;
         }
 
         // 短暂延迟避免拥塞
         delayMicroseconds(50);
     }
+
+    return true;
 }
 
 /**
@@ -262,22 +258,30 @@ inline void updateStreaming(const CameraConfiguration& config) {
     g_consecutiveFailures = 0;
     
     // 发送帧
-    sendVideoFrame(frame);
-    
+    const bool sent = sendVideoFrame(frame);
+
     // 动态调整质量（根据帧大小自适应压缩率）
     const uint8_t newQuality = adjustQuality(frame.frameSize);
     sensor_t* sensor = esp_camera_sensor_get();
     if (sensor != NULL) {
         sensor->set_quality(sensor, newQuality);
     }
-    
-    // 更新状态
+
+    // 更新状态：帧内任一包发送失败即计为丢帧
     const uint16_t fps = calculateFPS(g_streamState.lastFrameTime, currentTime);
-    g_streamState = StreamState(
-        true, currentTime, fps,
-        g_streamState.totalFrames + 1, g_streamState.droppedFrames,
-        g_streamState.bytesSent + frame.frameSize
-    );
+    if (sent) {
+        g_streamState = StreamState(
+            true, currentTime, fps,
+            g_streamState.totalFrames + 1, g_streamState.droppedFrames,
+            g_streamState.bytesSent + frame.frameSize
+        );
+    } else {
+        g_streamState = StreamState(
+            true, currentTime, fps,
+            g_streamState.totalFrames + 1, g_streamState.droppedFrames + 1,
+            g_streamState.bytesSent
+        );
+    }
     
     // 释放帧
     releaseFrame(frame);

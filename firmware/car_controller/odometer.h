@@ -14,13 +14,15 @@
  * - 编码器: 光电编码器（光栅码盘 + 光敏元件），每圈20个脉冲
  * 
  * 作者：智能车项目团队
- * 版本：1.3.0
+ * 版本：1.4.0（修复 P2-02 编码器方向、P2-05 自动校准直行判断）
+ * 日期：2026-06-20
  */
 
 #ifndef ODOMETER_H
 #define ODOMETER_H
 
 #include <Arduino.h>
+#include "motor_control.h"  // 使用 MotorDirection 方向枚举
 
 // ============================================
 // 纯数据类型定义
@@ -269,59 +271,72 @@ inline float updateHeading(float heading, float angularVelocity, float dtSec) {
  * ISR 安全说明：本函数使用 noInterrupts()/interrupts() 保护 volatile 脉冲计数器的读取。
  * ESP32 上 32-bit float 读写为硬件原子操作，因此 g_leftSpeedMmps/g_rightSpeedMmps/g_heading
  * 的浮点更新无需额外同步。调用者（loop()）运行在主任务上下文，本函数仅在 loop() 中执行写入，风险可控。
+ *
+ * 方向符号：FORWARD=+1，BACKWARD=-1，STOP=0。脉冲差与距离/速度均乘以方向符号，
+ * 使后退时里程和航向积分与运动方向一致。
  */
-inline void updateOdometer() {
+inline void updateOdometer(MotorDirection leftDir, MotorDirection rightDir) {
     const uint32_t now = millis();
     const uint32_t elapsed = now - OdometerState::g_lastSampleTime;
-    
+
     // 防止除零和采样过快
     if (elapsed < OdometerConfig::SAMPLE_PERIOD_MS) {
         return;
     }
-    
+
     // 读取脉冲计数（关中断防止竞态）
     noInterrupts();
     const uint32_t leftPulses = OdometerState::g_leftPulses;
     const uint32_t rightPulses = OdometerState::g_rightPulses;
     interrupts();
-    
+
     // 计算脉冲差值
     const uint32_t leftDelta = leftPulses - OdometerState::g_lastLeftPulses;
     const uint32_t rightDelta = rightPulses - OdometerState::g_lastRightPulses;
-    
+
     // 更新上次脉冲计数
     OdometerState::g_lastLeftPulses = leftPulses;
     OdometerState::g_lastRightPulses = rightPulses;
-    
-    // 计算速度（应用校准系数）
-    const float leftSpeed = calculateSpeedMmps(leftDelta, elapsed) 
+
+    // 根据电机方向确定脉冲符号
+    const int8_t leftSign = (leftDir == MotorDirection::FORWARD) ? 1
+                          : (leftDir == MotorDirection::BACKWARD) ? -1 : 0;
+    const int8_t rightSign = (rightDir == MotorDirection::FORWARD) ? 1
+                           : (rightDir == MotorDirection::BACKWARD) ? -1 : 0;
+
+    // 计算速度（应用校准系数与方向符号）
+    const float leftSpeed = calculateSpeedMmps(leftDelta, elapsed)
+                          * leftSign
                           * OdometerState::g_calibration.leftCorrection;
     const float rightSpeed = calculateSpeedMmps(rightDelta, elapsed)
+                           * rightSign
                            * OdometerState::g_calibration.rightCorrection;
-    
+
     OdometerState::g_leftSpeedMmps = leftSpeed;
     OdometerState::g_rightSpeedMmps = rightSpeed;
-    OdometerState::g_leftRpm = calculateRpm(leftDelta, elapsed) 
+    OdometerState::g_leftRpm = calculateRpm(leftDelta, elapsed)
+                               * leftSign
                                * OdometerState::g_calibration.leftCorrection;
     OdometerState::g_rightRpm = calculateRpm(rightDelta, elapsed)
-                               * OdometerState::g_calibration.rightCorrection;
-    
-    // 累计距离
-    const float leftDistDelta = static_cast<float>(leftDelta) * OdometerConfig::MM_PER_PULSE;
-    const float rightDistDelta = static_cast<float>(rightDelta) * OdometerConfig::MM_PER_PULSE;
+                                * rightSign
+                                * OdometerState::g_calibration.rightCorrection;
+
+    // 累计距离（带方向符号）
+    const float leftDistDelta = static_cast<float>(leftDelta) * OdometerConfig::MM_PER_PULSE * leftSign;
+    const float rightDistDelta = static_cast<float>(rightDelta) * OdometerConfig::MM_PER_PULSE * rightSign;
     OdometerState::g_leftDistanceMm += leftDistDelta;
     OdometerState::g_rightDistanceMm += rightDistDelta;
-    
+
     // 计算整车距离（取平均值）
     OdometerState::g_totalDistanceMm += (leftDistDelta + rightDistDelta) / 2.0f;
-    
+
     // 计算角速度和航向
     const float angularVel = calculateAngularVelocity(leftSpeed, rightSpeed);
     const float dtSec = static_cast<float>(elapsed) / 1000.0f;
     OdometerState::g_heading = updateHeading(
         OdometerState::g_heading, angularVel, dtSec
     );
-    
+
     // 更新时间戳
     OdometerState::g_lastSampleTime = now;
 }
@@ -392,39 +407,45 @@ inline void setSpeedCalibration(float leftCorrection, float rightCorrection) {
 
 /**
  * 自动校准：直行时记录速度比，计算修正系数
- * 调用条件：车在平地上直行一段距离后调用
+ * 调用条件：车在平地上同向直行一段距离后调用
  * 输入：当前PWM值，期望直行距离
  * 输出：校准参数
  */
-inline SpeedCalibration autoCalibrate() {
-    // 如果左右轮速度都接近0，返回默认校准
-    if (OdometerState::g_leftSpeedMmps < 1.0f || OdometerState::g_rightSpeedMmps < 1.0f) {
-        Serial.println("[测速模块] 自动校准失败：速度过低");
+inline SpeedCalibration autoCalibrate(MotorDirection leftDir, MotorDirection rightDir) {
+    constexpr float MIN_SPEED_THRESHOLD = 1.0f;
+
+    // 必须同向直行（同时前进或同时后退），转弯/停止时不允许校准
+    const bool isStraight = ((leftDir == MotorDirection::FORWARD && rightDir == MotorDirection::FORWARD) ||
+                             (leftDir == MotorDirection::BACKWARD && rightDir == MotorDirection::BACKWARD));
+    if (!isStraight ||
+        fabs(OdometerState::g_leftSpeedMmps) < MIN_SPEED_THRESHOLD ||
+        fabs(OdometerState::g_rightSpeedMmps) < MIN_SPEED_THRESHOLD) {
+        Serial.println("[测速模块] 自动校准失败：未直行或速度过低");
         return OdometerConfig::DEFAULT_CALIBRATION;
     }
-    
-    // 计算速比（以较慢轮为基准）
-    const float leftSpeed = OdometerState::g_leftSpeedMmps;
-    const float rightSpeed = OdometerState::g_rightSpeedMmps;
+
+    // 计算速比（使用绝对值，避免同向后退时符号影响）
+    const float leftSpeed = fabs(OdometerState::g_leftSpeedMmps);
+    const float rightSpeed = fabs(OdometerState::g_rightSpeedMmps);
     const float avgSpeed = (leftSpeed + rightSpeed) / 2.0f;
-    
+
     // 修正系数：使轮速趋向平均值（同时检查除数为零）
     const float leftCorrection = (avgSpeed > 0.1f && leftSpeed > 0.1f) ? avgSpeed / leftSpeed : 1.0f;
     const float rightCorrection = (avgSpeed > 0.1f && rightSpeed > 0.1f) ? avgSpeed / rightSpeed : 1.0f;
-    
+
     // 修正系数上限约束，防止极端值导致 PID 振荡
     constexpr float MIN_CORRECTION = 0.5f;
     constexpr float MAX_CORRECTION = 2.0f;
-    const float clampedLeft = (leftCorrection < MIN_CORRECTION) ? MIN_CORRECTION 
-                            : (leftCorrection > MAX_CORRECTION) ? MAX_CORRECTION 
+    const float clampedLeft = (leftCorrection < MIN_CORRECTION) ? MIN_CORRECTION
+                            : (leftCorrection > MAX_CORRECTION) ? MAX_CORRECTION
                             : leftCorrection;
-    const float clampedRight = (rightCorrection < MIN_CORRECTION) ? MIN_CORRECTION 
-                             : (rightCorrection > MAX_CORRECTION) ? MAX_CORRECTION 
+    const float clampedRight = (rightCorrection < MIN_CORRECTION) ? MIN_CORRECTION
+                             : (rightCorrection > MAX_CORRECTION) ? MAX_CORRECTION
                              : rightCorrection;
-    
+
     Serial.printf("[测速模块] 自动校准结果: 左=%.3f, 右=%.3f\n",
                   clampedLeft, clampedRight);
-    
+
     return SpeedCalibration(clampedLeft, clampedRight);
 }
 

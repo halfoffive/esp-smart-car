@@ -76,7 +76,7 @@ import { useStatus } from '../composables/useStatus'
 const { isConnected, videoFps, linkStatus } = useWebSocket()
 const { status } = useStatus()
 
-const serialConnected = computed(() => status.value.serialStatus === '已连接')
+const serialConnected = computed(() => status.value.serialStatus.startsWith('已连接'))
 const fps = computed(() => videoFps.value || 0)
 const currentSpeed = computed(() => status.value.currentSpeed || 0)
 const currentSpeedPercent = computed(() => Math.round((currentSpeed.value / 255) * 100))

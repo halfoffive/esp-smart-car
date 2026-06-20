@@ -13,7 +13,14 @@
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    body::Body,
+    extract::State,
+    http::{Request, StatusCode},
+    middleware::Next,
+    response::Response,
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -43,6 +50,8 @@ pub struct StatusResponse {
     pub bytes_sent: u64,
     /// 当前速度 PWM 值（0-255）
     pub current_speed: u8,
+    /// 当前行走模式（0=普通，1=直线修正，2=航向锁定）
+    pub drive_mode: u8,
     /// WebSocket连接数
     pub ws_clients: usize,
     /// 运行时间（秒）
@@ -106,13 +115,15 @@ pub async fn handle_command(
             Ok(speed) => {
                 let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
                 let packet = build_wireless_packet(2, 0, speed, seq);
-                let send_result = {
-                    let mut manager = state.serial_manager.lock_or_recover("serial_manager");
+                let state_clone = Arc::clone(&state);
+                let send_result = tokio::task::spawn_blocking(move || {
+                    let mut manager = state_clone.serial_manager.lock_or_panic("serial_manager");
                     manager.send_packet(&packet)
-                };
+                })
+                .await;
 
                 return match send_result {
-                    Ok(()) => {
+                    Ok(Ok(())) => {
                         state.current_speed.store(speed, Ordering::Relaxed);
                         info!("设置速度 PWM: {}", speed);
                         (
@@ -123,13 +134,23 @@ pub async fn handle_command(
                             }),
                         )
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         warn!("发送速度命令失败: {}", e);
                         (
                             StatusCode::SERVICE_UNAVAILABLE,
                             Json(ApiResponse {
                                 success: false,
                                 message: format!("发送失败: {}", e),
+                            }),
+                        )
+                    }
+                    Err(e) => {
+                        warn!("速度发送任务异常: {}", e);
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ApiResponse {
+                                success: false,
+                                message: format!("发送任务异常: {}", e),
                             }),
                         )
                     }
@@ -185,14 +206,16 @@ pub async fn handle_command(
     let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
     let packet = build_wireless_packet(type_value, data, speed, seq);
 
-    // 在独立作用域中发送命令，确保 std::sync::MutexGuard 在 .await 前释放
-    let send_result = {
-        let mut manager = state.serial_manager.lock_or_recover("serial_manager");
+    // 在 spawn_blocking 中持锁 + 发送，避免阻塞 async 运行时
+    let state_clone = Arc::clone(&state);
+    let send_result = tokio::task::spawn_blocking(move || {
+        let mut manager = state_clone.serial_manager.lock_or_panic("serial_manager");
         manager.send_packet(&packet)
-    }; // manager 锁在此处释放
+    })
+    .await;
 
     match send_result {
-        Ok(()) => {
+        Ok(Ok(())) => {
             info!("发送命令: {}", request.command);
             (
                 StatusCode::OK,
@@ -202,13 +225,23 @@ pub async fn handle_command(
                 }),
             )
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             warn!("发送命令失败: {}", e);
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(ApiResponse {
                     success: false,
                     message: format!("发送失败: {}", e),
+                }),
+            )
+        }
+        Err(e) => {
+            warn!("命令发送任务异常: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    success: false,
+                    message: format!("发送任务异常: {}", e),
                 }),
             )
         }
@@ -219,7 +252,7 @@ pub async fn handle_command(
 pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json<StatusResponse>) {
     // 逐把加锁，复制数据后立即释放，减少锁争用
     let (serial_status, port_name, baud_rate, frame_count, bytes_sent, command_count) = {
-        let manager = state.serial_manager.lock_or_recover("serial_manager");
+        let manager = state.serial_manager.lock_or_panic("serial_manager");
         let (serial_status, port_name, baud_rate) = match &manager.state {
             SerialConnectionState::Disconnected => ("未连接".to_string(), None, None),
             SerialConnectionState::Connecting => ("连接中".to_string(), None, None),
@@ -249,6 +282,7 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
     };
 
     let current_speed = state.current_speed.load(Ordering::Relaxed);
+    let drive_mode = state.current_drive_mode.load(Ordering::Relaxed);
 
     let (left_speed, right_speed, heading, total_distance) = {
         let odom = state.odometry.lock_or_recover("odometry");
@@ -269,6 +303,7 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
         frame_count,
         bytes_sent,
         current_speed,
+        drive_mode,
         ws_clients,
         uptime,
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -290,17 +325,12 @@ pub async fn connect_serial(
     let baud_rate = request.baud_rate.unwrap_or(DEFAULT_BAUD_RATE);
     let port_name = request.port_name;
 
-    // 先断开现有连接（在锁内）
-    {
-        let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-        manager.disconnect();
-    } // 释放锁
-
-    // 在 spawn_blocking 中执行阻塞 I/O（serialport::open 是阻塞调用）
+    // 在单个 spawn_blocking 中原子完成 disconnect + connect，避免中间状态泄漏
     let state_clone = Arc::clone(&state);
     let port_name_clone = port_name.clone();
     let connect_result = tokio::task::spawn_blocking(move || {
-        let mut manager = state_clone.serial_manager.lock_or_recover("serial_manager");
+        let mut manager = state_clone.serial_manager.lock_or_panic("serial_manager");
+        manager.disconnect();
         manager.connect(&port_name_clone, baud_rate)
     })
     .await;
@@ -311,14 +341,16 @@ pub async fn connect_serial(
             info!("串口连接成功: {} @ {}", port_name, baud_rate);
             // 连接成功后立即发送 LINK_STATUS 探测包，触发 Dongle 上报链路状态 JSON
             // 用户可感知"连接 = 链路打通"，避免连接后无反馈
-            {
-                let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
+            let state_clone = Arc::clone(&state);
+            tokio::task::spawn_blocking(move || {
+                let seq = state_clone.packet_seq.fetch_add(1, Ordering::Relaxed);
                 let packet = build_wireless_packet(11, 0, 0, seq);
-                let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                if let Err(e) = manager.send_packet(&packet) {
+                let mut manager = state_clone.serial_manager.lock_or_panic("serial_manager");
+                // 探测包不属于控制命令，不递增 command_count
+                if let Err(e) = manager.send_bytes(&packet) {
                     warn!("发送探测命令 'P' 失败: {}", e);
                 }
-            }
+            });
             (
                 StatusCode::OK,
                 Json(ApiResponse {
@@ -354,8 +386,12 @@ pub async fn connect_serial(
 pub async fn disconnect_serial(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-    manager.disconnect();
+    tokio::task::spawn_blocking(move || {
+        let mut manager = state.serial_manager.lock_or_panic("serial_manager");
+        manager.disconnect();
+    })
+    .await
+    .ok();
 
     info!("串口已断开");
 
@@ -394,6 +430,37 @@ pub async fn get_ble_devices(State(state): State<Arc<AppState>>) -> Json<serde_j
     }))
 }
 
+/// API 认证中间件
+/// 当 `AppState.api_token` 为 Some 时，要求请求头携带 `Authorization: Bearer <token>`
+/// 认证禁用（测试环境）时直接放行
+pub async fn auth_middleware(
+    State(state): State<Arc<AppState>>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    if state.api_token.is_none() {
+        return next.run(request).await;
+    }
+
+    let expected = state.api_token.as_deref().unwrap_or("");
+    let provided = request
+        .headers()
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .unwrap_or("");
+
+    if provided != expected {
+        warn!("API 认证失败：Authorization 头中的 token 不匹配");
+        return Response::builder()
+            .status(StatusCode::UNAUTHORIZED)
+            .body(Body::from("Unauthorized"))
+            .unwrap_or_else(|_| Response::new(Body::empty()));
+    }
+
+    next.run(request).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -401,7 +468,7 @@ mod tests {
 
     /// 辅助函数：创建测试用 AppState
     fn create_test_state() -> Arc<AppState> {
-        Arc::new(AppState::new())
+        Arc::new(AppState::new_test())
     }
 
     /// 测试 CommandRequest 反序列化
@@ -452,6 +519,7 @@ mod tests {
             frame_count: 0,
             bytes_sent: 0,
             current_speed: 128,
+            drive_mode: 0,
             ws_clients: 0,
             uptime: 42,
             version: "1.2.0".to_string(),
@@ -543,5 +611,18 @@ mod tests {
             resp.message.contains("不能为空"),
             "空命令错误消息应包含'不能为空'"
         );
+    }
+
+    /// 测试无效速度命令返回 400
+    #[tokio::test]
+    async fn test_handle_command_invalid_speed() {
+        let state = create_test_state();
+        let request = CommandRequest {
+            command: "S:256".to_string(),
+        };
+        let (status, Json(resp)) = handle_command(State(state), Json(request)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(!resp.success);
+        assert!(resp.message.contains("PWM 值无效"));
     }
 }

@@ -14,7 +14,7 @@ esp-smart-car/
 │   ├── libraries/               # Arduino 库（跨 sketch 共享）
 │   │   └── wireless_protocol/   # 无线通信协议库（共享 8 字节 WirelessPacket + 视频分包）
 │   │       └── src/
-│   │           └── wireless.h   # 共享头文件（SSID/密码/静态 IP/UDP 端口定义）
+│   │           └── wireless.h   # 共享头文件（包格式/静态 IP/UDP 端口定义；SSID/密码见 wifi_credentials.h）
 │   ├── car_controller/          # 车载控制器（ESP32-S3，Freenove FNK0085）
 │   │   ├── motor_control.h      # 电机控制（函数式编程，差速支持）
 │   │   ├── odometer.h           # 编码器测速模块
@@ -91,11 +91,12 @@ esp-smart-car/
 #### WiFi UDP（无线通信）
 - 协议：2.4GHz WiFi UDP
 - 网络拓扑：C6 作为 SoftAP，S3 作为 STA 接入
-- 热点 SSID：`ESP-SmartCar`，密码：`SmartCar2024`（定义于 `firmware/libraries/wireless_protocol/src/wireless.h`）
+- 热点 SSID/密码由 `firmware/libraries/wireless_protocol/src/wifi_credentials.h` 定义（由 `wifi_credentials.example.h` 复制修改而来，实际文件已加入 `.gitignore`，不进入版本库）
 - 静态 IP：C6 `192.168.4.1`，S3 `192.168.4.2`
 - 控制端口：`9000`（C6 → S3 命令）
 - 遥测端口：`9001`（S3 → C6 测速、状态、视频帧）
 - 用途：车载 S3 ↔ 接收器 C6 双向通信（视频帧、命令、测速、状态）
+- 安全：车载 UDP 控制包增加源 IP/MAC 白名单与序列号反重放；后端 REST/WebSocket 增加认证，未携带有效凭证的客户端无法操作车辆
 
 #### BLE 扫描
 - 接收器支持本地 BLE 设备扫描，通过 'B' 命令触发
@@ -187,7 +188,7 @@ bun run build
 
 ## 启动顺序
 
-1. 连接电脑端接收器（ESP32-C6）到电脑 USB — C6 自动创建 WiFi 热点 `ESP-SmartCar`
+1. 连接电脑端接收器（ESP32-C6）到电脑 USB — C6 自动创建 WiFi 热点（SSID/密码以本地 `wifi_credentials.h` 为准）
 2. 启动车载控制器（ESP32-S3，Freenove FNK0085）— S3 作为 STA 自动连接 C6 热点，静态 IP `192.168.4.2`
 3. 启动 Rust 后端（自动提供前端页面）
 4. 在浏览器中打开 `http://localhost:8080`
@@ -239,7 +240,7 @@ cargo clippy       # 静态分析检查
 ## 故障排除
 
 ### 无线通信失败
-- 检查 C6 接收器是否正确创建热点 `ESP-SmartCar`（密码 `SmartCar2024`）
+- 检查 C6 接收器是否正确创建热点（SSID/密码以本地 `wifi_credentials.h` 为准，模板见 `firmware/libraries/wireless_protocol/src/wifi_credentials.example.h`）
 - 确认 S3 已成功作为 STA 接入，静态 IP 为 `192.168.4.2`
 - 检查电脑是否同时为 C6 提供了足够 USB 供电
 - 确认 UDP 端口 `9000`/`9001` 未被防火墙或电脑网络策略拦截
@@ -271,6 +272,15 @@ cargo clippy       # 静态分析检查
 - 检查 WebSocket 连接是否正常
 
 ## 版本历史
+
+- v1.5.0 - 2026-06-20（未发布）
+  - Karpathy 指南安全审计修复：移除硬编码 Wi-Fi 凭据，改为 `firmware/libraries/wireless_protocol/src/wifi_credentials.example.h` 模板，实际 `wifi_credentials.h` 不进入版本库
+  - 后端 REST/WebSocket 增加认证，未授权请求无法操作车辆
+  - 车载 UDP 控制增加源 IP/MAC 白名单与序列号反重放，阻止未授权主机控制车辆
+  - 串口控制包增加帧同步/重同步机制；删除 `mac_config` 死代码链
+  - 修复视频包/遥测包校验和位置不一致与未验证问题
+  - 后端串口写操作改为 `spawn_blocking`，心跳按客户端独立持有，修复 `Ok(0)` 断开检测与串口重连旧句柄释放
+  - 接收器 BLE 扫描改为非阻塞，避免扫描期间丢失控制/遥测包
 
 - v1.4.0 - 2026-06-20（未发布）
   - 无线通信迁移：车载 S3 与接收器 C6 之间从 ESP-NOW 改为 WiFi UDP

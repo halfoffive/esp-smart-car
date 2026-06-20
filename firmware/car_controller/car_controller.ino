@@ -18,7 +18,8 @@
  * - 右编码器: GPIO2（中断引脚）
  * 
  * 作者：智能车项目团队
- * 版本：1.7.0（S3 单芯片：WiFi STA + UDP，速度统一为 0-255 PWM）
+ * 版本：1.8.1（修复 P0-03 UDP 控制源地址白名单、P1-06/P3-02；适配 odometer/video_stream 签名变更）
+ * 日期：2026-06-20
  */
 
 #include "motor_control.h"
@@ -60,6 +61,11 @@ VehicleMotion g_currentMotion = createStopState();
  * 初始值 128 对应中速，避免首次连接未发送速度命令前车速与前端显示不一致
  */
 uint8_t g_currentSpeed = 128;
+
+/**
+ * 最后接受的控制包序列号（用于反重放，u16 回绕窗口）
+ */
+uint16_t g_lastAcceptedSeq = 0;
 
 /**
  * 最后命令接收时间
@@ -130,8 +136,8 @@ void handleMoveCommand(const char cmd) {
     // 只有前后运动才做直线修正（转弯不需要）
     if ((leftDir == MotorDirection::FORWARD && rightDir == MotorDirection::FORWARD) || (leftDir == MotorDirection::BACKWARD && rightDir == MotorDirection::BACKWARD)) {
 
-      // 更新测速数据
-      updateOdometer();
+      // 更新测速数据（传入当前电机方向，使后退时里程/航向符号正确）
+      updateOdometer(leftDir, rightDir);
 
       // 应用PID智能修正
       SmartMotorOutput output = updateSmartControl(
@@ -186,7 +192,8 @@ void handleStopCommand() {
  * 在车直线行驶一段距离后发送此命令自动校准
  */
 void handleCalibrateCommand() {
-  SpeedCalibration calib = autoCalibrate();
+  SpeedCalibration calib = autoCalibrate(
+    g_currentMotion.left.direction, g_currentMotion.right.direction);
   setSpeedCalibration(calib.leftCorrection, calib.rightCorrection);
 #if DEBUG_PID
   Serial.println("[校准完成] 左右轮修正系数已更新");
@@ -326,7 +333,7 @@ bool captureAndSendVideoFrame() {
   g_consecutiveFailures = 0;
 
   // 通过 WiFi UDP 分包发送到接收器（S3 单芯片直发，无 Serial1 桥接）
-  sendVideoFrame(frame);
+  const bool sent = sendVideoFrame(frame);
 
   // 动态调整质量（根据帧大小自适应压缩率）
   const uint8_t newQuality = adjustQuality(frame.frameSize);
@@ -335,12 +342,19 @@ bool captureAndSendVideoFrame() {
     sensor->set_quality(sensor, newQuality);
   }
 
-  // 更新流状态
+  // 更新流状态：发送失败计为丢帧
   const uint16_t fps = calculateFPS(g_streamState.lastFrameTime, currentTime);
-  g_streamState = StreamState(
-    true, currentTime, fps,
-    g_streamState.totalFrames + 1, g_streamState.droppedFrames,
-    g_streamState.bytesSent + frame.frameSize);
+  if (sent) {
+    g_streamState = StreamState(
+      true, currentTime, fps,
+      g_streamState.totalFrames + 1, g_streamState.droppedFrames,
+      g_streamState.bytesSent + frame.frameSize);
+  } else {
+    g_streamState = StreamState(
+      true, currentTime, fps,
+      g_streamState.totalFrames + 1, g_streamState.droppedFrames + 1,
+      g_streamState.bytesSent);
+  }
 
   // 释放帧缓冲
   releaseFrame(frame);
@@ -371,13 +385,32 @@ void handleUdpControlPacket() {
     return;
   }
   if (len == sizeof(WirelessPacket)) {
+    // 源地址白名单：控制包必须来自接收器/AP（固定 IP 192.168.4.1）
+    const IPAddress remoteIp = g_udpControl.remoteIP();
+    const IPAddress apIp(NetworkConfig::AP_IP[0], NetworkConfig::AP_IP[1],
+                         NetworkConfig::AP_IP[2], NetworkConfig::AP_IP[3]);
+    if (remoteIp != apIp) {
+      Serial.printf("[UDP] 控制包来源非法: %s，丢弃\n", remoteIp.toString().c_str());
+      return;
+    }
+
     WirelessPacket packet;
-    g_udpControl.read((uint8_t*)&packet, sizeof(packet));
+    if (g_udpControl.read((uint8_t*)&packet, sizeof(packet)) != sizeof(packet)) {
+      Serial.println("[UDP] 控制包读取不完整");
+      return;
+    }
 
     if (!validatePacket(packet)) {
       Serial.println("[UDP] 收到无效控制包");
       return;
     }
+
+    // 反重放检查：拒绝旧 seq 或重复 seq（考虑 u16 回绕窗口）
+    if (static_cast<int16_t>(packet.seq - g_lastAcceptedSeq) <= 0) {
+      Serial.printf("[UDP] 收到旧/重复控制包 seq=%u，丢弃\n", packet.seq);
+      return;
+    }
+    g_lastAcceptedSeq = packet.seq;
 
     // 处理命令
     switch (packet.type) {
@@ -435,7 +468,7 @@ void setup() {
 
   Serial.println("\n================================");
   Serial.println("智能车控制系统 - ESP32-S3（Freenove FNK0085）");
-  Serial.println("版本: 1.7.0 (S3 单芯片：摄像头+电机+编码器+PID+WiFi STA+UDP，速度 0-255 PWM)");
+  Serial.println("版本: 1.8.0 (S3 单芯片：摄像头+电机+编码器+PID+WiFi STA+UDP，速度 0-255 PWM)");
   Serial.println("================================\n");
 
   // PSRAM 诊断（摄像头 DMA 缓冲依赖 PSRAM）
@@ -526,7 +559,7 @@ void loop() {
 
   // 2. 定期更新测速数据并发送（与采样周期对齐，避免无效调用）
   if (currentTime - g_lastOdomReportTime >= ODOMETRY_REPORT_INTERVAL_MS) {
-    updateOdometer();
+    updateOdometer(g_currentMotion.left.direction, g_currentMotion.right.direction);
     sendOdometryData();
     g_lastOdomReportTime = currentTime;
   }

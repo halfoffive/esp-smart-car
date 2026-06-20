@@ -15,7 +15,8 @@
  * - 转弯时使用差速控制精确方向
  * 
  * 作者：智能车项目团队
- * 版本：1.2.0
+ * 版本：1.3.0（修复 P2-03 PID 积分抗饱和）
+ * 日期：2026-06-20
  */
 
 #ifndef PID_CONTROL_H
@@ -178,7 +179,7 @@ inline PIDState computePID(
     // 比例项
     const float proportional = params.kp * error;
     
-    // 积分项（带限幅防饱和）
+    // 积分项（带限幅）
     float newIntegral = lastState.integral + error * dt;
     if (newIntegral > params.integralLimit) {
         newIntegral = params.integralLimit;
@@ -186,16 +187,23 @@ inline PIDState computePID(
         newIntegral = -params.integralLimit;
     }
     const float integralTerm = params.ki * newIntegral;
-    
+
     // 微分项
     const float derivativeTerm = params.kd * (error - lastState.error) / dt;
-    
-    // 计算输出
-    float output = proportional + integralTerm + derivativeTerm;
-    
+
+    // 计算原始输出
+    const float rawOutput = proportional + integralTerm + derivativeTerm;
+
     // 输出限幅
+    float output = rawOutput;
     if (output > params.outputMax) output = params.outputMax;
     if (output < params.outputMin) output = params.outputMin;
+
+    // 积分抗饱和：输出饱和且误差与输出同号时停止同号积分累积
+    if ((rawOutput > params.outputMax && error > 0.0f) ||
+        (rawOutput < params.outputMin && error < 0.0f)) {
+        newIntegral = lastState.integral;
+    }
     
     return PIDState(
         setpoint, newInput, output, error,

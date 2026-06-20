@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Karpathy 审计修复
+> 基于 `docs/karpathy_vulnerability_report.md` 的 5 子代理并行审计结果，共修复 52 条独立问题（4 P0、14 P1、24 P2、10 P3）。
+
+- **P0 严重**
+  - **移除硬编码 Wi-Fi 凭据** — `firmware/libraries/wireless_protocol/src/wireless.h` 不再内置 SSID/密码；新增 `firmware/libraries/wireless_protocol/src/wifi_credentials.example.h` 模板，编译前需复制为 `wifi_credentials.h` 并填入自定义凭据
+  - **后端 REST/WebSocket 增加认证层** — `desktop/backend/src/api.rs`、`websocket.rs` 所有端点与 WebSocket 握手增加 token 校验，未认证请求返回 401/403 或直接断开
+  - **车载 UDP 控制增加源地址/MAC 白名单与消息认证** — `firmware/car_controller/car_controller.ino` 的 `handleUdpControlPacket` 校验源地址、MAC 白名单，并增加基于共享密钥的 HMAC 消息认证，未授权/未认证包拒绝执行
+  - **修复接收器视频转发整帧丢弃** — `firmware/receiver_dongle/receiver_dongle.ino` 的 `handleVideoPacket` 取消 `Serial.availableForWrite()` 整帧检查，改为直接分块写出，避免 JPEG 帧因串口缓冲不足被整帧丢弃
+
+- **P1 高优先级**
+  - **串口控制包增加帧同步/重同步** — `firmware/receiver_dongle/receiver_dongle.ino` 的 `readSerialPacket` 改为逐字节扫描 `MAGIC_BYTE 0xA5` 后再读取完整 `WirelessPacket`，失步后可自动恢复
+  - **删除失效 `mac_config` 死代码链** — 移除 `desktop/backend/src/websocket.rs`、`desktop/frontend/src/components/ControlPanel.vue`、`useWebSocket.ts` 中未生效的 MAC 配置/链接逻辑，避免点击“链接”后串口流永久失步
+  - **统一视频包校验和位置并验证** — `firmware/car_controller/video_stream.h` 将校验和统一写入 `packet.checksum` 字段；`receiver_dongle.ino` 的 `handleVideoPacket` 按实际接收长度计算并验证 checksum，损坏包丢弃
+  - **修正视频包最小长度阈值** — `firmware/receiver_dongle/receiver_dongle.ino` 将 `handleVideoPacket` 最小长度从 13 改为 12，避免 1 字节 payload 的合法末包被丢弃
+  - **遥测包增加校验和验证** — `firmware/receiver_dongle/receiver_dongle.ino` 的 `handleTelemetryPacket` 增加 `OdometryPacket` checksum 计算与校验，损坏/篡改遥测数据丢弃
+  - **无线控制包增加序列号反重放** — `firmware/car_controller/car_controller.ino` + `firmware/libraries/wireless_protocol/src/wireless.h` 维护 `last_accepted_seq`，拒绝 `seq <= last_accepted_seq` 的重复/旧包
+  - **后端串口写操作移入 `spawn_blocking`** — `desktop/backend/src/websocket.rs`、`api.rs` 的 `send_packet`/`send_bytes` 将“加锁 + 阻塞写”整体包进 `tokio::task::spawn_blocking`，避免阻塞 Tokio worker
+  - **后端心跳从全局改为按客户端持有** — `desktop/backend/src/websocket.rs`、`lib.rs` 将 `last_heartbeat` 从全局 `Instant` 改为每个 WebSocket 连接持有 `Arc<Mutex<Instant>>`，死连接可在 90 秒超时被正确清理
+  - **串口 `Ok(0)` 视为断开错误** — `desktop/backend/src/serial.rs` 的 `resync_stream`/`read_next` 将 `Read::read` 返回 `Ok(0)` 立即作为错误返回，触发重连而非忙等
+  - **串口重连时旧句柄通过 `port_generation` 正确释放** — `desktop/backend/src/serial.rs`、`api.rs` 在重连时自增 `port_generation`，旧串口任务归还端口前校验 generation，确保旧 `SerialPort` 句柄在 `connect` 前完成 `Drop`
+  - **后端启用 TLS/加密配置路径** — `desktop/backend/src/api.rs`、`websocket.rs` 增加 `wss://`/HTTPS 配置入口与本地自签名证书加载，生产环境可启用加密传输
+  - **BLE 扫描改为非阻塞** — `firmware/receiver_dongle/receiver_dongle.ino` 的 `performBleScan` 改为带完成回调的异步扫描，避免阻塞主循环 10 秒导致控制/遥测/视频丢失
+  - **前端串口连接状态判断修正** — `desktop/frontend/src/components/ControlPanel.vue`、`StatusBar.vue` 将 `serialConnected` 比较从严格 `'已连接'` 改为 `startsWith('已连接')`，与后端 WS 推送的 `"已连接:<port_name>"` 格式对齐
+
+- **P2 中优先级**
+  - **`OdometryPacket` 添加 `packed`** — `firmware/libraries/wireless_protocol/src/wireless.h` 为 `OdometryPacket` 增加 `__attribute__((packed))`，确保协议紧凑、接收端按 `sizeof` 读取正确
+  - **编码器方向结合电机方向** — `firmware/car_controller/odometer.h` 的 `updateOdometer` 传入左右轮方向，脉冲差与距离增量按 `±1` 计算，倒车时里程计正确递减
+  - **PID 积分抗饱和** — `firmware/car_controller/pid_control.h` 的 `computePID` 在输出饱和时停止同号积分累积，并在切换模式/目标时重置积分
+  - **视频发送失败中止帧发送** — `firmware/car_controller/video_stream.h` 的 `sendVideoFrame` 帧内任一包 `endPacket()` 失败即中止该帧并计入 `droppedFrames`
+  - **里程计自动校准支持后退/直行约束** — `firmware/car_controller/odometer.h` 的 `autoCalibrate` 使用 `fabs(speed)` 并检查左右轮同向直行，避免后退/转弯时返回默认系数
+  - **后端 JSON 解析先解析再判断** — `desktop/backend/src/serial.rs` 的 `parse_odometry_line`/`parse_ble_line`/`parse_link_line` 改为先用 `serde_json::from_str` 解析，再判断 `t` 字段，不再对空格/字段顺序敏感
+  - **`MutexExt` 中毒恢复策略 review** — `desktop/backend/src/lib.rs` 区分关键状态（如 `serial_manager`）与可重新初始化缓存，关键状态中毒时返回错误或 panic，非关键状态才自动恢复
+  - **`connect_serial` 操作原子性** — `desktop/backend/src/api.rs` 将 `disconnect` + `connect` 保持在同一把锁或 `spawn_blocking` 内完成，避免“已断开但正在连接”的中间状态
+  - **前端 WebSocket 连接 generation 防竞态** — `desktop/frontend/src/composables/useWebSocket.ts` 引入连接尝试 generation 计数器，`disconnect()` 自增 generation 使待处理 `connect()` 中止，避免 50ms 窗口内状态不一致
+  - **后端 WebSocket 非法输入返回错误** — `desktop/backend/src/websocket.rs` 的 `speed`/`drive_mode` 分支对非法/越界输入返回明确的 `error` 消息
+  - **BLE 列表清空逻辑** — `desktop/backend/src/websocket.rs` 即使 `ble_devices` 为空也每 5 秒广播一次 `{"type":"ble_devices","devices":[]}`，避免前端保留过期设备
+
+- **P3 低优先级与文档**
+  - 固件边界检查：`firmware/receiver_dongle/receiver_dongle.ino` 检查 `readBytes` 返回值；`firmware/car_controller/car_controller.ino` 检查 UDP `read` 返回值；视频包增加 `totalPackets`/`packetId` 校验
+  - 后端质量：`desktop/backend/src/main.rs` 的 `static_handler` 移除 `.expect()`；`Cargo.toml` 显式列出所需 `tokio` 特性；集成测试补充 `/api/ble-devices` 端点
+  - 前端健壮性：`desktop/frontend/src/components/ControlPanel.vue` 增加 `navigator.clipboard` 失败日志、串口回滚失败日志、`scanPorts()` 空列表清空；`useWebSocket.ts` 增加 `JSON.parse` 的 `unknown` 类型守卫与 `wifi_mac` 类型守卫
+  - 文档同步：更新 `AGENTS.md`、`README.md`、`docs/hardware.md`，修正 ESP-NOW 残留注释、`motor_control.h` 头注释、`last_odom_ms` 语义描述；同步 `package.json` 与 UI 版本号
+
 ### 修复
 - **后端并发安全** — `lib.rs` 新增 `MutexExt::lock_or_recover`，被污染的 `std::sync::Mutex` 自动恢复，避免线程 panic 拖垮整个进程
 - **串口连接竞态** — `serial.rs` 新增 `port_generation` 计数器，`disconnect`/`reconnect` 时自增，旧串口任务归还端口前校验 generation，防止旧句柄覆盖新连接

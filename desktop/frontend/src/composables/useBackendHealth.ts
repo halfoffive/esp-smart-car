@@ -51,7 +51,12 @@ function createBackendHealth(): BackendHealthInstance {
     if (isChecking) return
     isChecking = true
     try {
+      const token = import.meta.env.VITE_API_TOKEN
+      const headers: Record<string, string> = token
+        ? { Authorization: `Bearer ${token}` }
+        : {}
       const response = await fetch('/api/status', {
+        headers,
         signal: AbortSignal.timeout(PROBE_TIMEOUT),
       })
       backendAvailable.value = response.ok

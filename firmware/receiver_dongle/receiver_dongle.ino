@@ -19,7 +19,8 @@
  * 接收器 -> 电脑: USB 串口 (视频帧)
  * 
  * 作者：智能车项目团队
- * 版本：2.0.0
+ * 版本：2.1.0（修复 P0-04/P1-01/P1-04/P1-05/P1-14/P3-01/P3-13/P3-14/P3-15）
+ * 日期：2026-06-20
  */
 
 #include "../libraries/wireless_protocol/src/wireless.h"
@@ -87,6 +88,9 @@ VideoFrameBuffer g_videoBuffer;
 /// BLE 扫描是否正在进行
 bool g_bleScanning = false;
 
+/// BLE 扫描是否完成（非阻塞扫描模式下由回调置位）
+static volatile bool g_bleScanComplete = false;
+
 /// 上次收到车载 UDP 数据的时间戳（0 表示从未收到）
 static uint32_t g_lastCarDataTime = 0;
 
@@ -113,17 +117,31 @@ static uint8_t g_lastStationCount = 0;
  * 
  * 说明：串口协议已统一为二进制 WirelessPacket，与 UDP 控制载荷格式一致。
  *       读取字节数为 sizeof(WirelessPacket)（当前为 8 字节），由 packed 结构体决定。
+ *       增加帧同步：逐字节扫描直到读到 MAGIC_BYTE 0xA5，再读取剩余字节。
  */
 inline bool readSerialPacket(WirelessPacket& packet) {
-    if (Serial.available() < static_cast<int>(sizeof(WirelessPacket))) {
-        return false;
+    while (Serial.available() > 0) {
+        // 窥视第一个字节，未确认完整包之前不消耗同步字节
+        const int first = Serial.peek();
+        if (first != static_cast<int>(WirelessConfig::MAGIC_BYTE)) {
+            Serial.read();  // 丢弃非同步字节
+            continue;
+        }
+
+        if (Serial.available() < static_cast<int>(sizeof(WirelessPacket))) {
+            return false;  // 数据不足，等待下次轮询
+        }
+
+        uint8_t buffer[sizeof(WirelessPacket)];
+        if (Serial.readBytes(buffer, sizeof(WirelessPacket)) != sizeof(WirelessPacket)) {
+            return false;  // 读取异常，丢弃本次数据
+        }
+
+        memcpy(&packet, buffer, sizeof(WirelessPacket));
+        return validatePacket(packet);
     }
 
-    uint8_t buffer[sizeof(WirelessPacket)];
-    Serial.readBytes(buffer, sizeof(WirelessPacket));
-    memcpy(&packet, buffer, sizeof(WirelessPacket));
-
-    return validatePacket(packet);
+    return false;
 }
 
 // ============================================
@@ -207,11 +225,24 @@ public:
     }
 };
 
+/// BLE 扫描结果缓冲区（静态生命周期，供回调使用，避免栈对象析构后悬挂指针）
+static BleScanResult g_bleScanResult;
+
+/// BLE 扫描完成回调（非阻塞扫描结束后由 NimBLE 调用）
+static void onBleScanComplete(BLEScanResults results) {
+    g_bleScanComplete = true;
+    g_bleScanning = false;
+    (void)results;  // 结果已通过 MyBLEScanCallback 收集
+}
+
+/// BLE 扫描回调实例（静态生命周期）
+static MyBLEScanCallback g_bleScanCallback(g_bleScanResult);
+
 /**
  * 执行 BLE 扫描
  * 现在只扫描普通 BLE 设备，不再用于发现小车
  * （小车使用固定的 AP/STA 链路，无需通过 BLE 发现）
- * 扫描 10 秒后输出结果到串口
+ * 使用非阻塞扫描：start() 立即返回，扫描完成后通过回调输出结果
  */
 void performBleScan() {
     if (g_bleScanning) {
@@ -220,27 +251,55 @@ void performBleScan() {
     }
 
     g_bleScanning = true;
+    g_bleScanComplete = false;
+    g_bleScanResult.count = 0;
     Serial.println("[BLE] 开始扫描...");
-
-    BleScanResult scanResult;
 
     // BLEDevice::init 只需执行一次，在 setup() 中已完成初始化
     // 重复调用可能导致资源泄漏或状态异常
     BLEScan* pBLEScan = BLEDevice::getScan();
-    MyBLEScanCallback callback(scanResult);
-    pBLEScan->setAdvertisedDeviceCallbacks(&callback);
+    pBLEScan->setAdvertisedDeviceCallbacks(&g_bleScanCallback);
     pBLEScan->setActiveScan(true);
-    pBLEScan->start(10);  // 扫描 10 秒
+    if (!pBLEScan->start(10, onBleScanComplete)) {
+        Serial.println("{\"t\":\"ble\",\"error\":\"start_failed\"}");
+        g_bleScanning = false;
+        g_bleScanComplete = false;
+    }
+}
+
+/**
+ * 输出 JSON 字符串时对特殊字符进行转义
+ * 目前处理：" 和 \
+ */
+inline void printJsonEscaped(const char* str) {
+    for (const char* p = str; *p != '\0'; ++p) {
+        if (*p == '"' || *p == '\\') {
+            Serial.print('\\');
+        }
+        Serial.print(*p);
+    }
+}
+
+/**
+ * 输出 BLE 扫描结果 JSON
+ * 非阻塞扫描完成后在 loop() 中调用
+ */
+inline void sendBleScanResult() {
+    if (!g_bleScanComplete) {
+        return;
+    }
+    g_bleScanComplete = false;
 
     // 输出 JSON 格式结果
     // 格式: {"t":"ble","devices":[{"name":"xxx","mac":"AA:BB:CC:DD:EE:FF","rssi":-42,"wifi_mac":"AA:BB:CC:DD:EE:FF"},...]}
     // wifi_mac 仅当设备广播了 Manufacturer Data 且包含 WiFi MAC 时才会出现
     Serial.print("{\"t\":\"ble\",\"devices\":[");
-    for (uint8_t i = 0; i < scanResult.count; i++) {
+    for (uint8_t i = 0; i < g_bleScanResult.count; i++) {
         if (i > 0) Serial.print(",");
-        const BleDeviceInfo& dev = scanResult.devices[i];
-        Serial.printf("{\"name\":\"%s\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"rssi\":%d",
-                      dev.name,
+        const BleDeviceInfo& dev = g_bleScanResult.devices[i];
+        Serial.print("{\"name\":\"");
+        printJsonEscaped(dev.name);
+        Serial.printf("\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"rssi\":%d",
                       dev.mac[0], dev.mac[1], dev.mac[2],
                       dev.mac[3], dev.mac[4], dev.mac[5],
                       dev.rssi);
@@ -254,8 +313,7 @@ void performBleScan() {
     }
     Serial.println("]}");
 
-    Serial.printf("[BLE] 扫描完成，发现 %d 个设备\n", scanResult.count);
-    g_bleScanning = false;
+    Serial.printf("[BLE] 扫描完成，发现 %d 个设备\n", g_bleScanResult.count);
 }
 
 // ============================================
@@ -312,8 +370,8 @@ inline void initVideoBuffer() {
  * 处理视频包
  */
 inline void handleVideoPacket(const uint8_t* data, int len) {
-    // VideoPacket 最小长度：11字节头部 + 1字节数据 + 1字节校验和 = 13字节
-    if (len < 13) return;
+    // VideoPacket 最小长度：10字节头部 + 1字节数据 + 1字节校验和 = 12字节
+    if (len < 12) return;
 
     const VideoPacket* packet = reinterpret_cast<const VideoPacket*>(data);
     // 严格校验视频包魔术字和版本，防止误判
@@ -326,7 +384,24 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
     // 若 dataLen + 11 > len，说明 dataLen 超过实际数据长度（损坏/篡改包），
     // 后续 memcpy 会读取越界，必须提前拒绝
     if (static_cast<int>(packet->dataLen) + 11 > len) return;
-    
+
+    // 按实际接收长度计算并验证校验和（校验和为最后一个字节）
+    uint8_t checksum = 0;
+    for (int i = 0; i < len - 1; i++) {
+        checksum += data[i];
+    }
+    if (checksum != data[len - 1]) {
+        return;  // 校验失败，丢弃该包
+    }
+
+    // 包序号/总数合法性检查
+    if (packet->totalPackets == 0 || packet->packetId >= packet->totalPackets) {
+        g_videoBuffer.size = 0;
+        g_videoBuffer.packetsReceived = 0;
+        g_videoBuffer.isComplete = false;
+        return;
+    }
+
     // 新帧开始
     if (packet->packetId == 0) {
         g_videoBuffer.size = 0;
@@ -335,10 +410,17 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
         g_videoBuffer.packetsReceived = 0;
         g_videoBuffer.isComplete = false;
     }
-    
-    // 检查帧序号
-    if (packet->frameId != g_videoBuffer.frameId) return;
-    
+
+    // 帧序号、总包数或包顺序异常：丢弃当前帧
+    if (packet->frameId != g_videoBuffer.frameId ||
+        packet->totalPackets != g_videoBuffer.totalPackets ||
+        packet->packetId != g_videoBuffer.packetsReceived) {
+        g_videoBuffer.size = 0;
+        g_videoBuffer.packetsReceived = 0;
+        g_videoBuffer.isComplete = false;
+        return;
+    }
+
     // 追加数据（帧缓冲区溢出保护）
     // 安全检查：如果当前数据写入会超出缓冲区边界，
     // 丢弃当前帧并重置缓冲区，防止内存越界写入
@@ -352,26 +434,40 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
     memcpy(g_videoBuffer.data + g_videoBuffer.size, packet->data, packet->dataLen);
     g_videoBuffer.size += packet->dataLen;
     g_videoBuffer.packetsReceived++;
-    
+
     // 检查帧是否完整
     if (g_videoBuffer.packetsReceived >= g_videoBuffer.totalPackets) {
         g_videoBuffer.isComplete = true;
-        
+
         // 通过USB串口发送完整帧
         // 格式: [0xAA][0x55][帧大小(4字节)][帧数据]
-        // Serial缓冲区溢出检查：确保发送空间足够，
-        // 否则丢弃当前帧避免阻塞或数据截断
-        const size_t totalWriteLen = 2 + 4 + g_videoBuffer.size;  // header + size + data
-        if (static_cast<size_t>(Serial.availableForWrite()) >= totalWriteLen) {
-            const uint8_t header[] = {0xAA, 0x55};
-            Serial.write(header, 2);
-            Serial.write(reinterpret_cast<const uint8_t*>(&g_videoBuffer.size), 4);
-            Serial.write(g_videoBuffer.data, g_videoBuffer.size);
+        // 取消整帧缓冲空间检查，改为先写 6 字节帧头，再循环分块写出数据，
+        // 避免 JPEG 帧因一次可用空间不足被整帧丢弃
+        const uint8_t header[] = {0xAA, 0x55};
+        Serial.write(header, 2);
+        Serial.write(reinterpret_cast<const uint8_t*>(&g_videoBuffer.size), 4);
+
+        // 分块写出帧数据
+        size_t remaining = g_videoBuffer.size;
+        const uint8_t* ptr = g_videoBuffer.data;
+        while (remaining > 0) {
+            const int avail = Serial.availableForWrite();
+            if (avail <= 0) {
+                delay(1);
+                continue;
+            }
+            const size_t chunk = min(remaining, static_cast<size_t>(avail));
+            const size_t written = Serial.write(ptr, chunk);
+            if (written == 0) {
+                break;  // 写入异常，放弃剩余数据
+            }
+            ptr += written;
+            remaining -= written;
         }
-        // else: Serial缓冲区不足，丢弃当前帧（视频允许丢帧）
-        
+
         g_videoBuffer.isComplete = false;
         g_videoBuffer.size = 0;
+        g_videoBuffer.packetsReceived = 0;
     }
 }
 
@@ -393,8 +489,8 @@ void handleTelemetryPacket() {
     }
     g_udpTelemetry.read(buf, len);
 
-    // 视频包：最小 13 字节，且头部匹配视频魔术字与版本
-    if (len >= 13 && buf[0] == StreamConfig::VIDEO_MAGIC &&
+    // 视频包：最小 12 字节，且头部匹配视频魔术字与版本
+    if (len >= 12 && buf[0] == StreamConfig::VIDEO_MAGIC &&
         buf[1] == StreamConfig::PROTOCOL_VERSION) {
         g_lastCarDataTime = millis();
         handleVideoPacket(buf, len);
@@ -407,6 +503,16 @@ void handleTelemetryPacket() {
         if (odomPacket->magic == WirelessConfig::MAGIC_BYTE &&
             odomPacket->version == WirelessConfig::PROTOCOL_VERSION &&
             odomPacket->type == CommandType::ODOMETRY) {
+            // 计算并验证校验和（除 checksum 字段外的所有字节）
+            uint8_t checksum = 0;
+            const uint8_t* p = reinterpret_cast<const uint8_t*>(odomPacket);
+            for (size_t i = 0; i < sizeof(OdometryPacket) - 1; i++) {
+                checksum += p[i];
+            }
+            if (checksum != odomPacket->checksum) {
+                return;  // 校验失败，丢弃遥测包
+            }
+
             g_lastCarDataTime = millis();
             Serial.printf("{\"t\":\"odom\",\"ls\":%d,\"rs\":%d,\"hd\":%d,\"dist\":%u}\n",
                          odomPacket->leftSpeedMmps,
@@ -431,7 +537,7 @@ void setup() {
     
     Serial.println("\n================================");
     Serial.println("智能车接收器 - ESP32-C6");
-    Serial.println("版本: 2.0.0");
+    Serial.println("版本: 2.1.0");
     Serial.println("================================\n");
     
     // 配置 WiFi AP 模式
@@ -495,7 +601,10 @@ void loop() {
     
     // 2. 处理车载 UDP 遥测数据
     handleTelemetryPacket();
-    
+
+    // 2.5 输出非阻塞 BLE 扫描结果（如有）
+    sendBleScanResult();
+
     // 3. 检测 STA 连接/断开变化并输出日志
     const uint8_t stationCount = WiFi.softAPgetStationNum();
     if (stationCount != g_lastStationCount) {

@@ -1,8 +1,9 @@
 /**
  * 智能车控制系统 - 函数式编程风格
- * 基于 ESP32-S3（Freenove FNK0085），使用 L298N 驱动 4 个电机
+ * 基于 ESP32-S3（Freenove FNK0085），使用 L298N 驱动左右两侧电机（每侧并联 2 个电机）
  * 作者：智能车项目团队
- * 版本：1.3.0
+ * 版本：1.4.0（修复 P3-03 电机死区补偿）
+ * 日期：2026-06-20
  */
 
 #ifndef MOTOR_CONTROL_H
@@ -79,6 +80,13 @@ namespace PinConfig {
 }
 
 // ============================================
+// 电机控制常量
+// ============================================
+namespace MotorConfig {
+    constexpr uint8_t DEADBAND_PWM = 15;  // 电机死区阈值（低于此值输出 0，避免机械不响应）
+}
+
+// ============================================
 // 纯函数：电机控制逻辑
 // ============================================
 
@@ -138,7 +146,9 @@ inline void applyMotorState(const MotorState& motor) {
     
     // 只有在非停止状态下才输出PWM
     if (motor.direction != MotorDirection::STOP) {
-        analogWrite(motor.pinEn, motor.speed);
+        // 死区补偿：低于死区阈值的命令速度直接输出 0，避免电机机械不响应
+        const uint8_t effectiveSpeed = (motor.speed <= MotorConfig::DEADBAND_PWM) ? 0 : motor.speed;
+        analogWrite(motor.pinEn, effectiveSpeed);
     } else {
         analogWrite(motor.pinEn, 0);
     }

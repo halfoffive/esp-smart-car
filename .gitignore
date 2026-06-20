@@ -47,10 +47,17 @@ logs/
 # 文档生成
 /docs/generated/
 
+# Karpathy 审计报告（敏感/临时，不进入版本库）
+/docs/karpathy_vulnerability_report.md
+/docs/*vulnerability_report*.md
+
 # 固件编译产物
 *.bin
 *.elf
 *.hex
+
+# 固件 Wi-Fi 凭据（用户自定义，不应提交）
+/firmware/libraries/wireless_protocol/src/wifi_credentials.h
 
 # Oh My Open Agent
 .sisyphus/

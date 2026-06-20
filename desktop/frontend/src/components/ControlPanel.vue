@@ -306,7 +306,7 @@ const currentSpeed = ref(128)
 /** 连接进行中状态标志 */
 const isConnecting = ref(false)
 /** 串口是否已连接（基于 WS status 推送，解决 WebSocket 断开时按钮状态不一致） */
-const serialConnected = computed(() => status.value.serialStatus === '已连接')
+const serialConnected = computed(() => status.value.serialStatus.startsWith('已连接'))
 /** 串口是否正在连接中 */
 const serialConnecting = computed(() => status.value.serialStatus === '连接中')
 /** 串口扫描进行中状态标志 */
@@ -316,8 +316,10 @@ const isScanning = ref(false)
 let speedDebounceTimer: number | null = null
 /** BLE 扫描自动取消定时器 */
 let bleScanTimeoutId: ReturnType<typeof setTimeout> | null = null
-/** 行走模式：0=普通, 1=直线修正, 2=航向锁定 */
-const driveMode = ref(0)
+/** 行走模式本地回退状态（后端未推送 drive_mode 时使用） */
+const localDriveMode = ref(0)
+/** 行走模式：0=普通, 1=直线修正, 2=航向锁定；优先使用后端推送值 */
+const driveMode = computed(() => status.value.driveMode ?? localDriveMode.value)
 const logs = ref<{ id: number, time: string, message: string, color: string }[]>([])
 
 /** BLE 扫描进行中状态 */
@@ -345,6 +347,8 @@ let emergencyStopTimer: number | null = null
 const isEmergencyStopPressing = ref(false)
 /** 紧急停止长按触发阈值（毫秒） */
 const EMERGENCY_STOP_DELAY = 500
+/** MAC 地址格式校验：AA:BB:CC:DD:EE:FF */
+const MAC_REGEX = /^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$/
 
 /** 点击 BLE 设备：选中并发送 MAC 配置到接收器，用于泵项目设备链接 */
 const selectBleDevice = (device: { name: string; mac: string; rssi: number; wifiMac?: string }) => {
@@ -352,7 +356,9 @@ const selectBleDevice = (device: { name: string; mac: string; rssi: number; wifi
   const targetMac = device.wifiMac || device.mac
   selectedBleMac.value = targetMac
   const success = sendMacConfig(targetMac)
-  navigator.clipboard.writeText(targetMac).catch(() => {})
+  navigator.clipboard.writeText(targetMac).catch(() => {
+    addLog('MAC 复制失败，请手动复制', 'warning')
+  })
   const macLabel = device.wifiMac ? `ESP-NOW: ${targetMac}` : targetMac
   if (success) {
     addLog(`已链接设备: ${device.name} (${macLabel})`, 'info')
@@ -365,6 +371,10 @@ const selectBleDevice = (device: { name: string; mac: string; rssi: number; wifi
 const linkManualMac = () => {
   const mac = manualMac.value.trim()
   if (!mac) return
+  if (!MAC_REGEX.test(mac)) {
+    addLog('MAC 格式错误，应为 AA:BB:CC:DD:EE:FF', 'warning')
+    return
+  }
   const success = sendMacConfig(mac)
   if (success) {
     addLog(`已链接设备: ${mac}`, 'info')
@@ -424,7 +434,10 @@ const setDriveMode = (mode: number) => {
     return
   }
   if (sendDriveMode(mode)) {
-    driveMode.value = mode
+    // 后端未推送 drive_mode 时，乐观更新本地回退状态
+    if (status.value.driveMode === undefined) {
+      localDriveMode.value = mode
+    }
     addLog(`行走模式: ${driveModeDesc.value}`, 'info')
   } else {
     addLog('行走模式切换失败，请检查 WebSocket 连接', 'error')
@@ -505,7 +518,11 @@ const connect = async () => {
       } catch (e) {
         addLog(`WebSocket 连接失败: ${e instanceof Error ? e.message : String(e)}`, 'warning')
         // WebSocket 失败时回滚串口连接，避免串口打开但 WS 断开的不一致状态
-        await post('/api/disconnect').catch(() => {})
+        try {
+          await post('/api/disconnect')
+        } catch (rollbackErr) {
+          addLog(`回滚串口连接失败: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`, 'error')
+        }
       }
     } else {
       addLog(`连接失败: ${result.message}`, 'error')
@@ -565,9 +582,11 @@ const scanPorts = async () => {
       scannedPorts.value = result.ports
       addLog(`发现 ${result.ports.length} 个串口: ${result.ports.join(', ')}`, 'info')
     } else {
+      scannedPorts.value = []
       addLog('未找到可用串口', 'warning')
     }
   } catch (e) {
+    scannedPorts.value = []
     addLog(`扫描串口失败: ${e instanceof Error ? e.message : String(e)}`, 'error')
   } finally {
     isScanning.value = false

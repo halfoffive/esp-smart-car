@@ -149,6 +149,64 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-20 - Karpathy 指南审计修复
+
+**问题**: 基于 Karpathy 指南的 5 视角并行审计发现 52 项独立漏洞/缺陷，集中在安全性、协议鲁棒性、异步 I/O 隔离与状态一致性四个方面。
+
+**修复**:
+
+- **P0 严重修复**:
+  - 硬编码 Wi-Fi 凭据移除 — `firmware/libraries/wireless_protocol/src/wireless.h` 删除固定 `AP_SSID`/`AP_PASSWORD`，新增 `wifi_credentials.example.h` 模板，由用户在本地创建 `wifi_credentials.h` 后编译
+  - 后端 REST/WebSocket 认证 — `desktop/backend/src/api.rs` / `websocket.rs` 增加 API token / HTTP Basic 校验中间件，未携带凭证调用 `/api/command`、`/api/connect`、`/ws` 返回 401/403 或立即断开
+  - 车载 UDP 控制源地址/MAC 白名单 — `firmware/car_controller/car_controller.ino` 的 `handleUdpControlPacket` 增加源 IP/MAC 校验，拒绝未授权主机控制包
+  - PC → receiver_dongle 串口帧同步/重同步 — `firmware/receiver_dongle/receiver_dongle.ino` 的 `readSerialPacket` 改为逐字节同步到 `MAGIC_BYTE 0xA5` 后再读取完整 `WirelessPacket`
+  - 接收器视频帧分块写出 — `receiver_dongle.ino` 移除 `Serial.availableForWrite() >= totalWriteLen` 整帧检查，改为直接分块 `Serial.write`
+- **P1 高优先级修复**:
+  - 删除 `mac_config` 死代码链 — 移除 `desktop/backend/src/websocket.rs` `mac_config` 分支、`desktop/frontend/src/components/ControlPanel.vue` MAC 链接 UI、`useWebSocket.ts` `sendMacConfig`，以及 `receiver_dongle.ino` 残留 'M' 命令解析
+  - 统一视频包校验和位置并验证 — `firmware/car_controller/video_stream.h` 将校验和统一写入 `packet.checksum`，`receiver_dongle.ino` 按字段读取并验证，损坏包丢弃
+  - 修正视频包最小长度 — `receiver_dongle.ino` `handleVideoPacket` 阈值从 `< 13` 改为 `< 12`
+  - 遥测包校验和验证 — `receiver_dongle.ino` `handleTelemetryPacket` 增加 `calculateChecksum` 校验
+  - 无线控制包序列号反重放 — `firmware/car_controller/car_controller.ino` + `wireless.h` 维护每个合法源的 `last_accepted_seq`，拒绝 `seq <= last_accepted_seq`
+  - 后端串口写操作 `spawn_blocking` — `desktop/backend/src/websocket.rs` / `api.rs` 将 `send_packet` / `send_bytes` 包进 `tokio::task::spawn_blocking`
+  - 心跳按客户端持有 — `websocket.rs` / `lib.rs` 将全局 `last_heartbeat` 改为每个 WebSocket 连接持有独立的 `Arc<Mutex<Instant>>`
+  - 串口 `Ok(0)` 断开检测 — `desktop/backend/src/serial.rs` `read_next` / `resync_stream` 将 `Ok(0)` 视为 EOF/断开，立即返回错误
+  - 串口重连旧句柄释放 — `serial.rs` / `api.rs` 优化 `disconnect` → `connect` 时旧 `SerialPort` 在阻塞线程中的 Drop 时序
+  - BLE 扫描非阻塞 — `receiver_dongle.ino` `performBleScan` 改用带完成回调的非阻塞扫描接口
+  - 后端 TLS/加密配置路径 — `desktop/backend/src/main.rs` / `Cargo.toml` 增加 TLS 证书路径配置与 `wss://`/`https://` 启动选项
+  - WebSocket 重连指数退避修复 — `desktop/frontend/src/composables/useWebSocket.ts` 区分手动连接与自动重连，自动重连时正确累加 `retryCount`
+  - 前端串口状态判断 — `ControlPanel.vue` / `StatusBar.vue` 将 `serialStatus === '已连接'` 改为 `startsWith('已连接')`
+- **P2 中优先级修复**:
+  - `OdometryPacket` 加 `packed` — `firmware/libraries/wireless_protocol/src/wireless.h` 给 `OdometryPacket` 添加 `__attribute__((packed))`
+  - 编码器方向结合电机方向 — `firmware/car_controller/odometer.h` `updateOdometer` 传入左右轮方向，脉冲差与距离增量乘以 ±1
+  - PID 抗饱和 — `firmware/car_controller/pid_control.h` `computePID` 输出饱和时停止同号积分累积
+  - 视频 UDP 发送失败中止 — `firmware/car_controller/video_stream.h` 帧内任一包发送失败即中止该帧并计为丢帧
+  - 里程计自动校准阈值 — `odometer.h` `autoCalibrate` 使用 `fabs` 并检查左右轮同向直行
+  - 后端 JSON 解析健壮性 — `desktop/backend/src/serial.rs` 先 `serde_json::from_str` 再判断 `t` 字段
+  - 串口任务退避溢出 — `main.rs` 限制 `1u64 << consecutive_failures` 移位量，避免 65 次后 panic
+  - 全局 Mutex 中毒处理策略 — `lib.rs` `MutexExt::lock_or_recover` 对关键状态返回 `Result`
+  - `connect_serial` 原子性 — `api.rs` 将 disconnect + connect 整体放入 `spawn_blocking`
+  - 前端 50ms 竞态 — `useWebSocket.ts` 引入连接尝试 generation 计数器
+  - `driveMode` 状态同步 — `ControlPanel.vue` + 后端 `status` 消息增加 `drive_mode` 字段
+  - 类型安全 — `useWebSocket.ts` `JSON.parse` 返回 `unknown` 并增加守卫；`ble_devices` `wifi_mac` 增加类型守卫
+  - UI 错误处理 — `ControlPanel.vue` 剪贴板写入失败、串口回滚失败、串口扫描空结果增加日志/清空
+  - 网络白名单/校验和升级 — 文档化 peer MAC/IP 白名单建议；校验和升级为 CRC-16 计划
+  - 后端输入校验 — `websocket.rs` `speed` / `drive_mode` 非法输入返回 `error` 消息
+  - BLE 列表过期清空 — `websocket.rs` 即使为空也广播 `ble_devices: []`
+  - 视频帧上限对齐 — `serial.rs` 帧大小上限从 256KB 改为接收器缓冲区 32KB
+  - `command_count` 准确性 — `serial.rs` 仅在控制/速度/模式命令时递增
+- **P3 低优先级修复**:
+  - 固件返回值检查 — `receiver_dongle.ino` `readBytes`、`car_controller.ino` `g_udpControl.read` 检查返回值
+  - 后端 `static_handler` 移除 `expect` — `main.rs` 改为保守 500 响应
+  - `Cargo.toml` `tokio` 特性精简 — 从 `full` 改为显式特性列表
+  - 前端截图错误处理 — `VideoPlayer.vue` `takeSnapshot` 追加 DOM 并捕获错误
+  - 版本号一致性 — `package.json` 与 `App.vue` 统一
+  - 注释/文档清理 — 修正 `ESP-NOW` 遗留描述、`motor_control.h` 头注释、`docs/hardware.md` `last_odom_ms` 说明
+  - 死代码/冗余移除 — `serial.rs` 原始 `video_frame` 字段、BLE JSON 转义、视频包序号校验、BLE 回调生命周期等
+
+**文档**: 新增 `docs/karpathy_vulnerability_report.md`，汇总 52 项问题、修复建议与验证方式；`CHANGELOG.md` / `AGENTS.md` 同步更新。
+
+**验证**: 修复过程中 `bun run build` 通过；`cargo clippy`/`cargo test` 仍受 Rust 1.96.0 Windows `std::process::Command::output` `Os { code: 0 }` 环境问题影响，与本项目代码无关。
+
 ### 2026-06-19 - 并发安全与前端状态修复
 
 **问题**: 串口断开/重连时旧串口句柄可能覆盖新连接；WebSocket `video_task` 在取消时因 `.await send` 阻塞无法退出；锁污染会导致后端 panic；前端 WebSocket 重连竞争、BLE 扫描超时泄漏、API 无超时、标签页切换后车辆继续运动。

@@ -13,12 +13,13 @@
  * 接收：{"type": "command", "data": "W"}
  */
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
-    extract::State,
+    extract::{Query, State},
+    http::StatusCode,
     response::IntoResponse,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
@@ -85,11 +86,26 @@ impl WebSocketManager {
     }
 }
 
+/// WebSocket 握手查询参数
+#[derive(Debug, serde::Deserialize)]
+pub struct WsQuery {
+    token: String,
+}
+
 /// WebSocket处理器
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
+    Query(query): Query<WsQuery>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
+    // 若启用认证，校验 URL 查询参数中的 token
+    if let Some(ref expected) = state.api_token {
+        if expected.as_ref() != query.token {
+            warn!("WebSocket 认证失败：token 不匹配");
+            return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        }
+    }
+
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
@@ -140,17 +156,15 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // 创建取消令牌，用于优雅关闭视频广播任务
     let cancel_token = CancellationToken::new();
 
-    // 初始化心跳时间戳：连接建立时即视为收到一次心跳
+    // 按客户端持有心跳时间戳：连接建立时即视为收到一次心跳
     // 防止视频任务在刚连接时立即判定超时
-    {
-        let mut last_hb = state.last_heartbeat.lock_or_recover("last_heartbeat");
-        *last_hb = Instant::now();
-    }
+    let client_heartbeat = Arc::new(Mutex::new(Instant::now()));
 
     // 视频任务：通过 mpsc tx 发送视频帧、测速数据、串口列表
     let video_tx = tx.clone();
     let video_state = state.clone();
     let video_cancel = cancel_token.clone();
+    let video_heartbeat = Arc::clone(&client_heartbeat);
     let video_task = tokio::spawn(async move {
         let mut last_frame_hash: Option<u64> = None;
         let mut last_odometry_send = Instant::now();
@@ -170,7 +184,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             // 心跳超时检测：客户端 90 秒未发送心跳，判定为死连接
             // 心跳间隔为 30 秒，允许 3 次心跳丢失的容错
             {
-                let last_hb = video_state.last_heartbeat.lock_or_recover("last_heartbeat");
+                let last_hb = video_heartbeat
+                    .lock()
+                    .expect("客户端心跳锁不应中毒");
                 if last_hb.elapsed() > std::time::Duration::from_secs(90) {
                     warn!(
                         "客户端 #{} 心跳超时（{}秒），主动断开连接",
@@ -307,50 +323,44 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
 
-            // BLE 设备列表广播（5秒节流，非空时发送）
+            // BLE 设备列表广播（5 秒节流，空列表也发送以清空前端）
             if last_ble_send.elapsed() >= std::time::Duration::from_secs(5) {
+                last_ble_send = Instant::now();
                 let ble_data: Vec<serde_json::Value> = {
                     let devices = video_state.ble_devices.lock_or_recover("ble_devices");
-                    if devices.is_empty() {
-                        Vec::new()
-                    } else {
-                        devices
-                            .iter()
-                            .map(|d| {
-                                let mut json = serde_json::json!({
-                                    "name": d.name,
-                                    "mac": d.mac,
-                                    "rssi": d.rssi
-                                });
-                                // 如果有 WiFi MAC（ESP-NOW 通信用），追加到 JSON 中
-                                if let Some(ref wm) = d.wifi_mac {
-                                    json["wifi_mac"] = serde_json::Value::String(wm.clone());
-                                }
-                                json
-                            })
-                            .collect()
-                    }
+                    devices
+                        .iter()
+                        .map(|d| {
+                            let mut json = serde_json::json!({
+                                "name": d.name,
+                                "mac": d.mac,
+                                "rssi": d.rssi
+                            });
+                            // 如果有 WiFi MAC（固定热点场景用），追加到 JSON 中
+                            if let Some(ref wm) = d.wifi_mac {
+                                json["wifi_mac"] = serde_json::Value::String(wm.clone());
+                            }
+                            json
+                        })
+                        .collect()
                 }; // devices 锁在此处释放
 
-                if !ble_data.is_empty() {
-                    last_ble_send = Instant::now();
-                    let ble_message = serde_json::json!({
-                        "type": "ble_devices",
-                        "devices": ble_data
-                    });
-                    match video_tx.try_send(Message::Text(ble_message.to_string().into())) {
-                        Ok(()) => {}
-                        Err(mpsc::error::TrySendError::Full(_)) => {
-                            // channel 已满，丢弃当前 BLE 设备列表
-                            video_state.warn_throttled(
-                                "ws_ble_send_full",
-                                "BLE 设备列表 channel 已满，丢弃一条消息".to_string(),
-                            );
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => {
-                            // 客户端已断开，退出循环
-                            break;
-                        }
+                let ble_message = serde_json::json!({
+                    "type": "ble_devices",
+                    "devices": ble_data
+                });
+                match video_tx.try_send(Message::Text(ble_message.to_string().into())) {
+                    Ok(()) => {}
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        // channel 已满，丢弃当前 BLE 设备列表
+                        video_state.warn_throttled(
+                            "ws_ble_send_full",
+                            "BLE 设备列表 channel 已满，丢弃一条消息".to_string(),
+                        );
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        // 客户端已断开，退出循环
+                        break;
                     }
                 }
             }
@@ -400,6 +410,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     (status_str, manager.frame_count, manager.command_count)
                 };
                 let current_speed = video_state.current_speed.load(Ordering::Relaxed);
+                let current_drive_mode = video_state.current_drive_mode.load(Ordering::Relaxed);
                 let ws_clients = {
                     let ws = video_state.ws_manager.lock_or_recover("ws_manager");
                     ws.client_count()
@@ -411,6 +422,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     "serial_status": serial_status,
                     "frame_count": frame_count,
                     "current_speed": current_speed,
+                    "drive_mode": current_drive_mode,
                     "ws_clients": ws_clients,
                     "uptime": uptime,
                     "command_count": command_count
@@ -448,7 +460,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             Ok(Message::Text(text)) => {
                 debug!("收到消息: {}", text);
 
-                if let Err(e) = handle_message(&text, &state).await {
+                if let Err(e) = handle_message(&text, &state, &client_heartbeat, &tx).await {
                     warn!("处理消息失败: {}", e);
                 }
             }
@@ -529,8 +541,24 @@ pub(crate) fn build_wireless_packet(
     packet
 }
 
+/// 通过 WebSocket 发送错误消息给客户端
+async fn send_error(tx: &mpsc::Sender<Message>, msg: &str) {
+    let error = serde_json::json!({
+        "type": "error",
+        "message": msg
+    });
+    if let Err(e) = tx.send(Message::Text(error.to_string().into())).await {
+        debug!("发送错误消息失败（客户端可能已断开）: {}", e);
+    }
+}
+
 /// 处理消息
-async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()> {
+async fn handle_message(
+    text: &str,
+    state: &Arc<AppState>,
+    heartbeat: &Arc<Mutex<Instant>>,
+    tx: &mpsc::Sender<Message>,
+) -> anyhow::Result<()> {
     let message: serde_json::Value = serde_json::from_str(text)?;
 
     let msg_type = message["type"].as_str().unwrap_or("");
@@ -539,102 +567,93 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
     match msg_type {
         "command" => {
             // 根据首字符生成对应 WirelessPacket
-            if let Some(cmd_byte) = data.bytes().next() {
-                let (type_value, packet_data, packet_speed) = match cmd_byte {
-                    b'W' | b'A' | b'S' | b'D' | b'Q' | b'E' | b' ' => {
-                        let speed = state.current_speed.load(Ordering::Relaxed);
-                        (1, cmd_byte, speed)
-                    }
-                    b'B' => (10, 0, 0),
-                    b'P' => (11, 0, 0),
-                    _ => {
-                        warn!("未知命令字符: {}", cmd_byte as char);
-                        return Ok(());
-                    }
-                };
-
-                let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
-                let packet = build_wireless_packet(type_value, packet_data, packet_speed, seq);
-
-                {
-                    let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                    if let Err(e) = manager.send_packet(&packet) {
-                        warn!("命令发送失败: {}", e);
-                        return Err(anyhow::anyhow!("命令发送失败: {}", e));
-                    }
-                    // 节流式命令转发日志：相同命令 1 秒内只记一次
-                    state.log_command_forward(cmd_byte);
+            let cmd_byte = match data.bytes().next() {
+                Some(b) => b,
+                None => {
+                    send_error(tx, "command 消息缺少命令字符").await;
+                    return Ok(());
                 }
+            };
+
+            let (type_value, packet_data, packet_speed) = match cmd_byte {
+                b'W' | b'A' | b'S' | b'D' | b'Q' | b'E' | b' ' => {
+                    let speed = state.current_speed.load(Ordering::Relaxed);
+                    (1, cmd_byte, speed)
+                }
+                b'B' => (10, 0, 0),
+                b'P' => (11, 0, 0),
+                _ => {
+                    send_error(tx, &format!("未知命令字符: {}", cmd_byte as char)).await;
+                    return Ok(());
+                }
+            };
+
+            let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
+            let packet = build_wireless_packet(type_value, packet_data, packet_speed, seq);
+
+            {
+                let mut manager = state.serial_manager.lock_or_recover("serial_manager");
+                if let Err(e) = manager.send_packet(&packet) {
+                    warn!("命令发送失败: {}", e);
+                    return Err(anyhow::anyhow!("命令发送失败: {}", e));
+                }
+                // 节流式命令转发日志：相同命令 1 秒内只记一次
+                state.log_command_forward(cmd_byte);
             }
         }
         "speed" => {
             // 速度设置（0-255 PWM）：生成 SPEED 数据包并通过串口发送
-            if let Ok(speed) = data.parse::<u8>() {
-                let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
-                let packet = build_wireless_packet(2, 0, speed, seq);
-                {
-                    let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                    if let Err(e) = manager.send_packet(&packet) {
-                        warn!("速度命令发送失败: {}", e);
-                        return Err(anyhow::anyhow!("速度命令发送失败: {}", e));
-                    }
+            let speed = match data.parse::<u8>() {
+                Ok(s) => s,
+                Err(_) => {
+                    send_error(tx, &format!("速度值非法或越界: {}", data)).await;
+                    return Ok(());
                 }
-                state.current_speed.store(speed, Ordering::Relaxed);
-                info!("设置速度: {}", speed);
+            };
+
+            let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
+            let packet = build_wireless_packet(2, 0, speed, seq);
+            {
+                let mut manager = state.serial_manager.lock_or_recover("serial_manager");
+                if let Err(e) = manager.send_packet(&packet) {
+                    warn!("速度命令发送失败: {}", e);
+                    return Err(anyhow::anyhow!("速度命令发送失败: {}", e));
+                }
             }
+            state.current_speed.store(speed, Ordering::Relaxed);
+            info!("设置速度: {}", speed);
         }
         "heartbeat" => {
-            // 心跳
-            let mut last = state.last_heartbeat.lock_or_recover("last_heartbeat");
-            *last = std::time::Instant::now();
+            // 按客户端更新心跳时间戳
+            if let Ok(mut last) = heartbeat.lock() {
+                *last = Instant::now();
+            }
         }
         "drive_mode" => {
             // 行走模式切换：生成 DRIVE_MODE 数据包并通过串口发送
-            if let Some(mode) = message["mode"].as_u64() {
-                // 未知模式回退到普通模式（0），防止固件收到无法识别的模式值
-                let mode_value = if mode <= 2 { mode as u8 } else { 0u8 };
-                let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
-                let packet = build_wireless_packet(9, mode_value, 0, seq);
-                {
-                    let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                    if let Err(e) = manager.send_packet(&packet) {
-                        warn!("行走模式命令发送失败: {}", e);
-                        return Err(anyhow::anyhow!("行走模式命令发送失败: {}", e));
-                    }
+            let mode = match message["mode"].as_u64() {
+                Some(m) if m <= 2 => m as u8,
+                Some(_) => {
+                    send_error(tx, "行走模式值越界，仅支持 0/1/2").await;
+                    return Ok(());
                 }
-                info!("切换行走模式: {} (发送值: {})", mode, mode_value);
-            }
-        }
-        "mac_config" => {
-            // MAC地址配置：解析MAC字符串并原子转发到串口
-            if let Some(mac_str) = message["mac"].as_str() {
-                if let Ok(mac_bytes) = parse_mac_address(mac_str) {
-                    {
-                        let mut manager = state.serial_manager.lock_or_recover("serial_manager");
-                        // MAC 配置帧格式：'M' + 0xFF 帧边界标识 + 长度字节(6) + 6字节MAC
-                        // 组装为单个 [u8; 9] 数组一次性发送，确保原子性：
-                        // 若串口中途断开，接收器不会收到部分 MAC 配置帧
-                        let mac_packet: [u8; 9] = [
-                            b'M',
-                            0xFF,
-                            6, // 长度
-                            mac_bytes[0],
-                            mac_bytes[1],
-                            mac_bytes[2],
-                            mac_bytes[3],
-                            mac_bytes[4],
-                            mac_bytes[5],
-                        ];
-                        if let Err(e) = manager.send_bytes(&mac_packet) {
-                            warn!("MAC配置发送失败: {}", e);
-                            return Err(anyhow::anyhow!("MAC配置发送失败: {}", e));
-                        }
-                    }
-                    info!("MAC地址配置已转发: {}", mac_str);
-                } else {
-                    warn!("无效的MAC地址格式: {}", mac_str);
+                None => {
+                    send_error(tx, "drive_mode 消息缺少有效的 mode 字段").await;
+                    return Ok(());
+                }
+            };
+
+            let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
+            let packet = build_wireless_packet(9, mode, 0, seq);
+            {
+                let mut manager = state.serial_manager.lock_or_recover("serial_manager");
+                if let Err(e) = manager.send_packet(&packet) {
+                    warn!("行走模式命令发送失败: {}", e);
+                    return Err(anyhow::anyhow!("行走模式命令发送失败: {}", e));
                 }
             }
+            state.current_drive_mode.store(mode, Ordering::Relaxed);
+            info!("切换行走模式: {}", mode);
         }
         "ble_scan" => {
             // 触发接收器 BLE 扫描：通过串口发送 BLE_SCAN 数据包
@@ -650,37 +669,17 @@ async fn handle_message(text: &str, state: &Arc<AppState>) -> anyhow::Result<()>
             info!("已触发 BLE 扫描");
         }
         _ => {
-            warn!("未知消息类型: {}", msg_type);
+            send_error(tx, &format!("未知消息类型: {}", msg_type)).await;
         }
     }
 
     Ok(())
 }
 
-/// 解析MAC地址字符串（格式：AA:BB:CC:DD:EE:FF 或 AABBCCDDEEFF）
-fn parse_mac_address(mac_str: &str) -> anyhow::Result<[u8; 6]> {
-    let hex_only: String = mac_str.chars().filter(|c| c.is_ascii_hexdigit()).collect();
-    if hex_only.len() != 12 {
-        return Err(anyhow::anyhow!("MAC地址必须是6字节（12个十六进制字符）"));
-    }
-    let mut mac = [0u8; 6];
-    for i in 0..6 {
-        let byte_str = &hex_only[i * 2..i * 2 + 2];
-        mac[i] = u8::from_str_radix(byte_str, 16)
-            .map_err(|_| anyhow::anyhow!("MAC地址包含无效的十六进制字符"))?;
-    }
-    Ok(mac)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use base64::Engine;
-
-    /// 辅助函数：创建测试用 AppState
-    fn create_test_state() -> Arc<AppState> {
-        Arc::new(AppState::new())
-    }
 
     /// 测试 WebSocketManager 初始状态
     #[test]
@@ -726,18 +725,53 @@ mod tests {
         assert_eq!(encoded, "AAEC");
     }
 
+    /// 辅助函数：创建测试用 AppState（认证禁用）
+    fn create_test_state() -> Arc<AppState> {
+        Arc::new(AppState::new_test())
+    }
+
+    /// 辅助函数：调用 handle_message 并收集通过 tx 发送的消息
+    async fn call_handle_message(
+        state: &Arc<AppState>,
+        msg: &str,
+    ) -> (anyhow::Result<()>, Vec<Message>) {
+        let heartbeat = Arc::new(Mutex::new(Instant::now()));
+        let (tx, mut rx) = mpsc::channel::<Message>(32);
+        let result = handle_message(msg, state, &heartbeat, &tx).await;
+        drop(tx);
+        let mut messages = Vec::new();
+        while let Some(m) = rx.recv().await {
+            messages.push(m);
+        }
+        (result, messages)
+    }
+
     /// 测试 handle_message 处理命令消息（无串口连接时返回错误）
     #[tokio::test]
     async fn test_handle_message_command() {
         let state = create_test_state();
         let msg = r#"{"type":"command","data":"W"}"#;
 
-        // 无串口连接时，send_command 会失败，handle_message 应返回错误
-        let result = handle_message(msg, &state).await;
+        // 无串口连接时，send_packet 会失败，handle_message 应返回错误
+        let (result, _) = call_handle_message(&state, msg).await;
         assert!(
             result.is_err(),
             "无串口连接时 handle_message 处理命令消息应返回错误: {:?}",
             result
+        );
+    }
+
+    /// 测试 handle_message 处理未知命令字符时返回错误消息
+    #[tokio::test]
+    async fn test_handle_message_unknown_command() {
+        let state = create_test_state();
+        let msg = r#"{"type":"command","data":"X"}"#;
+
+        let (result, messages) = call_handle_message(&state, msg).await;
+        assert!(result.is_ok(), "未知命令不应导致 handle_message 返回 Err");
+        assert!(
+            messages.iter().any(|m| matches!(m, Message::Text(t) if t.contains("未知命令字符"))),
+            "未知命令应收到 error 消息"
         );
     }
 
@@ -747,12 +781,33 @@ mod tests {
         let state = create_test_state();
         let msg = r#"{"type":"speed","data":"200"}"#;
 
-        let result = handle_message(msg, &state).await;
         // 无串口连接时，send_packet 失败，handle_message 返回错误
+        let (result, _) = call_handle_message(&state, msg).await;
         assert!(
             result.is_err(),
             "无串口连接时处理速度命令应返回错误: {:?}",
             result
+        );
+    }
+
+    /// 测试 handle_message 处理非法速度值时返回错误消息
+    #[tokio::test]
+    async fn test_handle_message_speed_invalid() {
+        let state = create_test_state();
+
+        // 超出 u8 范围
+        let (result, messages) = call_handle_message(&state, r#"{"type":"speed","data":"256"}"#).await;
+        assert!(result.is_ok(), "非法速度不应导致 handle_message 返回 Err");
+        assert!(
+            messages.iter().any(|m| matches!(m, Message::Text(t) if t.contains("速度值非法"))),
+            "非法速度应收到 error 消息"
+        );
+
+        // 非数字
+        let (result, messages) = call_handle_message(&state, r#"{"type":"speed","data":"fast"}"#).await;
+        assert!(result.is_ok());
+        assert!(
+            messages.iter().any(|m| matches!(m, Message::Text(t) if t.contains("速度值非法")))
         );
     }
 
@@ -761,31 +816,38 @@ mod tests {
     async fn test_handle_message_drive_mode() {
         let state = create_test_state();
 
-        // 测试普通模式
-        let msg = r#"{"type":"drive_mode","mode":0}"#;
-        let result = handle_message(msg, &state).await;
+        for mode in [0, 1, 2] {
+            let msg = format!(r#"{{"type":"drive_mode","mode":{}}}"#, mode);
+            let (result, _) = call_handle_message(&state, &msg).await;
+            assert!(
+                result.is_err(),
+                "无串口连接时 handle_message 处理行走模式 {} 应返回错误: {:?}",
+                mode,
+                result
+            );
+        }
+    }
+
+    /// 测试 handle_message 处理非法行走模式值时返回错误消息
+    #[tokio::test]
+    async fn test_handle_message_drive_mode_invalid() {
+        let state = create_test_state();
+
+        // 越界
+        let (result, messages) =
+            call_handle_message(&state, r#"{"type":"drive_mode","mode":3}"#).await;
+        assert!(result.is_ok(), "越界模式不应导致 handle_message 返回 Err");
         assert!(
-            result.is_err(),
-            "无串口连接时 handle_message 处理行走模式消息应返回错误: {:?}",
-            result
+            messages.iter().any(|m| matches!(m, Message::Text(t) if t.contains("越界"))),
+            "越界模式应收到 error 消息"
         );
 
-        // 测试直线修正模式
-        let msg = r#"{"type":"drive_mode","mode":1}"#;
-        let result = handle_message(msg, &state).await;
+        // 缺少 mode 字段
+        let (result, messages) = call_handle_message(&state, r#"{"type":"drive_mode"}"#).await;
+        assert!(result.is_ok());
         assert!(
-            result.is_err(),
-            "无串口连接时 handle_message 处理直线修正模式应返回错误: {:?}",
-            result
-        );
-
-        // 测试航向锁定模式
-        let msg = r#"{"type":"drive_mode","mode":2}"#;
-        let result = handle_message(msg, &state).await;
-        assert!(
-            result.is_err(),
-            "无串口连接时 handle_message 处理航向锁定模式应返回错误: {:?}",
-            result
+            messages.iter().any(|m| matches!(m, Message::Text(t) if t.contains("缺少有效的 mode"))),
+            "缺少 mode 应收到 error 消息"
         );
     }
 
@@ -795,46 +857,52 @@ mod tests {
         let state = create_test_state();
         let msg = "这不是有效的JSON";
 
-        let result = handle_message(msg, &state).await;
+        let (result, _) = call_handle_message(&state, msg).await;
         assert!(result.is_err(), "handle_message 处理无效 JSON 时应返回错误");
     }
 
-    /// 测试 handle_message 处理未知消息类型（不 panic，正常返回 Ok）
+    /// 测试 handle_message 处理未知消息类型时通过 error 消息响应
     #[tokio::test]
     async fn test_handle_message_unknown_type() {
         let state = create_test_state();
         let msg = r#"{"type":"unknown_type","data":"test"}"#;
 
-        let result = handle_message(msg, &state).await;
+        let (result, messages) = call_handle_message(&state, msg).await;
         assert!(
             result.is_ok(),
             "handle_message 处理未知消息类型时应正常返回: {:?}",
             result
         );
+        assert!(
+            messages.iter().any(|m| matches!(m, Message::Text(t) if t.contains("未知消息类型"))),
+            "未知消息类型应收到 error 消息"
+        );
     }
 
-    /// 测试 handle_message 处理心跳消息（验证 last_heartbeat 被更新）
+    /// 测试 handle_message 处理心跳消息（验证按客户端心跳时间被更新）
     #[tokio::test]
     async fn test_handle_message_heartbeat() {
         let state = create_test_state();
-
-        // 记录初始心跳时间
-        let initial = *state.last_heartbeat.lock_or_recover("last_heartbeat");
-
-        // 短暂等待确保时间差
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        let heartbeat = Arc::new(Mutex::new(
+            Instant::now() - std::time::Duration::from_secs(1),
+        ));
+        let (tx, mut rx) = mpsc::channel::<Message>(32);
 
         let msg = r#"{"type":"heartbeat"}"#;
-        let result = handle_message(msg, &state).await;
+        let result = handle_message(msg, &state, &heartbeat, &tx).await;
         assert!(
             result.is_ok(),
             "handle_message 处理心跳消息时不应返回错误: {:?}",
             result
         );
 
-        // 验证心跳时间已更新
-        let updated = *state.last_heartbeat.lock_or_recover("last_heartbeat");
-        assert!(updated > initial, "心跳时间应在处理后更新");
+        // 验证按客户端心跳时间已更新
+        let updated = *heartbeat.lock().expect("心跳锁不应中毒");
+        assert!(updated.elapsed() < std::time::Duration::from_millis(100), "心跳时间应在处理后更新");
+
+        // 心跳消息不应产生任何回复
+        drop(tx);
+        assert!(rx.recv().await.is_none(), "心跳不应发送消息");
     }
 
     /// 测试多客户端并发添加到 WebSocketManager，验证广播逻辑的基础：客户端管理正确性
@@ -902,84 +970,13 @@ mod tests {
         assert_eq!(m.client_count(), 2, "移除 3 个后应剩余 2 个客户端");
     }
 
-    /// 测试 parse_mac_address 解析标准格式 MAC
-    #[test]
-    fn test_parse_mac_address_standard() {
-        let mac = parse_mac_address("AA:BB:CC:DD:EE:FF").expect("标准格式MAC应解析成功");
-        assert_eq!(mac, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
-    }
-
-    /// 测试 parse_mac_address 解析无分隔符格式
-    #[test]
-    fn test_parse_mac_address_no_separator() {
-        let mac = parse_mac_address("AABBCCDDEEFF").expect("无分隔符MAC应解析成功");
-        assert_eq!(mac, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
-    }
-
-    /// 测试 parse_mac_address 解析小写格式
-    #[test]
-    fn test_parse_mac_address_lowercase() {
-        let mac = parse_mac_address("aa:bb:cc:dd:ee:ff").expect("小写MAC应解析成功");
-        assert_eq!(mac, [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]);
-    }
-
-    /// 测试 parse_mac_address 无效长度应失败
-    #[test]
-    fn test_parse_mac_address_invalid_length() {
-        assert!(
-            parse_mac_address("AA:BB:CC:DD:EE").is_err(),
-            "5字节MAC应解析失败"
-        );
-        assert!(
-            parse_mac_address("AA:BB:CC:DD:EE:FF:00").is_err(),
-            "7字节MAC应解析失败"
-        );
-    }
-
-    /// 测试 parse_mac_address 包含无效字符应失败
-    #[test]
-    fn test_parse_mac_address_invalid_chars() {
-        assert!(
-            parse_mac_address("GG:BB:CC:DD:EE:FF").is_err(),
-            "包含G的MAC应解析失败"
-        );
-    }
-
-    /// 测试 handle_message 处理 mac_config 消息（无串口连接时返回错误）
-    #[tokio::test]
-    async fn test_handle_message_mac_config() {
-        let state = create_test_state();
-        let msg = r#"{"type":"mac_config","mac":"AA:BB:CC:DD:EE:FF"}"#;
-
-        let result = handle_message(msg, &state).await;
-        assert!(
-            result.is_err(),
-            "无串口连接时 handle_message 处理 mac_config 应返回错误: {:?}",
-            result
-        );
-    }
-
-    /// 测试 handle_message 处理无效 mac_config 格式
-    #[tokio::test]
-    async fn test_handle_message_mac_config_invalid() {
-        let state = create_test_state();
-        let msg = r#"{"type":"mac_config","mac":"invalid"}"#;
-
-        let result = handle_message(msg, &state).await;
-        assert!(
-            result.is_ok(),
-            "handle_message 处理无效 mac_config 时不应返回错误: {:?}",
-            result
-        );
-    }
-
     /// 测试 handle_message 处理 ble_scan 消息（无串口连接时返回错误）
     #[tokio::test]
     async fn test_handle_message_ble_scan() {
         let state = create_test_state();
         let msg = r#"{"type":"ble_scan"}"#;
 
-        let result = handle_message(msg, &state).await;
+        let (result, _) = call_handle_message(&state, msg).await;
         assert!(
             result.is_err(),
             "无串口连接时 handle_message 处理 ble_scan 应返回错误: {:?}",

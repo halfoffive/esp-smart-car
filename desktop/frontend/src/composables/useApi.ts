@@ -33,8 +33,16 @@ export function useApi() {
    * @throws 网络错误、超时、HTTP 错误或 JSON 解析错误时抛出异常
    */
   const request = async <T = ApiResponse>(url: string, options?: RequestInit & { timeout?: number }): Promise<T> => {
-    // 默认 headers：仅在有请求体时设置 Content-Type
-    const defaultHeaders: Record<string, string> = {}
+    // 认证校验：未配置 token 时给出明确错误
+    const token = import.meta.env.VITE_API_TOKEN
+    if (!token) {
+      throw new Error('VITE_API_TOKEN 未配置，请在 .env 文件中设置后刷新页面')
+    }
+
+    // 默认 headers：认证 + 仅在有请求体时设置 Content-Type
+    const defaultHeaders: Record<string, string> = {
+      Authorization: `Bearer ${token}`,
+    }
     if (options?.body) {
       defaultHeaders['Content-Type'] = 'application/json'
     }

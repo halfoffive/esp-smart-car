@@ -126,3 +126,30 @@ bun run preview      # 预览生产构建
 - **主题**：深色模式，使用 `dark-` 颜色系列
 - **WebSocket 单管理员模式**：`useWebSocket(owner = false)` — 只有 `owner=true` 的调用者（App.vue）才能执行 `connect()`/`disconnect()`，其他组件只消费状态。防止多组件卸载时意外断开全局连接。
 - **重连保护**：`disconnect()` 设置 `shouldReconnect = false` 后再关闭 socket，阻止 `onclose` handler 自动重连。
+
+## 近期修复记录
+
+### 2026-06-20 - Karpathy 审计修复
+
+**背景**: 完成 Karpathy 指南漏洞审计，报告见 `docs/karpathy_vulnerability_report.md`，共发现并修复 52 项问题。
+
+**本模块修复**:
+
+- **P1**:
+  - WebSocket 重连指数退避修复 — `useWebSocket.ts` 区分手动连接与自动重连，自动重连时正确累加 `retryCount`
+  - 串口状态判断 — `ControlPanel.vue` / `StatusBar.vue` 将 `serialStatus === '已连接'` 改为 `startsWith('已连接')`，与后端 WS 推送格式对齐
+- **P2**:
+  - 连接/断开 50ms 竞态 — `useWebSocket.ts` 引入连接尝试 generation 计数器，避免 `disconnect()` 与延迟中的 `connect()` 状态不一致
+  - 行走模式状态同步 — `ControlPanel.vue` + 后端 `status` 消息增加 `drive_mode` 字段，UI 以服务端状态为准
+  - `JSON.parse` 类型安全 — `useWebSocket.ts` `socket.onmessage` 中 `JSON.parse` 返回 `unknown`，并增加 `typeof message === 'object'` 守卫
+  - BLE `wifi_mac` 类型守卫 — `useWebSocket.ts` 映射 `ble_devices` 时显式校验 `wifi_mac` 类型
+  - 剪贴板写入错误处理 — `ControlPanel.vue` `selectBleDevice` 复制失败时记录 warning 日志
+  - 串口回滚错误处理 — `ControlPanel.vue` `connect()` WebSocket 连接失败后回滚串口时，将错误记录到日志
+  - 串口扫描空结果清理 — `ControlPanel.vue` `scanPorts()` 后端返回空列表或失败时清空 `scannedPorts`
+  - MAC 链接虚假成功 — `ControlPanel.vue` `linkManualMac` 增加客户端 MAC 格式校验
+- **P3**:
+  - 视频截图错误处理 — `VideoPlayer.vue` `takeSnapshot` 临时追加 `<a>` 到 DOM，并捕获下载错误
+  - 版本号一致性 — `package.json` 与 `App.vue` 统一版本号来源
+  - 注释清理 — 修正源码中 `ESP-NOW` 等遗留描述
+
+**验证**: `bun run build` 通过；`vue-tsc --noEmit` 无类型错误。

@@ -3,7 +3,7 @@
  * 基于 ESP32，使用 WiFi/UDP 进行低延迟通信
  * 支持命令传输、状态反馈和视频流分包
  * 作者：智能车项目团队
- * 版本：2.0.0
+ * 版本：2.1.0（修复 P0-01：Wi-Fi 凭据移出本文件至 wifi_credentials.h）
  *
  * 说明：本文件为 Arduino 库，供 car_controller、camera_module、receiver_dongle 共享。
  * 避免复制到各 sketch 目录，减少维护负担。
@@ -13,6 +13,7 @@
 #define WIRELESS_H
 
 #include <Arduino.h>
+#include "wifi_credentials.h"
 
 // ============================================
 // 纯数据类型定义
@@ -127,8 +128,8 @@ namespace UdpConfig {
 }
 
 namespace NetworkConfig {
-    constexpr const char* AP_SSID = "ESP-SmartCar";      // 软接入点 SSID
-    constexpr const char* AP_PASSWORD = "SmartCar2024";  // 软接入点密码
+    constexpr const char* AP_SSID = WIFI_AP_SSID;        // 软接入点 SSID（来自 wifi_credentials.h）
+    constexpr const char* AP_PASSWORD = WIFI_AP_PASSWORD; // 软接入点密码（来自 wifi_credentials.h）
     constexpr uint8_t AP_IP[4] = {192, 168, 4, 1};       // 接入点 IP
     constexpr uint8_t CAR_IP[4] = {192, 168, 4, 2};      // 车载端固定 IP
     constexpr uint8_t GATEWAY[4] = {192, 168, 4, 1};     // 默认网关

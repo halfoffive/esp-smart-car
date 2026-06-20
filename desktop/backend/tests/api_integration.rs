@@ -7,6 +7,7 @@ use std::sync::Arc;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
+    middleware,
     routing::{get, post},
     Router,
 };
@@ -15,20 +16,28 @@ use tower::ServiceExt;
 
 use esp_smart_car_backend::{api, websocket, AppState};
 
-/// 创建测试用 AppState
+/// 创建测试用 AppState（认证禁用，避免测试需要携带 Token）
 fn create_test_state() -> Arc<AppState> {
-    Arc::new(AppState::new())
+    Arc::new(AppState::new_test())
 }
 
 /// 创建测试用 Router
 fn create_test_app(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/ws", get(websocket::ws_handler))
+    let api_routes = Router::new()
         .route("/api/command", post(api::handle_command))
         .route("/api/status", get(api::get_status))
         .route("/api/connect", post(api::connect_serial))
         .route("/api/disconnect", post(api::disconnect_serial))
         .route("/api/ports", get(api::list_ports))
+        .route("/api/ble-devices", get(api::get_ble_devices))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            api::auth_middleware,
+        ));
+
+    Router::new()
+        .route("/ws", get(websocket::ws_handler))
+        .merge(api_routes)
         .with_state(state)
 }
 
@@ -155,4 +164,71 @@ async fn test_ws_upgrade() {
     // oneshot 模式下，WebSocket 升级请求被识别但无法完成握手，
     // 返回 426 (Upgrade Required) 而非 101 (Switching Protocols)
     assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+}
+
+/// 测试 GET /api/ble-devices 返回 200 且包含 devices 数组
+#[tokio::test]
+async fn test_get_ble_devices() {
+    let state = create_test_state();
+    let app = create_test_app(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/ble-devices")
+                .body(Body::empty())
+                .expect("构建 ble-devices 请求失败"),
+        )
+        .await
+        .expect("请求 /api/ble-devices 失败");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = response.into_body();
+    let bytes = body.collect().await.expect("读取响应体失败").to_bytes();
+    let json: serde_json::Value =
+        serde_json::from_slice(&bytes).expect("解析 ble-devices 响应 JSON 失败");
+
+    assert_eq!(json["success"], true);
+    assert!(json["devices"].is_array());
+}
+
+/// 测试认证启用时未携带 Token 的 API 请求返回 401
+#[tokio::test]
+async fn test_auth_required() {
+    let state = Arc::new(AppState::new());
+    let app = create_test_app(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/status")
+                .body(Body::empty())
+                .expect("构建 status 请求失败"),
+        )
+        .await
+        .expect("请求 /api/status 失败");
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+/// 测试认证启用时携带正确 Token 可通过
+#[tokio::test]
+async fn test_auth_with_valid_token() {
+    let state = Arc::new(AppState::new());
+    let token = state.api_token.clone().expect("应自动生成 API Token");
+    let app = create_test_app(state);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/status")
+                .header("authorization", format!("Bearer {}", token))
+                .body(Body::empty())
+                .expect("构建 status 请求失败"),
+        )
+        .await
+        .expect("请求 /api/status 失败");
+
+    assert_eq!(response.status(), StatusCode::OK);
 }

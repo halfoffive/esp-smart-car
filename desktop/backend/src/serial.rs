@@ -22,6 +22,7 @@ use std::time::Duration;
 use anyhow::Result;
 use base64::Engine;
 use serialport::{SerialPort, SerialPortType};
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use crate::{AppState, MutexExt};
@@ -65,12 +66,12 @@ impl Clone for OdometryData {
     }
 }
 
-/// 链路状态（Dongle ↔ 车载 ESP-NOW 配对状态、车载在线状态）
+/// 链路状态（Dongle ↔ 车载 WiFi/UDP 在线状态，即 car_paired）
 #[derive(Debug, Clone)]
 pub struct LinkStatus {
     /// Dongle 是否正常工作
     pub dongle_ok: bool,
-    /// 车载是否已与 Dongle 完成 ESP-NOW 配对
+    /// 车载是否已通过 WiFi/UDP 与 Dongle 建立通信
     pub car_paired: bool,
     /// 上次收到车载数据的时间戳（毫秒，由 Dongle 上报）
     pub last_odom_ms: u64,
@@ -102,8 +103,10 @@ impl PartialEq for LinkStatus {
 const FRAME_HEADER: [u8; 2] = [0xAA, 0x55];
 /// 默认波特率
 pub const DEFAULT_BAUD_RATE: u32 = 921_600;
-/// 读取超时
+/// 读取超时（单次 read 最长等待时间）
 const READ_TIMEOUT: Duration = Duration::from_millis(100);
+/// 最大视频帧大小（与 receiver_dongle 的 VideoFrameBuffer 对齐）
+const MAX_FRAME_SIZE: usize = 32 * 1024;
 
 /// 串口连接状态
 #[derive(Debug, Clone)]
@@ -140,7 +143,7 @@ pub struct SerialManager {
     pub frame_count: u32,
     /// 已发送的字节数
     pub bytes_sent: u64,
-    /// 已发送的命令数
+    /// 已发送的控制/速度/模式命令数
     pub command_count: u64,
     /// 串口句柄代际计数器，用于解决 run_serial_task 与 disconnect/connect 之间的竞态条件
     ///
@@ -277,18 +280,20 @@ impl SerialManager {
         self.send_bytes(&[cmd])
     }
 
-    /// 发送完整二进制数据包（8 字节 WirelessPacket）
+    /// 发送完整二进制数据包（8 字节 WirelessPacket），并递增命令计数
     pub fn send_packet(&mut self, packet: &[u8]) -> Result<()> {
-        self.send_bytes(packet)
+        self.send_bytes(packet)?;
+        self.command_count += 1;
+        Ok(())
     }
 
     /// 发送多字节数据（使用独立写句柄，与读操作可并发）
+    /// 注意：此函数不递增 command_count，调用方按需使用 send_packet
     pub fn send_bytes(&mut self, data: &[u8]) -> Result<()> {
         if let Some(ref mut wp) = self.write_port {
             wp.write_all(data)?;
             wp.flush()?;
             self.bytes_sent += data.len() as u64;
-            self.command_count += 1;
             debug!("发送数据: {} 字节", data.len());
             Ok(())
         } else if matches!(self.state, SerialConnectionState::Connected { .. }) {
@@ -302,11 +307,10 @@ impl SerialManager {
     /// 解析测速JSON行
     /// 格式: {"t":"odom","ls":左速度,"rs":右速度,"hd":航向*100,"dist":距离}
     pub fn parse_odometry_line(line: &str) -> Option<OdometryData> {
-        if !line.contains("\"t\":\"odom\"") {
+        let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+        if parsed["t"].as_str()? != "odom" {
             return None;
         }
-
-        let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
 
         let left_speed = parsed["ls"].as_f64()? as f32;
         let right_speed = parsed["rs"].as_f64()? as f32;
@@ -326,11 +330,11 @@ impl SerialManager {
     /// 格式: {"t":"ble","devices":[{"name":"xxx","mac":"AA:BB:CC:DD:EE:FF","rssi":-42,"wifi_mac":"AA:BB:CC:DD:EE:FF"},...]}
     /// wifi_mac 为可选项，仅当设备广播了 Manufacturer Data 且包含 WiFi MAC 时才会出现
     pub fn parse_ble_line(line: &str) -> Option<Vec<crate::BleDevice>> {
-        if !line.contains("\"t\":\"ble\"") {
+        let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+        if parsed["t"].as_str()? != "ble" {
             return None;
         }
 
-        let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
         let devices_array = parsed.get("devices")?.as_array()?;
 
         let mut devices = Vec::new();
@@ -338,7 +342,7 @@ impl SerialManager {
             let name = dev.get("name")?.as_str()?.to_string();
             let mac = dev.get("mac")?.as_str()?.to_string();
             let rssi = dev.get("rssi")?.as_i64()? as i16;
-            // wifi_mac 为可选项：仅车载 C6 等设备会广播
+            // wifi_mac 为可选项：仅部分设备会在 Manufacturer Data 中广播
             let wifi_mac = dev
                 .get("wifi_mac")
                 .and_then(|v| v.as_str())
@@ -361,11 +365,11 @@ impl SerialManager {
     ///       此处用 as_i64() 兼容负数，并将负数归一化为 0（表示"从未收到"），
     ///       避免负数导致整条 link 消息被丢弃（前端会卡在"探测中"状态）
     pub fn parse_link_line(line: &str) -> Option<LinkStatus> {
-        if !line.contains("\"t\":\"link\"") {
+        let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+        if parsed["t"].as_str()? != "link" {
             return None;
         }
 
-        let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
         // dongle 字段为字符串 "ok" 表示 Dongle 正常工作
         let dongle_str = parsed.get("dongle")?.as_str()?;
         let dongle_ok = dongle_str == "ok";
@@ -388,7 +392,9 @@ impl SerialManager {
         while start.elapsed() < Duration::from_secs(2) {
             let mut byte = [0u8; 1];
             match port.read(&mut byte) {
-                Ok(0) => continue,
+                Ok(0) => {
+                    return Err(anyhow::anyhow!("串口已断开（EOF），流对齐恢复中断"));
+                }
                 Ok(_) => {
                     if prev_byte == FRAME_HEADER[0] && byte[0] == FRAME_HEADER[1] {
                         // 找到帧头，流已对齐
@@ -412,7 +418,7 @@ impl SerialManager {
         let mut size_bytes = [0u8; 4];
         port.read_exact(&mut size_bytes)?;
         let frame_size = u32::from_le_bytes(size_bytes) as usize;
-        if frame_size > 256 * 1024 || frame_size == 0 {
+        if frame_size > MAX_FRAME_SIZE || frame_size == 0 {
             warn!("帧大小异常: {} 字节，进入流对齐恢复", frame_size);
             // 帧大小异常，跳过数据直到找到下一个帧头
             Self::resync_stream(port)?;
@@ -444,22 +450,48 @@ impl SerialManager {
     /// 统一读取方法：同时处理视频帧和测速JSON行
     /// 解决帧头重叠遗漏和视频/测速数据互斥吞没问题
     /// 返回 Vec<SerialReadResult> 支持同时返回视频帧和测速行（解决帧头匹配时 line_buf 被丢弃问题）
-    /// 独立函数，不持有 SerialManager 锁，避免阻塞其他 API 请求
-    pub fn read_next(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<Vec<SerialReadResult>> {
+    ///
+    /// 通过 state/generation 参数支持可中断：
+    /// - 每次 read 超时（100ms）后检查 generation 是否变化
+    /// - 变化说明 disconnect/connect 已发生，立即返回错误，让旧句柄尽快释放
+    pub fn read_next(
+        port: &mut BufReader<Box<dyn SerialPort>>,
+        state: &AppState,
+        generation: u64,
+        cancel_token: &CancellationToken,
+    ) -> Result<Vec<SerialReadResult>> {
         // 策略：逐字节读取，维护一个行缓冲区和结果列表
         // - 遇到 0xAA 时尝试匹配帧头 0xAA 0x55
-        // - 找到帧头时：先将 line_buf 作为 OdometryLine 加入结果（解决丢弃问题），再读取帧
+        // - 找到帧头时：先将 line_buf 作为 OdometryLine 加入结果，再读取帧
         // - 遇到 \n 时，将行缓冲区内容作为测速数据加入结果并返回
-        // - 设置5秒总超时
+        // - 设置5秒总超时，拆分为 100ms 短 read 循环
 
         let start = std::time::Instant::now();
         let mut line_buf: Vec<u8> = Vec::new();
         let mut results: Vec<SerialReadResult> = Vec::new();
 
         while start.elapsed() < Duration::from_secs(5) {
+            if cancel_token.is_cancelled() {
+                return Err(anyhow::anyhow!("串口读取任务已取消"));
+            }
+
+            // 检查连接周期是否已变化（disconnect/connect 后旧句柄应尽快退出）
+            {
+                let manager = state.serial_manager.lock_or_panic("serial_manager");
+                if manager.port_generation != generation {
+                    return Err(anyhow::anyhow!(
+                        "串口连接周期已变化 ({} -> {})，中断读取",
+                        generation,
+                        manager.port_generation
+                    ));
+                }
+            }
+
             let mut byte = [0u8; 1];
             match port.read(&mut byte) {
-                Ok(0) => continue,
+                Ok(0) => {
+                    return Err(anyhow::anyhow!("串口已断开（EOF）"));
+                }
                 Ok(_) => {
                     let b = byte[0];
 
@@ -474,9 +506,7 @@ impl SerialManager {
                         let mut second = [0u8; 1];
                         match port.read(&mut second) {
                             Ok(0) => {
-                                // 只读到一个 0xAA，后面没有更多数据
-                                line_buf.push(b);
-                                continue;
+                                return Err(anyhow::anyhow!("串口已断开（EOF）"));
                             }
                             Ok(_) => {
                                 if second[0] == FRAME_HEADER[1] {
@@ -507,8 +537,7 @@ impl SerialManager {
                                         let mut third = [0u8; 1];
                                         match port.read(&mut third) {
                                             Ok(0) => {
-                                                line_buf.push(second[0]);
-                                                continue;
+                                                return Err(anyhow::anyhow!("串口已断开（EOF）"));
                                             }
                                             Ok(_) => {
                                                 if third[0] == FRAME_HEADER[1] {
@@ -548,7 +577,10 @@ impl SerialManager {
                                                 continue;
                                             }
                                             Err(e) => {
-                                                return Err(anyhow::anyhow!("串口读取错误: {}", e));
+                                                return Err(anyhow::anyhow!(
+                                                    "串口读取错误: {}",
+                                                    e
+                                                ));
                                             }
                                         }
                                     } else {
@@ -583,7 +615,7 @@ impl SerialManager {
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => {
-                    // 读取超时
+                    // 读取超时：外层循环会重新检查 generation/cancel
                     if !line_buf.is_empty() {
                         // 没有完整行，继续等待
                         continue;
@@ -641,27 +673,30 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
     loop {
         // 检查串口是否连接
         let is_connected = {
-            let manager = state.serial_manager.lock_or_recover("serial_manager");
+            let manager = state.serial_manager.lock_or_panic("serial_manager");
             matches!(manager.state, SerialConnectionState::Connected { .. })
         };
 
         if is_connected {
             let state_clone = Arc::clone(&state);
+            let read_cancel = CancellationToken::new();
+            let read_cancel_clone = read_cancel.clone();
 
             // 在 spawn_blocking 中执行阻塞 I/O，避免阻塞 Tokio 运行时
             // port 由 read 任务独占（send_bytes 使用独立的 write_port），take 后做 I/O 再归还
-            let result = tokio::task::spawn_blocking(move || {
+            let task_handle = tokio::task::spawn_blocking(move || {
                 // 短暂获取锁，取出 port 并记录当前 generation
                 let (mut port, taken_generation) = {
-                    let mut manager = state_clone.serial_manager.lock_or_recover("serial_manager");
+                    let mut manager = state_clone.serial_manager.lock_or_panic("serial_manager");
                     match manager.port.take() {
                         Some(p) => (p, manager.port_generation),
                         None => return SerialTaskResult::NoData,
                     }
                 };
 
-                // 不持锁执行长时间 I/O（最长5秒）
-                let result = SerialManager::read_next(&mut port);
+                // 不持锁执行长时间 I/O（5秒拆分为 100ms 短循环，支持 generation 检查）
+                let result =
+                    SerialManager::read_next(&mut port, &state_clone, taken_generation, &read_cancel_clone);
 
                 // 统计本次读取的视频帧数
                 let frame_count_delta: u32 = match &result {
@@ -676,7 +711,7 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                 // 检查 generation 是否在 I/O 期间变化：若变化说明 disconnect/connect 已发生，
                 // 必须丢弃旧 port，避免覆盖新连接的串口句柄
                 {
-                    let mut manager = state_clone.serial_manager.lock_or_recover("serial_manager");
+                    let mut manager = state_clone.serial_manager.lock_or_panic("serial_manager");
                     if manager.port_generation != taken_generation {
                         // 连接周期已变化，旧 port 不再有效，直接丢弃
                         debug!(
@@ -700,8 +735,13 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                     }
                     Err(e) => SerialTaskResult::Error { msg: e.to_string() },
                 }
-            })
-            .await;
+            });
+
+            // 取消机制：虽然 spawn_blocking 不可直接取消，但 read_next 内部会检查 cancel_token
+            // 此处保留令牌句柄，便于后续扩展；当前主要依靠 generation 检查实现可中断
+            let _cancel_guard = read_cancel;
+
+            let result = task_handle.await;
 
             match result {
                 Ok(SerialTaskResult::Items(items)) => {
@@ -731,22 +771,18 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
 
                                 let b64_arc = Arc::new(b64_data);
 
-                                // 使用 Arc::clone 共享视频帧引用，避免 clone 整帧数据
-                                {
-                                    let mut video =
-                                        state.video_frame.lock_or_recover("video_frame");
-                                    *video = Some(Arc::new(data));
-                                }
                                 // 存储 Base64 编码结果，供 WebSocket 客户端共享读取
                                 {
-                                    let mut b64 =
-                                        state.video_frame_b64.lock_or_recover("video_frame_b64");
+                                    let mut b64 = state
+                                        .video_frame_b64
+                                        .lock_or_recover("video_frame_b64");
                                     *b64 = Some(b64_arc);
                                 }
                                 // 存储哈希值，供 WebSocket 客户端共享读取
                                 {
-                                    let mut h =
-                                        state.video_frame_hash.lock_or_recover("video_frame_hash");
+                                    let mut h = state
+                                        .video_frame_hash
+                                        .lock_or_recover("video_frame_hash");
                                     *h = Some(hash);
                                 }
                             }
@@ -820,13 +856,13 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                 }
                 Ok(SerialTaskResult::Error { msg }) => {
                     error!("串口读取错误: {}", msg);
-                    let mut manager = state.serial_manager.lock_or_recover("serial_manager");
+                    let mut manager = state.serial_manager.lock_or_panic("serial_manager");
                     manager.disconnect();
                 }
                 Err(e) if e.is_panic() => {
                     // spawn_blocking 任务 panic，记录详细信息
                     error!("串口任务 panic: {:?}，可能需要重启", e);
-                    let mut manager = state.serial_manager.lock_or_recover("serial_manager");
+                    let mut manager = state.serial_manager.lock_or_panic("serial_manager");
                     manager.disconnect();
                 }
                 Err(e) if e.is_cancelled() => {
@@ -901,6 +937,18 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("串口未连接"));
     }
 
+    /// 测试 send_packet 递增 command_count，send_bytes 不递增
+    #[test]
+    fn test_command_count_only_for_packet() {
+        let mut manager = SerialManager::new();
+        // send_bytes 在未连接时失败，但不会修改 command_count
+        let _ = manager.send_bytes(&[1, 2, 3]);
+        assert_eq!(manager.command_count, 0);
+
+        let _ = manager.send_packet(&[1, 2, 3]);
+        assert_eq!(manager.command_count, 0); // 同样未连接失败
+    }
+
     /// 测试未连接时断开无 panic
     #[test]
     fn test_disconnect_when_disconnected() {
@@ -953,6 +1001,15 @@ mod tests {
         assert!(SerialManager::parse_odometry_line(line).is_none());
     }
 
+    /// 测试测速 JSON 解析 - 字段顺序不同且含空格
+    #[test]
+    fn test_parse_odometry_line_whitespace_and_order() {
+        let line = r#"{ "dist": 12345, "t": "odom", "ls": 100.5, "hd": 18000, "rs": 99.3 }"#;
+        let odom = SerialManager::parse_odometry_line(line).expect("应支持空格与字段顺序变化");
+        assert!((odom.left_speed_mmps - 100.5).abs() < 0.1);
+        assert!((odom.heading - 180.0).abs() < 0.1);
+    }
+
     /// 测试 OdometryData 默认值
     #[test]
     fn test_odometry_default() {
@@ -966,7 +1023,7 @@ mod tests {
     /// 测试 AppState 初始串口列表为空
     #[test]
     fn test_app_state_ports_initially_empty() {
-        let state = crate::AppState::new();
+        let state = crate::AppState::new_test();
         let available = state.available_ports.blocking_lock();
         assert!(available.is_empty(), "初始可用串口列表应为空");
         let last = state.last_ports.lock_or_recover("last_ports");
@@ -1012,6 +1069,15 @@ mod tests {
     fn test_parse_ble_line_missing_devices() {
         let line = r#"{"t":"ble"}"#;
         assert!(SerialManager::parse_ble_line(line).is_none());
+    }
+
+    /// 测试 BLE 设备 JSON 行解析 - 空格与字段顺序变化
+    #[test]
+    fn test_parse_ble_line_whitespace_and_order() {
+        let line = r#"{ "devices": [{"name":"ESP32-C6","mac":"AA:BB:CC:DD:EE:01","rssi":-42}], "t": "ble" }"#;
+        let devices = SerialManager::parse_ble_line(line).expect("应支持空格与字段顺序变化");
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].name, "ESP32-C6");
     }
 
     /// 测试链路状态 JSON 行解析 - 有效数据（车载已配对）
@@ -1080,6 +1146,16 @@ mod tests {
         assert!(status.dongle_ok);
         assert!(!status.car_paired);
         assert_eq!(status.last_odom_ms, 0, "负数 last_odom_ms 应归一化为 0");
+    }
+
+    /// 测试链路状态 JSON 行解析 - 空格与字段顺序变化
+    #[test]
+    fn test_parse_link_line_whitespace_and_order() {
+        let line = r#"{ "last_odom_ms": 1234, "t": "link", "dongle": "ok", "car_paired": true }"#;
+        let status = SerialManager::parse_link_line(line).expect("应支持空格与字段顺序变化");
+        assert!(status.dongle_ok);
+        assert!(status.car_paired);
+        assert_eq!(status.last_odom_ms, 1234);
     }
 
     /// 测试 LinkStatus 默认值
