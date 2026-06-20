@@ -71,8 +71,12 @@ pub struct AppState {
     pub ws_manager: Arc<std::sync::Mutex<websocket::WebSocketManager>>,
     /// 视频帧 Base64 编码数据（共享引用，避免每客户端重复编码）
     pub video_frame_b64: Arc<std::sync::Mutex<Option<Arc<String>>>>,
+    /// 视频帧格式（"jpeg" 或 "webp"）
+    pub video_frame_format: Arc<std::sync::Mutex<Arc<str>>>,
     /// 视频帧哈希值（共享，避免每客户端重复计算）
     pub video_frame_hash: Arc<std::sync::Mutex<Option<u64>>>,
+    /// 是否启用 WebP 转码（默认 false，通过 USE_WEBP=true 开启）
+    pub use_webp: bool,
 
     /// 当前速度 PWM 值（0-255，使用 AtomicU8 无锁原子操作）
     pub current_speed: AtomicU8,
@@ -136,11 +140,20 @@ impl AppState {
     }
 
     fn with_token(api_token: Option<Arc<str>>) -> Self {
+        let use_webp = std::env::var("USE_WEBP")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+        if use_webp {
+            info!("WebP 视频压缩已启用（USE_WEBP=true）");
+        }
+
         Self {
             serial_manager: Arc::new(std::sync::Mutex::new(serial::SerialManager::new())),
             ws_manager: Arc::new(std::sync::Mutex::new(websocket::WebSocketManager::new())),
             video_frame_b64: Arc::new(std::sync::Mutex::new(None)),
+            video_frame_format: Arc::new(std::sync::Mutex::new(Arc::from("jpeg"))),
             video_frame_hash: Arc::new(std::sync::Mutex::new(None)),
+            use_webp,
 
             current_speed: AtomicU8::new(128),
             current_drive_mode: AtomicU8::new(0),

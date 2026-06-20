@@ -50,6 +50,10 @@ dotenvy = "0.15"
 # Base64编码
 base64 = "0.22"
 
+# WebP 压缩（可选，需设置 USE_WEBP=true 启用）
+zune-jpeg = "0.5"
+webp-rust = "0.2"
+
 [dev-dependencies]
 # Web框架（仅测试使用 ServiceExt::oneshot）
 tower = { version = "0.5", features = ["full"] }

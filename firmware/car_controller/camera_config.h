@@ -134,14 +134,14 @@ inline framesize_t resolutionToFramesize(const Resolution res) {
  */
 inline CameraConfiguration createDefaultConfig() {
     return CameraConfiguration(
-        Resolution::QVGA,      // 320x240，平衡画质与性能
-        ImageQuality::QUALITY_MEDIUM,  // 中等质量
+        Resolution::QQVGA,      // 160x120，最小分辨率以最大化帧率
+        ImageQuality::QUALITY_LOW,     // 低质量、高压缩，优先满足串口带宽
         0,                     // 默认亮度
         0,                     // 默认对比度
         0,                     // 默认饱和度
         false,                 // 不垂直翻转
         true,                  // 水平镜像（使画面符合直觉）
-        30                     // 30 FPS
+        60                     // 60 FPS 上限，实际帧率由串口/网络带宽决定
     );
 }
 

@@ -41,15 +41,6 @@
       </div>
     </div>
     
-    <div class="flex items-center gap-2 mt-2">
-      <button 
-        @click="takeSnapshot"
-        class="btn-secondary flex-1 text-xs py-1.5"
-        aria-label="截取当前视频画面"
-      >
-        拍照
-      </button>
-    </div>
   </div>
 </template>
 
@@ -74,19 +65,4 @@ const unwatch = watch(videoFrame, updateVideo)
 onUnmounted(() => {
   unwatch()
 })
-
-const takeSnapshot = () => {
-  if (!videoSrc.value) return
-  const link = document.createElement('a')
-  link.download = `snapshot_${Date.now()}.jpg`
-  link.href = videoSrc.value
-  document.body.appendChild(link)
-  try {
-    link.click()
-  } catch (error) {
-    console.error('[VideoPlayer] 截图下载失败:', error)
-  } finally {
-    document.body.removeChild(link)
-  }
-}
 </script>

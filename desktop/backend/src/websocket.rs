@@ -247,15 +247,18 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                 }
             }
 
-            // 获取视频帧和预计算的哈希值（共享，避免每客户端重复计算）
-            let (frame_b64, frame_hash): (Option<Arc<String>>, Option<u64>) = {
+            // 获取视频帧、格式和预计算的哈希值（共享，避免每客户端重复计算）
+            let (frame_b64, frame_hash, frame_format): (Option<Arc<String>>, Option<u64>, Arc<str>) = {
                 let b64 = video_state
                     .video_frame_b64
                     .lock_or_recover("video_frame_b64");
                 let h = video_state
                     .video_frame_hash
                     .lock_or_recover("video_frame_hash");
-                (b64.clone(), *h)
+                let fmt = video_state
+                    .video_frame_format
+                    .lock_or_recover("video_frame_format");
+                (b64.clone(), *h, fmt.clone())
             };
 
             if let (Some(b64_data), Some(hash)) = (frame_b64.as_ref(), frame_hash) {
@@ -264,7 +267,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
                     let message = serde_json::json!({
                         "type": "video",
-                        "format": "jpeg",
+                        "format": frame_format.as_ref(),
                         "data": b64_data.as_str(),
                         "timestamp": std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
@@ -444,8 +447,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
             }
 
             // 使用 select! 等待帧率间隔或取消信号
+            // 间隔缩短到 5ms，让新帧到达后能尽快发出，而不是被 33ms 限制在 ~30 FPS
             tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_millis(33)) => {} // ~30 FPS
+                _ = tokio::time::sleep(std::time::Duration::from_millis(5)) => {}
                 _ = video_cancel.cancelled() => {
                     debug!("视频广播任务收到取消信号，优雅退出");
                     break;

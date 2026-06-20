@@ -384,9 +384,10 @@ function createWebSocket() {
                 break
 
               case 'video':
-                // 接收视频帧
+                // 接收视频帧（支持 jpeg / webp 动态格式）
                 if (msg.data) {
-                  videoFrame.value = `data:image/jpeg;base64,${msg.data}`
+                  const format = typeof msg.format === 'string' ? msg.format : 'jpeg'
+                  videoFrame.value = `data:image/${format};base64,${msg.data}`
                   // 更新 videoFps：每秒统计接收到的视频帧数
                   frameCount++
                   const now = Date.now()

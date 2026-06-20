@@ -49,6 +49,24 @@ export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: 
 
   // 当前按下的方向键（闭包内部状态，确保互斥）
   let currentDirectionKey: string | null = null
+  // 方向键按住时周期性重发命令，避免车载端 1 秒超时自动停车
+  let commandRepeatTimer: ReturnType<typeof setInterval> | null = null
+
+  /** 停止方向键命令重发 */
+  const stopCommandRepeat = () => {
+    if (commandRepeatTimer) {
+      clearInterval(commandRepeatTimer)
+      commandRepeatTimer = null
+    }
+  }
+
+  /** 开始方向键命令重发 */
+  const startCommandRepeat = (command: string) => {
+    stopCommandRepeat()
+    commandRepeatTimer = setInterval(() => {
+      sendCommand(command)
+    }, 300)
+  }
 
   /** 处理按键按下 */
   const handleKeyDown = (event: KeyboardEvent) => {
@@ -84,14 +102,18 @@ export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: 
     if (DIRECTION_KEYS.has(key)) {
       // 如果已有方向键按下，先停止
       if (currentDirectionKey && currentDirectionKey !== key) {
+        stopCommandRepeat()
         sendCommand(' ')
       }
       currentDirectionKey = key
       sendCommand(key)
+      // 按住期间每 300ms 重发，防止车载端超时停车
+      startCommandRepeat(key)
     }
     // 处理空格（停止）
     else if (key === ' ') {
       currentDirectionKey = null
+      stopCommandRepeat()
       sendCommand(' ')
     }
     // 处理速度键：将 1-9 映射为近似 PWM 值（1→28, 9→255）
@@ -111,6 +133,7 @@ export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: 
     // 如果释放的是当前方向键，停止
     if (DIRECTION_KEYS.has(key) && currentDirectionKey === key) {
       currentDirectionKey = null
+      stopCommandRepeat()
       sendCommand(' ')
     }
   }
@@ -120,6 +143,7 @@ export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: 
     activeKeys.value = new Set()
     if (currentDirectionKey) {
       currentDirectionKey = null
+      stopCommandRepeat()
       sendCommand(' ')
     }
   }
@@ -130,6 +154,7 @@ export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: 
       activeKeys.value = new Set()
       if (currentDirectionKey) {
         currentDirectionKey = null
+        stopCommandRepeat()
         sendCommand(' ')
       }
     }
@@ -144,6 +169,7 @@ export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: 
   })
 
   onUnmounted(() => {
+    stopCommandRepeat()
     window.removeEventListener('keydown', handleKeyDown)
     window.removeEventListener('keyup', handleKeyUp)
     window.removeEventListener('blur', handleBlur)

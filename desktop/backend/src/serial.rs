@@ -24,8 +24,33 @@ use base64::Engine;
 use serialport::{SerialPort, SerialPortType};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
+use zune_jpeg::JpegDecoder;
+use zune_jpeg::zune_core::bytestream::ZCursor;
+use zune_jpeg::zune_core::colorspace::ColorSpace;
+use zune_jpeg::zune_core::options::DecoderOptions;
+use webp_rust::{encode_lossy, ImageBuffer};
 
 use crate::{AppState, MutexExt};
+
+/// 尝试将 JPEG 帧转码为 WebP（纯 Rust，无需 libwebp）
+/// 成功且体积更小时返回 WebP 字节，否则返回 None
+fn try_encode_webp(jpeg: &[u8]) -> Option<Vec<u8>> {
+    let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
+    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(jpeg), options);
+    let rgba = decoder.decode().ok()?;
+    let info = decoder.info().ok()?;
+    let width = info.width as usize;
+    let height = info.height as usize;
+    if rgba.len() != width * height * 4 {
+        return None;
+    }
+    let image = ImageBuffer {
+        width,
+        height,
+        rgba,
+    };
+    encode_lossy(&image, 1, 60, None).ok()
+}
 
 /// 测速数据
 #[derive(Debug)]
@@ -760,9 +785,19 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                                 frame_count_period += 1;
                                 bytes_total_period += size as u64;
 
+                                // 可选：尝试转码为 WebP，以减小 WebSocket 传输体积
+                                let (frame_bytes, frame_format): (Vec<u8>, &str) = if state.use_webp {
+                                    match try_encode_webp(&data) {
+                                        Some(webp) if webp.len() < data.len() => (webp, "webp"),
+                                        _ => (data, "jpeg"),
+                                    }
+                                } else {
+                                    (data, "jpeg")
+                                };
+
                                 // Base64 编码视频帧，存储共享引用避免每客户端重复编码
                                 let b64_data =
-                                    base64::engine::general_purpose::STANDARD.encode(&data);
+                                    base64::engine::general_purpose::STANDARD.encode(&frame_bytes);
 
                                 // 计算哈希（共享，避免每客户端重复计算）
                                 let mut hasher = DefaultHasher::new();
@@ -770,6 +805,7 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                                 let hash = hasher.finish();
 
                                 let b64_arc = Arc::new(b64_data);
+                                let format_arc: Arc<str> = Arc::from(frame_format);
 
                                 // 存储 Base64 编码结果，供 WebSocket 客户端共享读取
                                 {
@@ -777,6 +813,13 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                                         .video_frame_b64
                                         .lock_or_recover("video_frame_b64");
                                     *b64 = Some(b64_arc);
+                                }
+                                // 存储帧格式
+                                {
+                                    let mut fmt = state
+                                        .video_frame_format
+                                        .lock_or_recover("video_frame_format");
+                                    *fmt = format_arc;
                                 }
                                 // 存储哈希值，供 WebSocket 客户端共享读取
                                 {

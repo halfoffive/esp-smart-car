@@ -57,7 +57,7 @@ struct StreamState {
 // 常量定义
 // ============================================
 namespace VideoStreamConfig {
-    constexpr uint16_t TARGET_FPS = 30;       // 目标帧率
+    constexpr uint16_t TARGET_FPS = 60;       // 目标帧率上限（实际受串口带宽限制）
     constexpr uint32_t FRAME_INTERVAL = 1000 / TARGET_FPS; // 帧间隔
     constexpr uint8_t JPEG_QUALITY_MIN = 5;   // 最小压缩值（最高质量，驱动中数值越小质量越高）
     constexpr uint8_t JPEG_QUALITY_MAX = 50;  // 最大压缩值（最低质量，驱动中数值越大质量越低）
@@ -118,15 +118,14 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
  * 根据网络状况调整JPEG质量
  */
 inline uint8_t adjustQuality(const uint32_t frameSize) {
-    // 如果帧太大，提高压缩率（降低质量）
-    if (frameSize > 10000) {
-        return VideoStreamConfig::JPEG_QUALITY_MAX;
+    // 目标：在 160x120 分辨率下把单帧控制在 2KB 左右，缓解 921600 串口带宽瓶颈
+    if (frameSize > 4096) {
+        return VideoStreamConfig::JPEG_QUALITY_MAX; // 帧过大，继续加压
     }
-    // 如果帧很小，降低压缩率（提高质量）
-    if (frameSize < 5000) {
-        return VideoStreamConfig::JPEG_QUALITY_MIN;
+    if (frameSize < 1536) {
+        return VideoStreamConfig::JPEG_QUALITY_MIN; // 帧很小，可适当提升质量
     }
-    return 20; // 默认质量
+    return 30; // 默认质量
 }
 
 // ============================================
@@ -189,8 +188,8 @@ inline bool sendVideoFrame(const FrameState& frame) {
             return false;
         }
 
-        // 短暂延迟避免拥塞
-        delayMicroseconds(50);
+        // 本地 AP 内网传输，不需要额外延迟；移除以最大化发包速率
+        // delayMicroseconds(50);
     }
 
     return true;
