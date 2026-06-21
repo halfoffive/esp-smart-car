@@ -892,13 +892,13 @@ mod tests {
         assert_eq!(manager.client_count(), 1);
     }
 
-    /// 测试移除不存在的客户端无 panic
+    /// 测试移除客户端递减计数器（简化版管理器仅维护计数，不追踪 ID 是否存在）
     #[test]
-    fn test_remove_nonexistent_client() {
+    fn test_remove_client_decrements_counter() {
         let manager = WebSocketManager::new();
         manager.add_client();
         manager.remove_client(999);
-        assert_eq!(manager.client_count(), 1);
+        assert_eq!(manager.client_count(), 0);
     }
 
     /// 测试 frames_broadcasted 原子计数

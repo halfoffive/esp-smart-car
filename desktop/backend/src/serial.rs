@@ -972,11 +972,13 @@ mod tests {
     /// 测试 OdometryData Clone 保留 last_update（不重置为 now）
     #[test]
     fn test_odometry_clone_preserves_last_update() {
-        let mut odom = OdometryData::default();
         // 设置一个明显过去的时间
-        odom.last_update = std::time::Instant::now()
-            .checked_sub(std::time::Duration::from_secs(60))
-            .unwrap_or_else(std::time::Instant::now);
+        let odom = OdometryData {
+            last_update: std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(60))
+                .unwrap_or_else(std::time::Instant::now),
+            ..Default::default()
+        };
         let cloned = odom.clone();
         // Clone 应保留原 last_update，不重置为 now
         assert_eq!(
@@ -989,7 +991,7 @@ mod tests {
     #[test]
     fn test_app_state_ports_initially_empty() {
         let state = crate::AppState::new_test();
-        let available = state.available_ports.blocking_lock();
+        let available = state.available_ports.lock_or_recover("available_ports");
         assert!(available.is_empty(), "初始可用串口列表应为空");
         let last = state.last_ports.lock_or_recover("last_ports");
         assert!(last.is_empty(), "初始 last_ports 应为空");
