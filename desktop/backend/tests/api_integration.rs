@@ -188,8 +188,10 @@ async fn test_command_no_serial() {
     );
 }
 
-/// 测试 S:<pwm> 速度命令在已连接真实串口时成功
+/// 测试 S:<pwm> 速度命令在已连接真实串口时成功。
+/// 该测试需要真实串口硬件，默认忽略；连接硬件后可运行 `cargo test -- --ignored`。
 #[tokio::test]
+#[ignore = "requires a real serial port"]
 async fn test_command_speed_success() {
     let Some(port) = find_test_port().await else {
         panic!("未找到真实串口，无法测试 S: 速度命令成功路径");
