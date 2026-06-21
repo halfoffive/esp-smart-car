@@ -83,21 +83,26 @@ esp-smart-car/
 ## Unique Styles
 
 - **Functional C++**: Value semantics preferred, state changes via function returns; `static` globals allowed only when confined to a single translation unit (e.g. `video_stream.h`, `wireless.h`)
-- **Binary protocol**: Custom 12-byte `WirelessPacket` format used for both WiFi/UDP and PC → receiver_dongle USB serial communication
-- **Frame packetization**: Video frames split into 128-byte chunks for WiFi UDP transmission to receiver telemetry port 9001; control commands use separate UDP port 9000
+- **Binary protocol**: Custom 8-byte `WirelessPacket` format used for both WiFi/UDP and PC → receiver_dongle USB serial communication
+- **Frame packetization**: Video frames split into 128-byte chunks for WiFi UDP transmission to receiver video port 9002; telemetry (odometry/link status) uses port 9001; control commands use separate UDP port 9000
 - **Differential steering**: Left/right motor speed differential for turning
 - **S3 单芯片架构**: ESP32-S3 (Freenove FNK0085) 同时承担摄像头采集 + 电机控制 + 编码器测速 + PID + WiFi STA UDP 收发；S3 不再进行 BLE 广播
 - **Speed control**: Motor PWM is controlled directly as 0-255 via the `WirelessPacket.speed` field; keyboard keys 1-9 are convenience shortcuts mapped to PWM values
-- **BLE scan**: receiver_dongle handles `CommandType::BLE_SCAN = 10` locally to perform generic peripheral scanning; S3 不再广播 Manufacturer Data，固定热点 SSID/密码取代 MAC 配对
+- **BLE scan**: receiver_dongle handles `CommandType::BLE_SCAN = 10` locally to perform generic peripheral scanning; S3 不再广播 Manufacturer Data
 - **链路状态探测**: receiver_dongle handles `CommandType::LINK_STATUS = 11` locally and reports `{"t":"link",...}` JSON on request and every 5 seconds; 后端 `connect_serial` 成功后发送 LINK_STATUS 探测；前端显示 4 级链路状态
 - **后端健康检测**: 前端 `useBackendHealth` 启动时探测 `/api/status`，1 秒无响应标记后端不可用，禁用所有控制 UI
+- **WebSocket 连接管理**: `App.vue` 是 WebSocket owner，在 `onMounted`/`onUnmounted` 中统一调用 `connect()`/`disconnect()`；`ControlPanel.vue` 只读使用 `useWebSocket`（发送命令/速度/模式、读取连接状态与串口列表），不管理连接生命周期
+- **串口状态判断**: 前端将 `serialStatus === '已连接'` 改为 `startsWith('已连接')`，与后端 WS 推送的 `"已连接:<port_name>"` 格式对齐
+- **SpeedDashboard**: 前端测速面板仅保留 2 个模块（当前车轮速度 cm/s、轮子转速 RPM），RPM 由 mm/s 按轮径 65mm 实时换算
+- **动态车载 IP**: receiver_dongle 从收到的 telemetry/video 包 `remoteIP()` 动态记录车载端 IP，未记录时回退到固定 `CAR_IP`（192.168.4.2）
 
 ## Commands
 
 ```bash
 # Backend (Rust)
 cd desktop/backend
-cargo build        # Build（自动将前端嵌入二进制）
+# 注意：build.rs 不再自动 bun install/build，需先手动构建前端（见下方 Frontend 命令）
+cargo build        # Build（将已构建的 frontend/dist 嵌入二进制）
 cargo run          # Run server（前端已编译进 exe，可在任意位置运行）
 cargo test         # Run all tests
 
@@ -136,8 +141,9 @@ Key connections:
 - **Ground common**: All devices must share common ground
 - **USB-CDC/JTAG**: ESP32-C6 的 `Serial` 通过内置 USB Serial/JTAG 控制器输出为 USB-CDC 虚拟串口，并非真实 UART；`921600` 仅为兼容传统串口 API 的波特率参数，实际吞吐由 USB Full Speed 控制器决定
 - **S3 单芯片架构**: 车载 ESP32-S3 (Freenove FNK0085) 同时承担摄像头采集 + 电机控制 + 编码器测速 + PID + WiFi STA UDP 收发；S3 不再进行 BLE 广播
-- **WiFi 链路**: C6 作为固定 AP（SSID "ESP-SmartCar" / 密码 "SmartCar2024" / IP 192.168.4.1 / 最大功率），S3 作为 STA 使用静态 IP 192.168.4.2
-- **UDP 端口**: 控制命令走 9000（C6→S3），遥测/视频走 9001（S3→C6），应用层继续使用 WirelessPacket/OdometryPacket/VideoPacket
+- **WiFi 链路**: C6 作为固定 AP（SSID/密码由 `firmware/libraries/wireless_protocol/src/wifi_credentials.h` 定义，模板见 `wifi_credentials.example.h`；固定 IP 192.168.4.1），S3 作为 STA 默认静态 IP 192.168.4.2，亦可通过 DHCP 获取并由 receiver_dongle 动态记录
+- **UDP 端口**: 控制命令走 9000（C6→S3），遥测/链路状态走 9001（S3→C6），视频流走 9002（S3→C6），应用层继续使用 WirelessPacket/OdometryPacket/VideoPacket
+- **动态车载 IP**: receiver_dongle 从 telemetry/video 包的 `remoteIP()` 动态记录车载端 IP，未记录时回退到固定 `CAR_IP`（192.168.4.2）
 - **Video buffer**: 32768 bytes for frame reassembly
 - **帧计数器**: `SerialManager` 维护 `frames_received`/`frames_decoded`/`frames_broadcasted` 计数器，并通过每秒 `status` WebSocket 消息暴露；固件 `receiver_dongle.ino` 每 5 秒输出 `[STATS] packets=... frames=... bytes=...` 日志
 - **Timeout protection**: 1-second auto-stop if no commands received
@@ -146,6 +152,9 @@ Key connections:
 - **链路状态探测**: receiver_dongle handles `CommandType::LINK_STATUS = 11` locally and reports `{"t":"link",...}` JSON on request and every 5 seconds; 后端 `connect_serial` 成功后发送 LINK_STATUS 探测；前端 4 级链路状态显示
 - **后端健康检测**: 前端 `useBackendHealth` 启动时探测 `/api/status`（1 秒超时），不可用时禁用所有控制 UI 并显示红色横幅
 - **紧急停止**: 前端长按 500ms 触发（防误触）
+- **WebSocket 连接管理**: `App.vue` 是 WebSocket owner，在 `onMounted`/`onUnmounted` 中统一调用 `connect()`/`disconnect()`；`ControlPanel.vue` 只读使用 `useWebSocket`，不管理连接生命周期
+- **串口状态判断**: 前端将 `serialStatus === '已连接'` 改为 `startsWith('已连接')`，与后端 WS 推送的 `"已连接:<port_name>"` 格式对齐
+- **SpeedDashboard**: 前端测速面板为 2 个模块（当前车轮速度 cm/s、轮子转速 RPM）
 - **Arduino library**: `wireless.h` is installed as an Arduino library in `firmware/libraries/wireless_protocol/` to avoid duplication across sketches
 
 ## 近期修复记录

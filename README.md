@@ -2,6 +2,8 @@
 
 *部分内容由 AI 生成*
 
+[![Version](https://img.shields.io/badge/version-v1.9.0-blue.svg)](#版本历史)
+
 基于 ESP32 的智能车控制系统，包含嵌入式固件、无线通信、视频传输和 Web 控制界面。
 
 **架构**：ESP32-S3 单芯片车载控制器（Freenove FNK0085）+ ESP32-C6 接收器 Dongle。S3 承担摄像头采集、电机控制、编码器测速、PID 等全部车载功能；车载 S3 与接收器 C6 之间通过 WiFi UDP 通信。C6 通过 USB 连接电脑，并可在本地进行 BLE 扫描以发现周边设备。
@@ -92,9 +94,10 @@ esp-smart-car/
 - 协议：2.4GHz WiFi UDP
 - 网络拓扑：C6 作为 SoftAP，S3 作为 STA 接入
 - 热点 SSID/密码由 `firmware/libraries/wireless_protocol/src/wifi_credentials.h` 定义（由 `wifi_credentials.example.h` 复制修改而来，实际文件已加入 `.gitignore`，不进入版本库）
-- 静态 IP：C6 `192.168.4.1`，S3 `192.168.4.2`
+- 静态 IP：C6 `192.168.4.1`，S3 默认静态 IP `192.168.4.2`；receiver_dongle 支持从 telemetry/video 包 `remoteIP()` 动态记录车载端 IP，未记录时回退到固定 `CAR_IP`
 - 控制端口：`9000`（C6 → S3 命令）
-- 遥测端口：`9001`（S3 → C6 测速、状态、视频帧）
+- 遥测端口：`9001`（S3 → C6 测速、链路状态）
+- 视频端口：`9002`（S3 → C6 视频帧）
 - 用途：车载 S3 ↔ 接收器 C6 双向通信（视频帧、命令、测速、状态）
 - 安全：车载 UDP 控制包增加源 IP/MAC 白名单与序列号反重放；后端 REST/WebSocket 增加认证，未携带有效凭证的客户端无法操作车辆
 
@@ -159,13 +162,16 @@ S3 将视频帧通过 UDP 遥测端口 `9001` 分包发送到 C6 接收器（每
 
 ### 桌面端
 
-前端已集成到后端中，构建一次后启动后端即可直接访问 Web UI。
+前端已集成到后端中，但 `desktop/backend/build.rs` 不再自动运行 `bun install` / `bun run build`，需先手动构建前端，再编译后端。
 
 #### 后端（Rust）
 ```bash
 cd desktop/backend
 
-# 编译后端（自动构建前端并嵌入二进制，设置 SKIP_FRONTEND_BUILD=1 可跳过）
+# 首次或前端源码变更后，需先手动构建前端（见下方 Frontend 命令）
+# build.rs 仅检查 frontend/dist 是否存在，不存在会 panic 提示
+
+# 编译后端（将已构建的 frontend/dist 嵌入二进制）
 cargo build
 
 # 运行（前端已编译进 exe，无需 .env 文件即可在任意位置运行，访问 http://localhost:8080）
@@ -189,13 +195,19 @@ bun run build
 ## 启动顺序
 
 1. 连接电脑端接收器（ESP32-C6）到电脑 USB — C6 自动创建 WiFi 热点（SSID/密码以本地 `wifi_credentials.h` 为准）
-2. 启动车载控制器（ESP32-S3，Freenove FNK0085）— S3 作为 STA 自动连接 C6 热点，静态 IP `192.168.4.2`
+2. 启动车载控制器（ESP32-S3，Freenove FNK0085）— S3 作为 STA 自动连接 C6 热点，默认静态 IP `192.168.4.2`；receiver_dongle 亦会动态记录实际车载 IP
 3. 启动 Rust 后端（自动提供前端页面）
 4. 在浏览器中打开 `http://localhost:8080`
 5. 前端自动探测后端可用性，不可用时显示红色横幅
 6. 在 Web UI 中连接串口（串口列表会自动通过 WebSocket 实时推送，连接后自动发送 'P' 探测链路状态）
 
 ## 开发说明
+
+### 认证说明（开发阶段）
+
+- 后端 REST/WebSocket 默认启用认证。未设置 `API_TOKEN` 环境变量时，开发阶段使用默认 Token `esp-smart-car`，前端 `desktop/frontend/src/config/auth.ts` 中的 `DEFAULT_API_TOKEN` 与此保持一致
+- 生产环境务必在 `.env` 中设置强 `API_TOKEN`，并通过 `VITE_API_TOKEN` 同步前端构建
+- 测试环境可设置 `DISABLE_AUTH=true` 禁用认证
 
 ### 函数式编程风格
 
@@ -275,6 +287,16 @@ cargo clippy       # 静态分析检查
 - 检查 WebSocket 连接是否正常
 
 ## 版本历史
+
+- v1.9.0 - 2026-06-21（未发布，与 `firmware/car_controller/car_controller.ino` 中 `VERSION` 一致）
+  - Karpathy 审计修复 v2
+    - Token 恒定时间比较（`subtle::ConstantTimeEq`），未认证返回 JSON 401；开发阶段保留默认 Token `esp-smart-car`
+    - WebSocket 广播改用 `tokio::sync::Notify` 事件驱动与原子计数器，视频帧按 hash 去重
+    - 串口帧在串口任务内完成 Base64 编码与 hash 计算，`status` 消息暴露 `frames_received`/`frames_decoded`/`frames_broadcasted`
+    - 前端 WebSocket owner 上移到 `App.vue`，`ControlPanel.vue` 只读使用 `useWebSocket`
+    - `SpeedDashboard.vue` 精简为 2 模块并新增 RPM 计算；`VideoPlayer.vue` 使用 RAF 节流
+    - 固件 PID 方向/`HEADING_LOCK` 修复；UDP 遥测/视频端口分离（9001/9002）；receiver_dongle 动态记录车载 IP
+    - `desktop/backend/build.rs` 不再自动 `bun install/build`，需手动构建前端
 
 - v1.5.1 - 2026-06-20（未发布）
   - 视频帧率与链路可观测性优化

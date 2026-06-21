@@ -29,21 +29,6 @@
 // ============================================
 
 /**
- * 编码器配置
- * 记录编码器的硬件参数（光电编码器：光栅码盘 + 光敏元件）
- */
-struct EncoderConfig {
-    uint8_t pin;              // 中断引脚
-    uint8_t pulsesPerRev;     // 每圈脉冲数（编码器线数）
-    float wheelDiameter;       // 轮子直径(mm)
-    float gearRatio;           // 减速比（电机转速:轮速）
-    
-    constexpr EncoderConfig(
-        uint8_t p, uint8_t ppr, float wd, float gr
-    ) : pin(p), pulsesPerRev(ppr), wheelDiameter(wd), gearRatio(gr) {}
-};
-
-/**
  * 单轮测速数据
  * 所有字段均为 const，确保不可变性
  */
@@ -119,33 +104,34 @@ namespace OdometerConfig {
 
 // ============================================
 // 可变全局状态（中断修改，主循环读取）
+// 声明为 extern，在 car_controller.ino 中做唯一定义，避免头文件被多次包含时重复定义
 // ============================================
 namespace OdometerState {
     // 脉冲计数（volatile 用于中断安全）
-    volatile uint32_t g_leftPulses = 0;
-    volatile uint32_t g_rightPulses = 0;
-    uint32_t g_lastLeftPulses = 0;    // 非 ISR 变量，仅主循环访问
-    uint32_t g_lastRightPulses = 0;   // 非 ISR 变量，仅主循环访问
-    
+    extern volatile uint32_t g_leftPulses;
+    extern volatile uint32_t g_rightPulses;
+    extern uint32_t g_lastLeftPulses;    // 非 ISR 变量，仅主循环访问
+    extern uint32_t g_lastRightPulses;   // 非 ISR 变量，仅主循环访问
+
     // 累计距离
-    float g_leftDistanceMm = 0.0f;
-    float g_rightDistanceMm = 0.0f;
-    
+    extern float g_leftDistanceMm;
+    extern float g_rightDistanceMm;
+
     // 速度计算
-    float g_leftSpeedMmps = 0.0f;
-    float g_rightSpeedMmps = 0.0f;
-    float g_leftRpm = 0.0f;
-    float g_rightRpm = 0.0f;
-    
+    extern float g_leftSpeedMmps;
+    extern float g_rightSpeedMmps;
+    extern float g_leftRpm;
+    extern float g_rightRpm;
+
     // 航向
-    float g_heading = 0.0f;
-    float g_totalDistanceMm = 0.0f;
-    
+    extern float g_heading;
+    extern float g_totalDistanceMm;
+
     // 时间
-    uint32_t g_lastSampleTime = 0;
-    
+    extern uint32_t g_lastSampleTime;
+
     // 校准
-    SpeedCalibration g_calibration = OdometerConfig::DEFAULT_CALIBRATION;
+    extern SpeedCalibration g_calibration;
 }
 
 // ============================================
@@ -155,14 +141,21 @@ namespace OdometerState {
 /**
  * 左轮编码器中断
  * 每检测到一个脉冲递增计数
- * 注意：函数定义在 car_controller.ino 中（非 inline），避免 inline + IRAM_ATTR 导致的 literal pool 重定位错误
+ *
+ * 重要：ISR 函数体定义在 car_controller.ino 中（第 109-115 行附近），
+ * 且带有 IRAM_ATTR 属性。请勿在头文件中用 inline 实现这些 ISR，
+ * 否则 inline + IRAM_ATTR 组合可能触发 literal pool 重定位错误
+ * （编译器将常量放入 Flash，而 IRAM 中断代码无法访问 Flash 上的 literal pool）。
  */
 void IRAM_ATTR onLeftEncoderPulse();
 
 /**
  * 右轮编码器中断
  * 每检测到一个脉冲递增计数
- * 注意：函数定义在 car_controller.ino 中（非 inline），避免 inline + IRAM_ATTR 导致的 literal pool 重定位错误
+ *
+ * 重要：ISR 函数体定义在 car_controller.ino 中（第 109-115 行附近），
+ * 且带有 IRAM_ATTR 属性。请勿在头文件中用 inline 实现这些 ISR，
+ * 否则 inline + IRAM_ATTR 组合可能触发 literal pool 重定位错误。
  */
 void IRAM_ATTR onRightEncoderPulse();
 
@@ -173,16 +166,16 @@ void IRAM_ATTR onRightEncoderPulse();
 /**
  * 初始化编码器引脚和中断
  * 副作用：配置GPIO和中断
+ *
+ * 注意：本函数不输出串口日志，因为可能在 Serial.begin 完成前被调用。
+ *       调用方（car_controller.ino 的 setup()）负责在 Serial 就绪后打印初始化信息。
  */
 inline void initializeOdometer() {
     pinMode(OdometerConfig::LEFT_ENCODER_PIN, INPUT_PULLUP);
     pinMode(OdometerConfig::RIGHT_ENCODER_PIN, INPUT_PULLUP);
-    
-    attachInterrupt(digitalPinToInterrupt(OdometerConfig::LEFT_ENCODER_PIN), 
-                    onLeftEncoderPulse, FALLING);
-    attachInterrupt(digitalPinToInterrupt(OdometerConfig::RIGHT_ENCODER_PIN), 
-                    onRightEncoderPulse, FALLING);
-    
+
+    // 先关中断、清零所有状态和标志，再 attach 中断，防止启动瞬间的脉冲计入旧状态
+    noInterrupts();
     OdometerState::g_leftPulses = 0;
     OdometerState::g_rightPulses = 0;
     OdometerState::g_lastLeftPulses = 0;
@@ -197,13 +190,12 @@ inline void initializeOdometer() {
     OdometerState::g_totalDistanceMm = 0.0f;
     OdometerState::g_lastSampleTime = millis();
     OdometerState::g_calibration = OdometerConfig::DEFAULT_CALIBRATION;
-    
-    Serial.println("[测速模块] 编码器初始化完成");
-    Serial.printf("  左轮引脚: GPIO %d\n", OdometerConfig::LEFT_ENCODER_PIN);
-    Serial.printf("  右轮引脚: GPIO %d\n", OdometerConfig::RIGHT_ENCODER_PIN);
-    Serial.printf("  每圈脉冲: %d\n", OdometerConfig::PULSES_PER_REV);
-    Serial.printf("  轮子直径: %.1f mm\n", OdometerConfig::WHEEL_DIAMETER_MM);
-    Serial.printf("  轮距: %.1f mm\n", OdometerConfig::WHEEL_BASE_MM);
+
+    attachInterrupt(digitalPinToInterrupt(OdometerConfig::LEFT_ENCODER_PIN),
+                    onLeftEncoderPulse, FALLING);
+    attachInterrupt(digitalPinToInterrupt(OdometerConfig::RIGHT_ENCODER_PIN),
+                    onRightEncoderPulse, FALLING);
+    interrupts();
 }
 
 // ============================================
@@ -248,9 +240,9 @@ inline float calculateAngularVelocity(float leftMmps, float rightMmps) {
  * 输出：新航向(弧度)
  */
 inline float updateHeading(float heading, float angularVelocity, float dtSec) {
-    // 更新航向角并归一化到 [0, 2π)，防止持续累加导致 int16_t 溢出
+    // 更新航向角并归一化到 [0, 2π)，防止浮点数值无界增长
     float newHeading = heading + angularVelocity * dtSec;
-    // 归一化到 [0, 2π)，防止持续累加导致 int16_t 溢出
+    // 归一化到 [0, 2π)
     // TWO_PI 为 Arduino.h 预定义宏 (6.283185...)
     newHeading = fmod(newHeading, static_cast<float>(TWO_PI));
     if (newHeading < 0.0f) {
@@ -408,7 +400,7 @@ inline void setSpeedCalibration(float leftCorrection, float rightCorrection) {
 /**
  * 自动校准：直行时记录速度比，计算修正系数
  * 调用条件：车在平地上同向直行一段距离后调用
- * 输入：当前PWM值，期望直行距离
+ * 输入：左电机方向，右电机方向
  * 输出：校准参数
  */
 inline SpeedCalibration autoCalibrate(MotorDirection leftDir, MotorDirection rightDir) {

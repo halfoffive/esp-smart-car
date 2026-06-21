@@ -31,13 +31,13 @@
           @click="serialConnected ? disconnect() : connect()"
           :class="[
             serialConnected ? 'btn-danger' : 'btn-primary',
-            { 'opacity-50 cursor-not-allowed': isConnecting || serialConnecting }
+            { 'opacity-50 cursor-not-allowed': serialConnecting }
           ]"
           class="px-3 py-1.5 text-xs shrink-0"
-          :disabled="isConnecting || serialConnecting"
-          :aria-label="isConnecting || serialConnecting ? '连接中' : (serialConnected ? '断开串口连接' : '连接串口')"
+          :disabled="serialConnecting"
+          :aria-label="serialConnecting ? '连接中' : (serialConnected ? '断开串口连接' : '连接串口')"
         >
-          {{ isConnecting || serialConnecting ? '连接中...' : (serialConnected ? '断开' : '连接') }}
+          {{ serialConnecting ? '连接中...' : (serialConnected ? '断开' : '连接') }}
         </button>
       </div>
 
@@ -56,7 +56,7 @@
 
       <!-- 无极速度滑块 -->
       <div class="flex items-center gap-2">
-        <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">0</span>
+        <span class="text-[10px] text-dark-500 font-mono w-5 text-center shrink-0">0</span>
         <div class="flex-1 relative">
           <input
             v-model.number="currentSpeed"
@@ -76,7 +76,7 @@
             aria-label="速度控制滑块"
           />
         </div>
-        <span class="text-[10px] text-dark-500 font-mono w-3 text-center shrink-0">255</span>
+        <span class="text-[10px] text-dark-500 font-mono w-5 text-center shrink-0">255</span>
       </div>
     </div>
     
@@ -90,6 +90,7 @@
           @mouseleave="handleButtonRelease()"
           @touchstart.prevent="handleButtonPress('Q')"
           @touchend.prevent="handleButtonRelease()"
+          @touchcancel.prevent="handleButtonRelease()"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('Q') || pressedButton === 'Q' }]"
           :disabled="!backendAvailable"
           title="原地左转"
@@ -103,6 +104,7 @@
           @mouseleave="handleButtonRelease()"
           @touchstart.prevent="handleButtonPress('W')"
           @touchend.prevent="handleButtonRelease()"
+          @touchcancel.prevent="handleButtonRelease()"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('W') || pressedButton === 'W' }]"
           :disabled="!backendAvailable"
           title="前进"
@@ -116,6 +118,7 @@
           @mouseleave="handleButtonRelease()"
           @touchstart.prevent="handleButtonPress('E')"
           @touchend.prevent="handleButtonRelease()"
+          @touchcancel.prevent="handleButtonRelease()"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('E') || pressedButton === 'E' }]"
           :disabled="!backendAvailable"
           title="原地右转"
@@ -130,6 +133,7 @@
           @mouseleave="handleButtonRelease()"
           @touchstart.prevent="handleButtonPress('A')"
           @touchend.prevent="handleButtonRelease()"
+          @touchcancel.prevent="handleButtonRelease()"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('A') || pressedButton === 'A' }]"
           :disabled="!backendAvailable"
           title="左转"
@@ -143,6 +147,7 @@
           @mouseleave="handleButtonRelease()"
           @touchstart.prevent="handleButtonPress('S')"
           @touchend.prevent="handleButtonRelease()"
+          @touchcancel.prevent="handleButtonRelease()"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('S') || pressedButton === 'S' }]"
           :disabled="!backendAvailable"
           title="后退"
@@ -156,6 +161,7 @@
           @mouseleave="handleButtonRelease()"
           @touchstart.prevent="handleButtonPress('D')"
           @touchend.prevent="handleButtonRelease()"
+          @touchcancel.prevent="handleButtonRelease()"
           :class="['control-key-sm', { 'control-key-active': activeKeys.has('D') || pressedButton === 'D' }]"
           :disabled="!backendAvailable"
           title="右转"
@@ -210,7 +216,7 @@
     <div class="flex-1 min-h-0 flex flex-col">
       <h3 class="text-xs font-medium text-dark-300 mb-1">系统日志</h3>
       <div class="flex-1 bg-dark-950 rounded-lg p-2 overflow-y-auto font-mono text-[10px] space-y-0.5 min-h-[60px]" role="log" aria-label="系统日志" aria-live="polite">
-        <div v-for="(log, index) in logs" :key="log.id ?? index" :class="log.color">
+        <div v-for="log in logs" :key="log.id" :class="log.color">
           <span class="text-dark-600">[{{ log.time }}]</span>
           {{ log.message }}
         </div>
@@ -220,48 +226,35 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
 import { useKeyboard } from '../composables/useKeyboard'
 import { useApi } from '../composables/useApi'
 import { useStatus } from '../composables/useStatus'
 import { useBackendHealth } from '../composables/useBackendHealth'
+import { COMMAND_REPEAT_INTERVAL_MS } from '../config/constants'
 
-const { sendCommand: wsSendCommand, sendSpeed, isConnected, connectionError, sendDriveMode, availablePorts: wsAvailablePorts, connect: wsConnect, disconnect: wsDisconnect } = useWebSocket(true)
+const { sendCommand: wsSendCommand, sendSpeed, isConnected, connectionError, sendDriveMode, availablePorts: wsAvailablePorts } = useWebSocket()
 const { post, get } = useApi()
 const { status } = useStatus()
 const { backendAvailable } = useBackendHealth()
 
 const selectedPort = ref('')
-/** 手动扫描获取的串口列表（兜底，WebSocket 未连接时也可用） */
 const scannedPorts = ref<string[]>([])
-/** 合并 WebSocket 推送 + 手动扫描的串口列表（去重排序） */
 const displayedPorts = computed(() => {
   const merged = new Set([...scannedPorts.value, ...wsAvailablePorts.value])
   return [...merged].sort()
 })
 const currentSpeed = ref(128)
-/** 是否正在拖动速度滑块（拖动时不与后端推送值同步） */
 const isDraggingSpeed = ref(false)
-/** 连接进行中状态标志 */
-const isConnecting = ref(false)
-/** 串口是否已连接（基于 WS status 推送，解决 WebSocket 断开时按钮状态不一致） */
 const serialConnected = computed(() => status.value.serialStatus.startsWith('已连接'))
-/** 串口是否正在连接中 */
 const serialConnecting = computed(() => status.value.serialStatus === '连接中')
-/** 串口扫描进行中状态标志 */
 const isScanning = ref(false)
 
-/** 速度滑块防抖定时器：快速拖动时只发送最终值，不发送中间值 */
 let speedDebounceTimer: number | null = null
-/** 方向按钮按住重发定时器（防止车载端 1 秒超时自动停车） */
 let buttonRepeatTimer: ReturnType<typeof setInterval> | null = null
-/** 当前按下的方向按钮（用于视觉反馈和互斥） */
 const pressedButton = ref<string | null>(null)
-/** 行走模式本地回退状态（后端未推送 drive_mode 时使用） */
-const localDriveMode = ref(0)
-/** 行走模式：0=普通, 1=直线修正, 2=航向锁定；优先使用后端推送值 */
-const driveMode = computed(() => status.value.driveMode ?? localDriveMode.value)
+const driveMode = computed(() => status.value.driveMode ?? 0)
 const logs = ref<{ id: number, time: string, message: string, color: string }[]>([])
 /** 日志 ID 自增计数器（避免 Date.now() 碰撞） */
 let logIdCounter = 0
@@ -283,17 +276,12 @@ const driveModeDesc = computed(() => {
   }
 })
 
-/** 设置行走模式：0=普通, 1=直线修正, 2=航向锁定 */
 const setDriveMode = (mode: number) => {
   if (!isConnected.value) {
     addLog('未连接，无法切换模式', 'warning')
     return
   }
   if (sendDriveMode(mode)) {
-    // 后端未推送 drive_mode 时，乐观更新本地回退状态
-    if (status.value.driveMode === undefined) {
-      localDriveMode.value = mode
-    }
     addLog(`行走模式: ${driveModeDesc.value}`, 'info')
   } else {
     addLog('行走模式切换失败，请检查 WebSocket 连接', 'error')
@@ -320,16 +308,15 @@ const addLog = (message: string, type: 'info' | 'warning' | 'error' = 'info') =>
 }
 
 const sendCommand = (cmd: string) => {
+  if (!backendAvailable.value) return
   if (!isConnected.value) {
     addLog('未连接，无法发送命令', 'warning')
     return
   }
 
   wsSendCommand(cmd)
-  // 注：高频命令发送不记录日志，避免日志洪流
 }
 
-/** 停止方向按钮命令重发 */
 const stopButtonRepeat = () => {
   if (buttonRepeatTimer) {
     clearInterval(buttonRepeatTimer)
@@ -337,8 +324,8 @@ const stopButtonRepeat = () => {
   }
 }
 
-/** 方向按钮按下：发送命令并开始 300ms 重发 */
 const handleButtonPress = (cmd: string) => {
+  if (!backendAvailable.value) return
   if (!isConnected.value) {
     addLog('未连接，无法发送命令', 'warning')
     return
@@ -348,15 +335,22 @@ const handleButtonPress = (cmd: string) => {
   sendCommand(cmd)
   buttonRepeatTimer = setInterval(() => {
     sendCommand(cmd)
-  }, 300)
+  }, COMMAND_REPEAT_INTERVAL_MS)
 }
 
-/** 方向按钮释放：停止重发并发送停止命令 */
+const DIRECTION_KEYS = ['W', 'A', 'S', 'D', 'Q', 'E']
+
 const handleButtonRelease = () => {
   if (!pressedButton.value) return
   stopButtonRepeat()
   pressedButton.value = null
-  sendCommand(' ')
+
+  const remainingDirection = DIRECTION_KEYS.find((key) => activeKeys.has(key))
+  if (remainingDirection) {
+    sendCommand(remainingDirection)
+  } else {
+    sendCommand(' ')
+  }
 }
 
 /** 速度滑块输入处理（带 200ms 防抖）：只发送最终值，不发送中间值 */
@@ -366,20 +360,19 @@ const handleSpeedInput = () => {
   }
   speedDebounceTimer = window.setTimeout(() => {
     speedDebounceTimer = null
-    setSpeed()
+    setSpeed(currentSpeed.value)
   }, 200)
 }
 
-const setSpeed = (pwm?: number) => {
+const setSpeed = (pwm: number) => {
+  if (!backendAvailable.value) return
   if (!isConnected.value) {
     addLog('WebSocket 未连接，无法设置速度', 'warning')
     return
   }
-  const speed = pwm !== undefined ? Math.round(pwm) : Math.round(currentSpeed.value)
-  sendSpeed(speed)
+  sendSpeed(Math.round(pwm))
 }
 
-// 使用重构后的 useKeyboard：自动管理生命周期，无需手动清理
 const { activeKeys } = useKeyboard(sendCommand, setSpeed)
 
 // 速度滑块与后端 currentSpeed 同步（仅在未拖动时）
@@ -395,8 +388,6 @@ const connect = async () => {
     return
   }
 
-  isConnecting.value = true
-
   try {
     const result = await post('/api/connect', {
       port_name: selectedPort.value,
@@ -405,25 +396,11 @@ const connect = async () => {
 
     if (result.success) {
       addLog('串口连接成功', 'info')
-      // 串口连接成功后自动连接 WebSocket（await 确保异常可被 catch 捕获）
-      try {
-        await wsConnect()
-      } catch (e) {
-        addLog(`WebSocket 连接失败: ${e instanceof Error ? e.message : String(e)}`, 'warning')
-        // WebSocket 失败时回滚串口连接，避免串口打开但 WS 断开的不一致状态
-        try {
-          await post('/api/disconnect')
-        } catch (rollbackErr) {
-          addLog(`回滚串口连接失败: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`, 'error')
-        }
-      }
     } else {
       addLog(`连接失败: ${result.message}`, 'error')
     }
   } catch (e) {
     addLog(`连接错误: ${e instanceof Error ? e.message : String(e)}`, 'error')
-  } finally {
-    isConnecting.value = false
   }
 }
 
@@ -437,8 +414,6 @@ const disconnect = async () => {
   } catch (e) {
     addLog(`断开错误: ${e instanceof Error ? e.message : String(e)}`, 'error')
   }
-  // 串口断开时同时断开 WebSocket
-  wsDisconnect()
 }
 
 /** 扫描可用串口：调用 /api/ports 获取列表并填充下拉框（兜底手动扫描） */
@@ -469,16 +444,15 @@ watch(displayedPorts, (newPorts) => {
   }
 })
 
+onMounted(() => {
+  scanPorts()
+})
+
 onUnmounted(() => {
-  // 清理速度防抖定时器和按钮重发定时器
   if (speedDebounceTimer !== null) {
     clearTimeout(speedDebounceTimer)
     speedDebounceTimer = null
   }
   stopButtonRepeat()
-  // 断开连接
-  if (serialConnected.value) {
-    disconnect().catch((e) => { if (import.meta.env.DEV) console.error('[ControlPanel] 卸载断开失败:', e) })
-  }
 })
 </script>

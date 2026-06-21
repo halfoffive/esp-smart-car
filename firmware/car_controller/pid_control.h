@@ -1,6 +1,6 @@
 /**
  * PID 控制器 - 函数式编程风格
- * 基于 ESP32-C6，用于智能车直线行走修正
+ * 基于 ESP32-S3，用于智能车直线行走修正
  * 
  * 功能：
  * 1. PID 算法实现（位置式PID）
@@ -57,16 +57,15 @@ struct PIDState {
     float input;             // 输入值（当前测量值）
     float output;            // 输出值（修正量）
     float error;             // 当前误差
-    float lastError;         // 上次误差
     float integral;          // 积分累计
     float derivative;        // 微分项
     uint32_t lastTime;       // 上次更新时间
-    
+
     constexpr PIDState(
-        float sp, float inp, float out, float err, float lastErr,
+        float sp, float inp, float out, float err,
         float integ, float deriv, uint32_t lt
     ) : setpoint(sp), input(inp), output(out), error(err),
-        lastError(lastErr), integral(integ), derivative(deriv), lastTime(lt) {}
+        integral(integ), derivative(deriv), lastTime(lt) {}
 };
 
 /**
@@ -127,19 +126,20 @@ namespace PIDDefaults {
 
 // ============================================
 // 全局状态
+// 声明为 extern，在 car_controller.ino 中做唯一定义
 // ============================================
 namespace PIDControllerState {
     // PID 状态
-    PIDState g_straightPidState = PIDState(0, 0, 0, 0, 0, 0, 0, 0);
-    PIDState g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, 0, 0);
+    extern PIDState g_straightPidState;
+    extern PIDState g_headingPidState;
 
     // 行走模式（默认普通模式，与 car_controller.ino 中 g_smartDriveEnabled=false 一致）
-    DriveMode g_driveMode = DriveMode::NORMAL;
+    extern DriveMode g_driveMode;
 
     // 航向锁定目标角度（进入锁定模式时捕获当前航向）
-    float g_headingLockTarget = 0.0f;
+    extern float g_headingLockTarget;
     // 航向锁定目标是否已初始化
-    bool g_headingLockTargetInitialized = false;
+    extern bool g_headingLockTargetInitialized;
 }
 
 // ============================================
@@ -151,6 +151,11 @@ namespace PIDControllerState {
  * 标准位置式PID算法
  * 输入：PID参数，当前状态，新输入值，目标值
  * 输出：新PID状态
+ *
+ * 实现要点：
+ * - 微分项使用 -d(input)/dt，避免 setpoint 跳变导致的 derivative kick。
+ * - 积分抗饱和：先按未限幅积分计算输出并限幅；若输出饱和且误差与输出同号，
+ *   则回退到上次积分值，并按回退后的积分重新计算输出。
  */
 inline PIDState computePID(
     const PIDParams& params,
@@ -165,49 +170,51 @@ inline PIDState computePID(
     // 对 uint32_t 类型是安全的：即使溢出，差值仍然正确（模 2^32 算术）。
     // 此处先计算无符号差值，再转换为 float，确保溢出安全。
     const uint32_t dtMs = currentTime - lastState.lastTime;
-    
+
     // dtMs 为 0 表示时间未推进，直接返回上次状态，避免除零
     if (dtMs == 0) {
         return lastState;
     }
-    
+
     const float dt = static_cast<float>(dtMs) / 1000.0f;
-    
+
     // 当前误差
     const float error = setpoint - newInput;
-    
+
     // 比例项
     const float proportional = params.kp * error;
-    
-    // 积分项（带限幅）
+
+    // 积分项（带积分限幅）
     float newIntegral = lastState.integral + error * dt;
     if (newIntegral > params.integralLimit) {
         newIntegral = params.integralLimit;
     } else if (newIntegral < -params.integralLimit) {
         newIntegral = -params.integralLimit;
     }
-    const float integralTerm = params.ki * newIntegral;
 
-    // 微分项
-    const float derivativeTerm = params.kd * (error - lastState.error) / dt;
+    // 微分项：对测量值微分，避免 setpoint 跳变产生 derivative kick
+    const float derivativeTerm = params.kd * -(newInput - lastState.input) / dt;
 
-    // 计算原始输出
-    const float rawOutput = proportional + integralTerm + derivativeTerm;
-
-    // 输出限幅
-    float output = rawOutput;
+    // 按未抗饱和的积分计算原始输出并限幅
+    float integralTerm = params.ki * newIntegral;
+    float output = proportional + integralTerm + derivativeTerm;
     if (output > params.outputMax) output = params.outputMax;
     if (output < params.outputMin) output = params.outputMin;
 
-    // 积分抗饱和：输出饱和且误差与输出同号时停止同号积分累积
-    if ((rawOutput > params.outputMax && error > 0.0f) ||
-        (rawOutput < params.outputMin && error < 0.0f)) {
+    // 积分抗饱和：输出饱和且误差与输出同号时，回退到旧积分并重新计算输出
+    const bool saturatedHigh = (output == params.outputMax);
+    const bool saturatedLow = (output == params.outputMin);
+    if ((saturatedHigh && error > 0.0f) || (saturatedLow && error < 0.0f)) {
         newIntegral = lastState.integral;
+        integralTerm = params.ki * newIntegral;
+        output = proportional + integralTerm + derivativeTerm;
+        if (output > params.outputMax) output = params.outputMax;
+        if (output < params.outputMin) output = params.outputMin;
     }
-    
+
     return PIDState(
         setpoint, newInput, output, error,
-        error, newIntegral, derivativeTerm, currentTime
+        newIntegral, derivativeTerm, currentTime
     );
 }
 
@@ -240,15 +247,18 @@ inline SmartMotorOutput applyStraightCorrection(
     // 修正量应用到左右轮PWM
     // 左轮减去修正量，右轮加上修正量
     // 这样如果右轮快了，修正量为正，左轮加速右轮减速
-    int leftPwm = static_cast<int>(basePwm) - static_cast<int>(correction);
-    int rightPwm = static_cast<int>(basePwm) + static_cast<int>(correction);
-    
+    // 后退时左右轮转向效果与前进相反，因此交换修正量符号
+    const bool isReversing = (leftDir == MotorDirection::BACKWARD && rightDir == MotorDirection::BACKWARD);
+    const float signedCorrection = isReversing ? -correction : correction;
+    int leftPwm = static_cast<int>(basePwm) - static_cast<int>(signedCorrection);
+    int rightPwm = static_cast<int>(basePwm) + static_cast<int>(signedCorrection);
+
     // 限幅
     if (leftPwm < 0) leftPwm = 0;
     if (leftPwm > 255) leftPwm = 255;
     if (rightPwm < 0) rightPwm = 0;
     if (rightPwm > 255) rightPwm = 255;
-    
+
     return SmartMotorOutput(
         static_cast<uint8_t>(leftPwm),
         static_cast<uint8_t>(rightPwm),
@@ -264,10 +274,10 @@ inline SmartMotorOutput applyStraightCorrection(
  * 默认状态与 car_controller.ino 中 g_smartDriveEnabled = false 一致
  */
 inline void initializePIDController() {
-    PIDControllerState::g_straightPidState = PIDState(0, 0, 0, 0, 0, 0, 0, millis());
-    PIDControllerState::g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, 0, millis());
+    PIDControllerState::g_straightPidState = PIDState(0, 0, 0, 0, 0, 0, millis());
+    PIDControllerState::g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, millis());
     PIDControllerState::g_driveMode = DriveMode::NORMAL;
-    
+
     Serial.println("[PID控制器] 初始化完成");
     Serial.printf("  直线PID: Kp=%.2f, Ki=%.3f, Kd=%.2f\n",
                   PIDDefaults::STRAIGHT_PID.kp,
@@ -280,9 +290,11 @@ inline void initializePIDController() {
  * 在每个控制周期调用
  * 返回修正后的电机输出
  *
- * 调用上下文要求：本函数读取 OdometerState 中的浮点速度/航向变量，
- * 这些变量由 loop() 中的 updateOdometer() 写入。ESP32 上 32-bit float
- * 读写为硬件原子操作，本函数在 loop() 中调用，不会读到写入前的旧值。
+ * 调用上下文要求：本函数读取 OdometerState 中的浮点速度/航向变量。
+ * 这些变量仅由 loop() 中的 updateOdometer() 写入，而本函数也在 loop() 中调用，
+ * 主循环为单任务顺序执行，不存在并发写入。ESP32 上 32-bit float 读写为硬件原子操作，
+ * 因此无需额外 noInterrupts()/interrupts() 保护（ISR 只修改 volatile 脉冲计数器，
+ * 不修改这些浮点变量）。
  */
 inline SmartMotorOutput updateSmartControl(
     uint8_t basePwm,
@@ -336,8 +348,9 @@ inline SmartMotorOutput updateSmartControl(
             PIDControllerState::g_headingLockTargetInitialized = true;
         }
 
-        // 航向误差归一化到 [-PI, PI]，防止角度跨 0/2PI 边界时误差跳变
-        // 例如：当前航向 0.17rad(10°)，目标 6.11rad(350°)，最短路径是 +0.35rad 而非 -5.94rad
+        // 显式计算航向误差：当前航向 - 目标航向，并归一化到 [-PI, PI]
+        // 防止角度跨 0/2PI 边界时误差跳变
+        // 传给 computePID 的 input 为该误差，setpoint=0，因此内部 error = -(heading - target)
         float headingError = OdometerState::g_heading - PIDControllerState::g_headingLockTarget;
         if (headingError > M_PI) headingError -= 2.0f * M_PI;
         if (headingError < -M_PI) headingError += 2.0f * M_PI;
@@ -365,28 +378,23 @@ inline SmartMotorOutput updateSmartControl(
  * 切换行走模式
  */
 inline void setDriveMode(DriveMode mode) {
-    // 切换离开航向锁定模式时，重置锁定目标
-    if (PIDControllerState::g_driveMode == DriveMode::HEADING_LOCK &&
-        mode != DriveMode::HEADING_LOCK) {
+    // 进入或退出航向锁定模式时，统一重置锁定目标与航向 PID 状态
+    const bool enteringHeadingLock = (mode == DriveMode::HEADING_LOCK);
+    const bool exitingHeadingLock = (PIDControllerState::g_driveMode == DriveMode::HEADING_LOCK &&
+                                     mode != DriveMode::HEADING_LOCK);
+    if (enteringHeadingLock || exitingHeadingLock) {
         PIDControllerState::g_headingLockTargetInitialized = false;
-    }
-
-    // 切换到航向锁定模式时，重置航向 PID 状态
-    if (mode == DriveMode::HEADING_LOCK) {
-        PIDControllerState::g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, 0, millis());
+        if (enteringHeadingLock) {
+            PIDControllerState::g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, millis());
+        }
     }
 
     // 切换到直线修正模式时，重置直线 PID 状态
     if (mode == DriveMode::STRAIGHT_LINE) {
-        PIDControllerState::g_straightPidState = PIDState(0, 0, 0, 0, 0, 0, 0, millis());
+        PIDControllerState::g_straightPidState = PIDState(0, 0, 0, 0, 0, 0, millis());
     }
 
     PIDControllerState::g_driveMode = mode;
-
-    // 切换到锁定航向模式时，重置标志以便捕获当前航向
-    if (mode == DriveMode::HEADING_LOCK) {
-        PIDControllerState::g_headingLockTargetInitialized = false;
-    }
 
     const char* modeName = "";
     switch (mode) {

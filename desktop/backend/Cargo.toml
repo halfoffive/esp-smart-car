@@ -41,6 +41,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # 错误处理
 anyhow = "1.0"
 
+# 恒定时间比较（用于 API Token 校验，避免时序攻击）
+subtle = "2"
+
 # 配置
 dotenvy = "0.15"
 

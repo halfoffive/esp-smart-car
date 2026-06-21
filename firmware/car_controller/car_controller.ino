@@ -18,7 +18,7 @@
  * - 右编码器: GPIO2（中断引脚）
  * 
  * 作者：智能车项目团队
- * 版本：1.8.1（修复 P0-03 UDP 控制源地址白名单、P1-06/P3-02；适配 odometer/video_stream 签名变更）
+ * 版本：1.9.0（Task 6 跨文件同步：UDP 错误包处理、WiFi 非阻塞+指数退避、视频端口分离、版本统一）
  * 日期：2026-06-20
  */
 
@@ -30,6 +30,9 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include "video_stream.h"
+
+// 版本常量（统一 car_controller / video_stream / camera_config 的对外版本号）
+constexpr const char* VERSION = "1.9.0";
 
 // UDP 套接字（video_stream.h 中通过 extern 声明，在同一 sketch 中定义即可）
 WiFiUDP g_udpControl;
@@ -54,7 +57,12 @@ WiFiUDP g_udpTelemetry;
  * 当前车辆运动状态
  * 每次命令更新时创建新状态
  */
-VehicleMotion g_currentMotion = createStopState();
+VehicleMotion g_currentMotion = VehicleMotion(
+    MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+               MotorDirection::STOP, 0),
+    MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+               MotorDirection::STOP, 0)
+);
 
 /**
  * 当前速度值（PWM 0-255）
@@ -79,8 +87,9 @@ bool g_emergencyStop = false;
 
 /**
  * 测速数据上报间隔(ms)
+ * 与 OdometerConfig::SAMPLE_PERIOD_MS 保持一致，避免无效调用
  */
-constexpr uint16_t ODOMETRY_REPORT_INTERVAL_MS = 200;
+constexpr uint16_t ODOMETRY_REPORT_INTERVAL_MS = OdometerConfig::SAMPLE_PERIOD_MS;
 
 /**
  * 命令超时自动停止时间(ms)
@@ -100,18 +109,50 @@ bool g_smartDriveEnabled = false;
 CameraConfiguration g_cameraConfig = createDefaultConfig();
 
 uint32_t g_lastReconnectAttempt = 0;
+uint32_t g_reconnectBackoffMs = 1000;
 bool g_wifiWasConnected = false;
+
+/**
+ * 最后生效的运动命令字符（SPEED 变化时重发，保持当前运动状态）
+ */
+char g_lastMoveCmd = ' ';
 
 // ============================================
 // 编码器中断服务函数（定义在此处而非 odometer.h，避免 inline + IRAM_ATTR 导致的 literal pool 重定位错误）
 // ============================================
 
+// 全局状态定义（头文件中已声明为 extern，此处做唯一定义）
+namespace OdometerState {
+    volatile uint32_t g_leftPulses = 0;
+    volatile uint32_t g_rightPulses = 0;
+    uint32_t g_lastLeftPulses = 0;
+    uint32_t g_lastRightPulses = 0;
+    float g_leftDistanceMm = 0.0f;
+    float g_rightDistanceMm = 0.0f;
+    float g_leftSpeedMmps = 0.0f;
+    float g_rightSpeedMmps = 0.0f;
+    float g_leftRpm = 0.0f;
+    float g_rightRpm = 0.0f;
+    float g_heading = 0.0f;
+    float g_totalDistanceMm = 0.0f;
+    uint32_t g_lastSampleTime = 0;
+    SpeedCalibration g_calibration = OdometerConfig::DEFAULT_CALIBRATION;
+}
+
+namespace PIDControllerState {
+    PIDState g_straightPidState = PIDState(0, 0, 0, 0, 0, 0, 0);
+    PIDState g_headingPidState = PIDState(0, 0, 0, 0, 0, 0, 0);
+    DriveMode g_driveMode = DriveMode::NORMAL;
+    float g_headingLockTarget = 0.0f;
+    bool g_headingLockTargetInitialized = false;
+}
+
 void IRAM_ATTR onLeftEncoderPulse() {
-    OdometerState::g_leftPulses += 1;
+    __atomic_fetch_add(&OdometerState::g_leftPulses, 1, __ATOMIC_RELAXED);
 }
 
 void IRAM_ATTR onRightEncoderPulse() {
-    OdometerState::g_rightPulses += 1;
+    __atomic_fetch_add(&OdometerState::g_rightPulses, 1, __ATOMIC_RELAXED);
 }
 
 // ============================================
@@ -124,8 +165,26 @@ void IRAM_ATTR onRightEncoderPulse() {
  * 效果：更新车辆运动状态（可能带PID修正）
  */
 void handleMoveCommand(const char cmd) {
-  // 创建基础运动状态
-  g_currentMotion = parseWASDCommand(cmd, g_currentSpeed);
+  // 解析命令字符到运动状态；未知命令视为停止
+  if (!commandToVehicleMotion(cmd, g_currentSpeed, g_currentMotion)) {
+    g_currentMotion = VehicleMotion(
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                   MotorDirection::STOP, 0),
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                   MotorDirection::STOP, 0)
+    );
+    applyVehicleMotion(g_currentMotion);
+    g_lastCmdTime = millis();
+#if DEBUG_MOTOR
+    Serial.printf("[运动命令] 未知命令: %c，车辆停止\n", cmd);
+#endif
+    return;
+  }
+
+  // 缓存有效运动命令（空格停止命令不覆盖之前的移动缓存）
+  if (cmd != ' ') {
+    g_lastMoveCmd = cmd;
+  }
 
   // 如果启用智能修正，应用PID修正
   if (g_smartDriveEnabled && cmd != ' ') {
@@ -144,9 +203,12 @@ void handleMoveCommand(const char cmd) {
         g_currentSpeed, leftDir, rightDir);
 
       // 创建修正后的差速运动状态
-      g_currentMotion = createDifferentialState(
-        output.leftDir, output.leftPwm,
-        output.rightDir, output.rightPwm);
+      g_currentMotion = VehicleMotion(
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                   output.leftDir, output.leftPwm),
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                   output.rightDir, output.rightPwm)
+      );
     }
   }
 
@@ -170,6 +232,12 @@ void handleMoveCommand(const char cmd) {
 void handleSpeedCommand(const uint8_t speed) {
   g_currentSpeed = speed;
   g_lastCmdTime = millis();  // 更新时间戳，防止超时自动停止
+
+  // 速度变化时立即用缓存的运动命令重发，保持当前运动状态同步
+  if (!g_emergencyStop) {
+    handleMoveCommand(g_lastMoveCmd);
+  }
+
 #if DEBUG_MOTOR
   Serial.printf("[速度设置] 新速度(PWM 0-255): %d\n", g_currentSpeed);
 #endif
@@ -179,11 +247,16 @@ void handleSpeedCommand(const uint8_t speed) {
  * 处理停止命令
  */
 void handleStopCommand() {
-  g_currentMotion = createStopState();
-  applyVehicleMotion(g_currentMotion);
-  g_emergencyStop = true;
+    g_currentMotion = VehicleMotion(
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                   MotorDirection::STOP, 0),
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                   MotorDirection::STOP, 0)
+    );
+    applyVehicleMotion(g_currentMotion);
+    g_emergencyStop = true;
 #if DEBUG_MOTOR
-  Serial.println("[紧急停止] 车辆已停止");
+    Serial.println("[紧急停止] 车辆已停止");
 #endif
 }
 
@@ -251,17 +324,16 @@ void sendOdometryData() {
   const uint16_t totalDist = static_cast<uint16_t>(
     fmin(odom.distanceMm, 65535.0f));
 
-  // 创建测速数据包
-  OdometryPacket packet(
-    WirelessConfig::MAGIC_BYTE,
-    WirelessConfig::PROTOCOL_VERSION,
-    CommandType::ODOMETRY,
-    leftSpeed,
-    rightSpeed,
-    headingX100,
-    totalDist,
-    0  // 校验和暂填0
-  );
+  // 创建测速数据包（aggregate initialization，WirelessPacket/OdometryPacket 已删除构造函数）
+  OdometryPacket packet{};
+  packet.magic = WirelessConfig::MAGIC_BYTE;
+  packet.version = WirelessConfig::PROTOCOL_VERSION;
+  packet.type = CommandType::ODOMETRY;
+  packet.leftSpeedMmps = leftSpeed;
+  packet.rightSpeedMmps = rightSpeed;
+  packet.headingX100 = headingX100;
+  packet.totalDistMm = totalDist;
+  packet.checksum = 0;  // 校验和暂填0
 
   // 计算校验和
   const uint8_t* data = reinterpret_cast<const uint8_t*>(&packet);
@@ -269,17 +341,12 @@ void sendOdometryData() {
   for (size_t i = 0; i < sizeof(packet) - 1; i++) {
     checksum += data[i];
   }
+  packet.checksum = checksum;
 
-  // 创建带校验和的包（通过重新构造）
-  const OdometryPacket finalPacket(
-    packet.magic, packet.version, packet.type,
-    packet.leftSpeedMmps, packet.rightSpeedMmps,
-    packet.headingX100, packet.totalDistMm, checksum);
-
-  // 通过 UDP 发送测速数据到接收器（AP）
+  // 通过 UDP 发送测速数据到接收器（AP），使用遥测端口
   IPAddress apIp(NetworkConfig::AP_IP[0], NetworkConfig::AP_IP[1], NetworkConfig::AP_IP[2], NetworkConfig::AP_IP[3]);
   g_udpTelemetry.beginPacket(apIp, UdpConfig::TELEMETRY_PORT);
-  g_udpTelemetry.write(reinterpret_cast<const uint8_t*>(&finalPacket), sizeof(finalPacket));
+  g_udpTelemetry.write(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
   if (!g_udpTelemetry.endPacket()) {
     Serial.println("[UDP] 测速包发送失败");
   }
@@ -299,8 +366,8 @@ void sendOdometryData() {
 bool captureAndSendVideoFrame() {
   const uint32_t currentTime = millis();
 
-  // 帧率控制：30 FPS = 33ms 间隔
-  if (currentTime - g_streamState.lastFrameTime < VideoStreamConfig::FRAME_INTERVAL) {
+  // 帧率控制：使用 wireless.h 中的统一常量
+  if (currentTime - g_streamState.lastFrameTime < StreamConfig::FRAME_INTERVAL) {
     return false;
   }
 
@@ -308,15 +375,19 @@ bool captureAndSendVideoFrame() {
   const FrameState frame = captureFrame();
   if (!frame.isValid) {
     // 帧捕获失败，更新丢弃计数
-    g_streamState = StreamState(
-      true, g_streamState.lastFrameTime, g_streamState.fps,
-      g_streamState.totalFrames, g_streamState.droppedFrames + 1,
-      g_streamState.bytesSent);
-    // 连续失败恢复逻辑：超过阈值时重启摄像头硬件
+    g_streamState.droppedFrames++;
+    // 连续失败恢复逻辑：超过阈值时先停车再重启摄像头硬件
     g_consecutiveFailures++;
     if (g_consecutiveFailures >= CAMERA_RESTART_THRESHOLD) {
-      Serial.printf("[视频流] 连续 %d 次帧捕获失败，重启摄像头...\n",
+      Serial.printf("[视频流] 连续 %d 次帧捕获失败，停车并重启摄像头...\n",
                     g_consecutiveFailures);
+      g_currentMotion = VehicleMotion(
+          MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                     MotorDirection::STOP, 0),
+          MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                     MotorDirection::STOP, 0)
+      );
+      applyVehicleMotion(g_currentMotion);
       esp_camera_deinit();
       delay(500);
       if (!initializeCamera(g_cameraConfig)) {
@@ -342,18 +413,15 @@ bool captureAndSendVideoFrame() {
     sensor->set_quality(sensor, newQuality);
   }
 
-  // 更新流状态：发送失败计为丢帧
+  // 更新流状态：发送失败计为丢帧（直接修改可变结构体字段）
   const uint16_t fps = calculateFPS(g_streamState.lastFrameTime, currentTime);
+  g_streamState.lastFrameTime = currentTime;
+  g_streamState.fps = fps;
+  g_streamState.totalFrames++;
   if (sent) {
-    g_streamState = StreamState(
-      true, currentTime, fps,
-      g_streamState.totalFrames + 1, g_streamState.droppedFrames,
-      g_streamState.bytesSent + frame.frameSize);
+    g_streamState.bytesSent += static_cast<uint32_t>(frame.frameSize);
   } else {
-    g_streamState = StreamState(
-      true, currentTime, fps,
-      g_streamState.totalFrames + 1, g_streamState.droppedFrames + 1,
-      g_streamState.bytesSent);
+    g_streamState.droppedFrames++;
   }
 
   // 释放帧缓冲
@@ -382,6 +450,7 @@ void handleUdpControlPacket() {
   int len = g_udpControl.parsePacket();
   if (len != sizeof(WirelessPacket) && len > 0) {
     Serial.printf("[UDP] 收到非标准控制包: %d\n", len);
+    g_udpControl.flush();
     return;
   }
   if (len == sizeof(WirelessPacket)) {
@@ -426,7 +495,7 @@ void handleUdpControlPacket() {
         break;
       case CommandType::STATUS:
         // 心跳命令只更新时间戳，防止超时自动停止
-        // 测速数据已由 loop() 中的 200ms 定时器独立发送，无需重复发送
+        // 测速数据已由 loop() 中的 100ms 定时器独立发送，无需重复发送
         g_lastCmdTime = millis();
         break;
       case CommandType::CALIBRATE:
@@ -443,17 +512,22 @@ void handleUdpControlPacket() {
 }
 
 void checkWiFiConnection() {
-  if (WiFi.status() == WL_CONNECTED && !g_wifiWasConnected) {
-    g_wifiWasConnected = true;
-    Serial.printf("[WiFi_STA] 已连接，IP: %s\n", WiFi.localIP().toString().c_str());
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!g_wifiWasConnected) {
+      g_wifiWasConnected = true;
+      g_reconnectBackoffMs = 1000;  // 连接成功后重置退避
+      Serial.printf("[WiFi_STA] 已连接，IP: %s\n", WiFi.localIP().toString().c_str());
+    }
+    return;
   }
 
-  if (WiFi.status() != WL_CONNECTED && millis() - g_lastReconnectAttempt > 5000) {
+  // 未连接：使用 WiFi.reconnect() + 指数退避，避免 disconnect+begin 导致长时间阻塞
+  if (millis() - g_lastReconnectAttempt > g_reconnectBackoffMs) {
     Serial.println("[WiFi_STA] 检测到断线，尝试重连...");
     g_wifiWasConnected = false;
-    WiFi.disconnect();
-    WiFi.begin(NetworkConfig::AP_SSID, NetworkConfig::AP_PASSWORD);
+    WiFi.reconnect();
     g_lastReconnectAttempt = millis();
+    g_reconnectBackoffMs = min(g_reconnectBackoffMs * 2, 30000UL);
   }
 }
 
@@ -468,7 +542,7 @@ void setup() {
 
   Serial.println("\n================================");
   Serial.println("智能车控制系统 - ESP32-S3（Freenove FNK0085）");
-  Serial.println("版本: 1.8.0 (S3 单芯片：摄像头+电机+编码器+PID+WiFi STA+UDP，速度 0-255 PWM)");
+  Serial.printf("版本: %s (S3 单芯片：摄像头+电机+编码器+PID+WiFi STA+UDP，速度 0-255 PWM)\n", VERSION);
   Serial.println("================================\n");
 
   // PSRAM 诊断（摄像头 DMA 缓冲依赖 PSRAM）
@@ -492,35 +566,24 @@ void setup() {
   initializePIDController();
   delay(100);
 
-  // 初始化 WiFi STA（连接 AP 热点）
+  // 初始化 WiFi STA（非阻塞，连接状态由 loop() 轮询）
   WiFi.mode(WIFI_STA);
   IPAddress carIp(NetworkConfig::CAR_IP[0], NetworkConfig::CAR_IP[1], NetworkConfig::CAR_IP[2], NetworkConfig::CAR_IP[3]);
   IPAddress gateway(NetworkConfig::GATEWAY[0], NetworkConfig::GATEWAY[1], NetworkConfig::GATEWAY[2], NetworkConfig::GATEWAY[3]);
   IPAddress subnet(NetworkConfig::SUBNET[0], NetworkConfig::SUBNET[1], NetworkConfig::SUBNET[2], NetworkConfig::SUBNET[3]);
   WiFi.config(carIp, gateway, subnet);
-  Serial.printf("[WiFi_STA] 连接热点: %s, 密码: %s\n", NetworkConfig::AP_SSID, NetworkConfig::AP_PASSWORD);
+  Serial.printf("[WiFi_STA] 连接热点: %s\n", NetworkConfig::AP_SSID);
   WiFi.begin(NetworkConfig::AP_SSID, NetworkConfig::AP_PASSWORD);
-  Serial.println("[WiFi_STA] 正在连接热点...");
-  uint32_t wifiStart = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 10000) {
-    delay(100);
-    Serial.print(".");
-  }
-  Serial.println();
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("[WiFi_STA] 已连接，IP: %s\n", WiFi.localIP().toString().c_str());
-    g_wifiWasConnected = true;
-  } else {
-    Serial.println("[WiFi_STA] 初始连接失败，将在 loop 中重连");
-  }
+  Serial.println("[WiFi_STA] 正在连接热点（非阻塞，loop 中轮询）...");
   g_udpControl.begin(UdpConfig::CONTROL_PORT);
   g_udpTelemetry.begin(UdpConfig::TELEMETRY_PORT);
 
   // 初始化摄像头（S3 单芯片架构：摄像头与电机/编码器/PID 共用同一 MCU）
   if (!initializeCamera(g_cameraConfig)) {
-    Serial.println("[摄像头] 初始化失败，重启中...");
-    delay(2000);
-    ESP.restart();
+    Serial.println("[摄像头] 初始化失败，系统挂起（请检查 PSRAM/排线）...");
+    while (true) {
+      delay(1000);
+    }
   }
 
   // 启动视频流（标记流状态为活跃，loop() 中按 30 FPS 采集发送）
@@ -528,7 +591,12 @@ void setup() {
   Serial.println("[初始化] 摄像头视频流已启动（WiFi UDP 直发接收器）");
 
   // 初始化状态
-  g_currentMotion = createStopState();
+  g_currentMotion = VehicleMotion(
+      MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                 MotorDirection::STOP, 0),
+      MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                 MotorDirection::STOP, 0)
+  );
   // 默认中速（PWM 128），与前端默认值一致
   g_currentSpeed = 128;
   g_emergencyStop = false;
@@ -567,9 +635,15 @@ void loop() {
 
   // 3. 检查通信超时
   if (!g_emergencyStop && (currentTime - g_lastCmdTime) > COMMAND_TIMEOUT_MS) {
-    // 超过1秒未收到命令，自动停止
-    if (g_currentMotion.left.direction != MotorDirection::STOP) {
-      g_currentMotion = createStopState();
+    // 超过1秒未收到命令，自动停止（任一电机非停即触发）
+    if (g_currentMotion.left.direction != MotorDirection::STOP ||
+        g_currentMotion.right.direction != MotorDirection::STOP) {
+      g_currentMotion = VehicleMotion(
+          MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                     MotorDirection::STOP, 0),
+          MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                     MotorDirection::STOP, 0)
+      );
       applyVehicleMotion(g_currentMotion);
 #if DEBUG_MOTOR
       Serial.println("[超时] 自动停止");

@@ -74,8 +74,10 @@ desktop/backend/
 
 ```bash
 # 开发
-cargo build          # 编译
-cargo run            # 运行（带热重载）
+# 注意：build.rs 不再自动运行 bun install/build，首次或前端源码变更后需先手动构建前端
+cd ../frontend && bun install && bun run build && cd ../backend
+cargo build          # 编译（将已构建的 frontend/dist 嵌入二进制）
+cargo run            # 运行
 cargo test           # 运行测试
 cargo check          # 快速检查（不编译）
 
@@ -91,8 +93,11 @@ cargo build --release  # 优化编译
 - **串口**：默认 921600 波特率，支持动态连接/断开
 - **视频帧**：通过 WebSocket 发送 Base64 编码的 JPEG
 - **速度语义**：`StatusResponse.current_speed` 与共享状态 `current_speed` 均为 0-255 PWM
-- **串口协议**：PC → receiver_dongle 使用 12 字节二进制 `WirelessPacket`（含 checksum），不再使用单字符命令
-- **心跳**：30 秒间隔，防止连接超时
+- **串口协议**：PC → receiver_dongle 使用 8 字节二进制 `WirelessPacket`（含 checksum），不再使用单字符命令
+- **串口列表**：`GET /api/ports` 返回 `PortsResponse { success, ports: Vec<String> }`，列表同时通过 WebSocket `port_list` 消息实时推送
+- **认证中间件**：REST 端点要求 `Authorization: Bearer <token>`，WebSocket 握手要求 URL 查询参数 `?token=<token>`；Token 使用 `subtle::ConstantTimeEq` 恒定时间比较，失败返回 JSON 格式 401。未设置 `API_TOKEN` 时（或 `DISABLE_AUTH=true`）使用默认 Token `esp-smart-car`（仅本地开发）
+- **WebSocket 广播**：`video_task` 使用 `tokio::sync::Notify` 事件驱动唤醒；`WebSocketManager` 客户端 ID 与连接数使用原子计数器维护；视频帧按 hash 去重，仅在新帧时广播
+- **心跳**：30 秒间隔，90 秒超时，防止连接超时
 - **CORS**：前端开发时启用跨域支持
 
 ## 近期修复记录

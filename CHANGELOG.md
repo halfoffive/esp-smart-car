@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Karpathy 审计修复 v2
+
+- **Token 安全**
+  - 后端 REST/WebSocket 认证中间件改用恒定时间比较（`subtle::ConstantTimeEq`）校验 `API_TOKEN`，未认证请求返回 JSON 格式 401；`.env` 中 `API_TOKEN` 默认未设置，开发阶段保留默认 Token `esp-smart-car` 以便快速启动
+
+- **WebSocket 心跳/轮询/广播优化**
+  - 后端 `websocket.rs` 视频广播任务改用 `tokio::sync::Notify` 事件驱动唤醒，替代固定 1ms 轮询，降低空转 CPU 占用
+  - 后端 WebSocket 管理器计数器改用原子类型（`AtomicU64`/`AtomicUsize`），无需加锁即可维护客户端 ID 与连接数
+  - 前端 `useWebSocket.ts` 增加心跳响应超时检测（90s），连接断开后按指数退避自动重连
+
+- **串口帧处理与去重**
+  - 后端 `serial.rs` 在串口任务内完成视频帧 Base64 编码与 `DefaultHasher` 哈希计算，通过 `VideoFrame` 结构体共享 hash/format/b64，避免多客户端重复编码
+  - 后端 `websocket.rs` `video_task` 按帧 hash 去重，仅在新帧到达时广播；成功广播后立即进入下一次发送，跳过固定 1ms 睡眠
+  - 后端 `serial.rs` 新增 `frames_received`/`frames_decoded`/`frames_broadcasted` 计数器，每秒通过 `status` WebSocket 消息暴露
+
+- **前端架构调整**
+  - WebSocket owner 上移到 `App.vue`：`App.vue` 在 `onMounted` 中统一调用 `wsConnect()`，在 `onUnmounted` 中调用 `wsDisconnect()`
+  - `ControlPanel.vue` 只读使用 `useWebSocket`（发送命令/速度/模式、读取连接状态与串口列表），不再管理 WebSocket 连接生命周期
+  - `ControlPanel.vue` 协调多输入源：速度滑块采用 200ms 防抖，速度值以服务端 `status.current_speed` 为准，未拖动时自动同步
+  - `SpeedDashboard.vue` 从 4 个模块精简为 2 个模块（当前车轮速度 cm/s、轮子转速 RPM），RPM 由 mm/s 根据轮径 65mm 实时换算
+  - `VideoPlayer.vue` 使用 RAF 节流：视频帧通过 `requestAnimationFrame` 渲染，标签页隐藏时取消 RAF，状态栏区分 `videoFps` 与 `renderFps`
+  - `useStatus.ts` 保留作为 WS `status` 消息消费包装，未删除
+
+- **固件修复**
+  - `firmware/car_controller/pid_control.h` 修复 PID 方向处理：`computePID` 接收左右电机方向，倒车时航向/距离符号正确；`HEADING_LOCK` 模式初始化与退出逻辑修正
+  - `firmware/car_controller/odometer.h` `updateOdometer` 结合电机方向计算脉冲符号，后退时里程递减、航向变化方向正确
+
+- **网络与端口**
+  - 固件 UDP 端口分离：`UdpConfig::CONTROL_PORT=9000`（PC→C6→S3 控制）、`TELEMETRY_PORT=9001`（S3→C6 遥测/链路状态）、`VIDEO_PORT=9002`（S3→C6 视频流）
+  - `firmware/receiver_dongle/receiver_dongle.ino` 支持动态记录车载端 IP（从 telemetry/video 包的 `remoteIP()` 获取），未记录时回退到固定 `CAR_IP`，兼容 DHCP 与静态 IP 场景
+
+- **代码质量**
+  - 删除过度抽象与死代码：后端移除原始 `video_frame` 冗余字段、前端移除 `useWebSocket` 的 `owner` 参数概念、固件清理遗留 ESP-NOW 描述注释
+
 ### Karpathy 审计修复
 > 基于 `docs/karpathy_vulnerability_report.md` 的 5 子代理并行审计结果，共修复 52 条独立问题（4 P0、14 P1、24 P2、10 P3）。
 

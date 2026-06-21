@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -27,18 +28,16 @@ struct Assets;
 /// 主函数
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // 设置默认日志级别（系统环境或 .env 都未设置时，默认使用 info）
-    if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", "info");
-    }
-
     // 尝试加载 .env 文件（仅在开发目录中有效；exe 移动到其他位置运行时使用上述默认值）
     // dotenvy::dotenv() 从当前工作目录向上查找 .env，不存在时静默返回 Err —— 这不影响正常启动
     let _ = dotenvy::dotenv();
 
-    // 初始化日志
+    // 初始化日志：优先使用 RUST_LOG 环境变量（.env 或系统环境），未设置时回退到 "info"
+    // 不使用 std::env::set_var 修改全局环境（SubTask 1.19）
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .init();
 
     info!("智能车桌面端后端启动");
@@ -47,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     // 创建应用状态
     let state = Arc::new(AppState::new());
 
-    // 启动串口通信任务（退出后自动重启，指数退避防止"假死"时频繁重试）
+    // 启动串口通信任务（出错时指数退避重启；正常退出则停止，不再重启）
     let serial_state = state.clone();
     tokio::spawn(async move {
         let mut consecutive_failures: u32 = 0;
@@ -63,10 +62,9 @@ async fn main() -> anyhow::Result<()> {
                 );
                 tokio::time::sleep(tokio::time::Duration::from_secs(delay_secs)).await;
             } else {
-                // 正常退出（如断开连接），重置退避计数，短暂等待后重启
-                consecutive_failures = 0;
-                info!("串口任务正常退出，1秒后重启");
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                // 正常退出（如主动断开），业务上应停止而非无限重启（SubTask 1.20）
+                info!("串口任务正常退出，不再重启");
+                break;
             }
         }
     });
@@ -126,30 +124,42 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// 从环境变量 TLS_CERT/TLS_KEY 加载 TLS 配置
+///
+/// 单侧配置（只有 TLS_CERT 或只有 TLS_KEY）时返回 Err 明确告知，
+/// 避免用户误以为 TLS 已启用而实际走明文（SubTask 1.16）
 async fn load_tls_config() -> anyhow::Result<Option<TlsAcceptor>> {
-    let cert_path = match std::env::var("TLS_CERT") {
-        Ok(p) if !p.is_empty() => p,
-        _ => return Ok(None),
-    };
-    let key_path = match std::env::var("TLS_KEY") {
-        Ok(p) if !p.is_empty() => p,
-        _ => return Ok(None),
-    };
+    let cert_path = std::env::var("TLS_CERT").ok().filter(|p| !p.is_empty());
+    let key_path = std::env::var("TLS_KEY").ok().filter(|p| !p.is_empty());
 
-    let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
-        rustls_pemfile::certs(&mut std::io::BufReader::new(std::fs::File::open(&cert_path)?))
-            .collect::<Result<Vec<_>, _>>()?;
-    let key = rustls_pemfile::private_key(&mut std::io::BufReader::new(std::fs::File::open(
-        &key_path,
-    )?))?
-    .ok_or_else(|| anyhow::anyhow!("无法解析 TLS 私钥"))?;
+    match (cert_path, key_path) {
+        (None, None) => Ok(None),
+        (Some(cert_path), Some(key_path)) => {
+            let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+                rustls_pemfile::certs(&mut std::io::BufReader::new(std::fs::File::open(
+                    &cert_path,
+                )?))
+                .collect::<Result<Vec<_>, _>>()?;
+            let key = rustls_pemfile::private_key(&mut std::io::BufReader::new(
+                std::fs::File::open(&key_path)?,
+            ))?
+            .ok_or_else(|| anyhow::anyhow!("无法解析 TLS 私钥"))?;
 
-    let config = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(certs, key)?;
+            let config = rustls::ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(certs, key)?;
 
-    info!("TLS 配置已加载: cert={}, key={}", cert_path, key_path);
-    Ok(Some(TlsAcceptor::from(Arc::new(config))))
+            info!("TLS 配置已加载: cert={}, key={}", cert_path, key_path);
+            Ok(Some(TlsAcceptor::from(Arc::new(config))))
+        }
+        (Some(cert), None) => Err(anyhow::anyhow!(
+            "已设置 TLS_CERT={} 但未设置 TLS_KEY，无法启用 TLS。请同时配置 TLS_CERT 和 TLS_KEY，或同时清除两者",
+            cert
+        )),
+        (None, Some(key)) => Err(anyhow::anyhow!(
+            "已设置 TLS_KEY={} 但未设置 TLS_CERT，无法启用 TLS。请同时配置 TLS_CERT 和 TLS_KEY，或同时清除两者",
+            key
+        )),
+    }
 }
 
 /// TLS 监听器包装器，使 axum::serve 能够接受 TLS 连接
@@ -190,12 +200,16 @@ async fn static_handler(uri: Uri) -> Response<Body> {
         if let Some(ct) = content_type {
             builder = builder.header(header::CONTENT_TYPE, ct);
         }
-        builder.body(body).unwrap_or_else(|_| {
-            Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::empty())
-                .unwrap_or_else(|_| Response::new(Body::empty()))
-        })
+        // axum Body 构建不会失败（仅设置状态码和头部），单层 expect 即可（SubTask 1.18）
+        builder.body(body).expect("axum Body 构建不会失败")
+    }
+
+    // rust-embed 返回 Cow<'static, [u8]>；按借用/ owned 分流，避免对静态资源额外拷贝（SubTask 1.17）
+    fn body_from_cow(data: Cow<'static, [u8]>) -> Body {
+        match data {
+            Cow::Borrowed(b) => Body::from(b),
+            Cow::Owned(v) => Body::from(v),
+        }
     }
 
     let path = uri.path().trim_start_matches('/');
@@ -204,12 +218,16 @@ async fn static_handler(uri: Uri) -> Response<Body> {
     match Assets::get(path) {
         Some(file) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
-            build_response(StatusCode::OK, Body::from(file.data.into_owned()), Some(mime.as_ref()))
+            build_response(
+                StatusCode::OK,
+                body_from_cow(file.data),
+                Some(mime.as_ref()),
+            )
         }
         None => match Assets::get("index.html") {
             Some(index) => build_response(
                 StatusCode::OK,
-                Body::from(index.data.into_owned()),
+                body_from_cow(index.data),
                 Some("text/html; charset=utf-8"),
             ),
             None => build_response(StatusCode::NOT_FOUND, Body::from("404 Not Found"), None),
@@ -221,10 +239,10 @@ async fn static_handler(uri: Uri) -> Response<Body> {
 mod tests {
     use esp_smart_car_backend::{AppState, MutexExt};
 
-    /// 测试 AppState 初始状态
+    /// 测试 AppState 初始状态（使用 new_test 避免依赖环境变量，SubTask 1.21）
     #[test]
     fn test_app_state_new() {
-        let state = AppState::new();
+        let state = AppState::new_test();
         let current_speed = state
             .current_speed
             .load(std::sync::atomic::Ordering::Relaxed);

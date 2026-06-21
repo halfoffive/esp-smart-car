@@ -35,6 +35,15 @@ docs/
 
 ## 近期更新
 
+### 2026-06-21 - Karpathy 审计修复 v2 文档同步
+
+- 同步根 `AGENTS.md` 关键变更：WebSocket owner 上移至 `App.vue`，`ControlPanel.vue` 只读使用 `useWebSocket`
+- 同步前端测速面板改为 2 个模块（当前车轮速度 cm/s、轮子转速 RPM）
+- 同步固件 UDP 端口分离（控制 9000 / 遥测 9001 / 视频 9002）与动态车载 IP 描述
+- 同步串口状态判断改为 `startsWith('已连接')`
+- 同步后端认证中间件恒定时间比较、WebSocket `Notify` 事件驱动广播、原子计数器、`build.rs` 不再自动构建前端等变更
+- 同步 `README.md` 版本号与构建说明更新
+
 ### 2026-06-20 - 文档同步与 Karpathy 审计报告
 
 - 新增 `docs/karpathy_vulnerability_report.md`，汇总 Karpathy 指南漏洞审计结果：52 项独立问题（P0×4、P1×14、P2×24、P3×10），含修复建议与验证方式

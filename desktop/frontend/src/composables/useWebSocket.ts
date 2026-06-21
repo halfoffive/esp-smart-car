@@ -10,12 +10,6 @@
  * 5. 心跳保活（含响应超时检测）
  * 6. 接收链路状态（dongle/车载配对/在线状态）
  * 7. 接收系统状态（替代 /api/status 轮询）
- *
- * 设计模式：闭包 + 单例模式
- * - 所有状态封装在工厂函数闭包中，避免模块级全局变量（HMR 友好）
- * - 只有 owner=true 的调用者才能执行 connect() 和 disconnect()
- * - 其他调用者只消费状态（isConnected, videoFrame, odometry 等）
- * - 防止多组件卸载时意外断开全局 WebSocket
  */
 
 import { ref } from 'vue'
@@ -133,7 +127,7 @@ function createWebSocket() {
   })
 
   // 内部可变状态
-  const ws = ref<WebSocket | null>(null)
+  let ws: WebSocket | null = null
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null
   let heartbeatResponseTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -209,7 +203,7 @@ function createWebSocket() {
       console.warn('[WebSocket] 心跳响应超时，连接可能已失效')
       connectionError.value = '心跳超时，连接可能已断开'
       // 主动关闭以触发重连或错误提示
-      ws.value?.close()
+      ws?.close()
     }, HEARTBEAT_TIMEOUT)
   }
 
@@ -227,9 +221,9 @@ function createWebSocket() {
     startHeartbeatResponseTimer()
 
     heartbeatTimer = setInterval(() => {
-      if (ws.value?.readyState === WebSocket.OPEN) {
+      if (ws?.readyState === WebSocket.OPEN) {
         try {
-          ws.value.send(JSON.stringify({
+          ws.send(JSON.stringify({
             type: 'heartbeat',
             timestamp: Date.now()
           }))
@@ -278,15 +272,15 @@ function createWebSocket() {
     const myGeneration = ++connectGeneration
 
     // 关闭已有连接（包括 CONNECTING/OPEN/CLOSING 状态），防止旧连接的回调干扰
-    if (ws.value && ws.value.readyState !== WebSocket.CLOSED) {
+    if (ws && ws.readyState !== WebSocket.CLOSED) {
       shouldReconnect = false
-      const oldSocket = ws.value
+      const oldSocket = ws
       oldSocket.onopen = null
       oldSocket.onclose = null
       oldSocket.onerror = null
       oldSocket.onmessage = null
       oldSocket.close()
-      ws.value = null
+      ws = null
       // 等待一小段时间确保旧连接的 onclose 回调完成后再创建新连接
       await new Promise(r => setTimeout(r, 50))
       // 等待期间若 disconnect() 被调用，世代会变化，本次连接应中止
@@ -328,13 +322,13 @@ function createWebSocket() {
         isConnecting.value = false
         connectionError.value = reason
         // 清理 socket 引用和事件处理器，避免残留回调
-        if (ws.value) {
-          ws.value.onopen = null
-          ws.value.onclose = null
-          ws.value.onerror = null
-          ws.value.onmessage = null
-          ws.value.close()
-          ws.value = null
+        if (ws) {
+          ws.onopen = null
+          ws.onclose = null
+          ws.onerror = null
+          ws.onmessage = null
+          ws.close()
+          ws = null
         }
         reject(new Error(reason))
       }
@@ -374,13 +368,15 @@ function createWebSocket() {
             }
             const msg = message as Record<string, unknown>
 
-            // 收到任何服务端消息都视为心跳响应，重置超时检测
-            if (heartbeatResponseTimer) {
-              startHeartbeatResponseTimer()
-            }
-
             switch (msg.type) {
               case 'connected':
+                break
+
+              case 'heartbeat':
+                // 心跳响应：重置超时检测（仅在心跳运行时）
+                if (heartbeatResponseTimer) {
+                  startHeartbeatResponseTimer()
+                }
                 break
 
               case 'video':
@@ -500,7 +496,7 @@ function createWebSocket() {
           }
         }
 
-        ws.value = socket
+        ws = socket
       } catch (error) {
         if (connectTimeoutTimer) {
           clearTimeout(connectTimeoutTimer)
@@ -520,14 +516,14 @@ function createWebSocket() {
 
     clearAllTimers()
 
-    if (ws.value) {
+    if (ws) {
       // 清空事件处理器，避免关闭后残留回调修改状态
-      ws.value.onopen = null
-      ws.value.onclose = null
-      ws.value.onerror = null
-      ws.value.onmessage = null
-      ws.value.close()
-      ws.value = null
+      ws.onopen = null
+      ws.onclose = null
+      ws.onerror = null
+      ws.onmessage = null
+      ws.close()
+      ws = null
     }
 
     resetAllState()
@@ -535,7 +531,7 @@ function createWebSocket() {
 
   /** 发送命令 */
   const sendCommand = (command: string): boolean => {
-    if (ws.value?.readyState !== WebSocket.OPEN) {
+    if (ws?.readyState !== WebSocket.OPEN) {
       return false
     }
 
@@ -546,7 +542,7 @@ function createWebSocket() {
     }
 
     try {
-      ws.value.send(JSON.stringify(message))
+      ws.send(JSON.stringify(message))
       return true
     } catch (error) {
       console.error('[WebSocket] 发送命令失败:', error)
@@ -560,7 +556,7 @@ function createWebSocket() {
       console.error('[WebSocket] 速度值越界:', speed)
       return false
     }
-    if (ws.value?.readyState !== WebSocket.OPEN) {
+    if (ws?.readyState !== WebSocket.OPEN) {
       return false
     }
 
@@ -571,7 +567,7 @@ function createWebSocket() {
     }
 
     try {
-      ws.value.send(JSON.stringify(message))
+      ws.send(JSON.stringify(message))
       return true
     } catch (error) {
       console.error('[WebSocket] 发送速度设置失败:', error)
@@ -579,9 +575,13 @@ function createWebSocket() {
     }
   }
 
-  /** 发送行走模式切换命令 */
+  /** 发送行走模式切换命令（mode: 0=普通, 1=直线修正, 2=航向锁定） */
   const sendDriveMode = (mode: number): boolean => {
-    if (ws.value?.readyState !== WebSocket.OPEN) {
+    if (mode !== 0 && mode !== 1 && mode !== 2) {
+      console.error('[WebSocket] 行走模式值越界:', mode)
+      return false
+    }
+    if (ws?.readyState !== WebSocket.OPEN) {
       return false
     }
 
@@ -592,7 +592,7 @@ function createWebSocket() {
     }
 
     try {
-      ws.value.send(JSON.stringify(message))
+      ws.send(JSON.stringify(message))
       return true
     } catch (error) {
       console.error('[WebSocket] 发送行走模式失败:', error)
@@ -631,47 +631,8 @@ function getInstance(): ReturnType<typeof createWebSocket> {
 
 /**
  * WebSocket 组合式函数
- *
- * @param owner - 是否为管理员组件。只有管理员才能调用 connect() 和 disconnect()
- *              其他组件只应消费状态（isConnected, videoFrame, odometry 等）
+ * 返回单例实例，包含所有状态和方法（connect/disconnect 由调用方直接调用）
  */
-export const useWebSocket = (owner = false): WebSocketInstance => {
-  const state = getInstance()
-
-  // 单管理员模式：只有 owner 才能执行连接管理操作
-  const safeConnect = owner
-    ? state.connect
-    : async () => {
-        // 非管理员组件无法调用 connect()
-        if (import.meta.env.DEV) {
-          console.warn('[useWebSocket] 非管理员组件尝试调用 connect()，已忽略。请使用 useWebSocket(true) 作为管理员。')
-        }
-        return Promise.reject(new Error('非管理员组件无法调用 connect()'))
-      }
-
-  const safeDisconnect = owner
-    ? state.disconnect
-    : () => {
-        // 非管理员组件无法调用 disconnect()
-        if (import.meta.env.DEV) {
-          console.warn('[useWebSocket] 非管理员组件尝试调用 disconnect()，已忽略。请使用 useWebSocket(true) 作为管理员。')
-        }
-      }
-
-  return {
-    isConnected: state.isConnected,
-    isConnecting: state.isConnecting,
-    connectionError: state.connectionError,
-    videoFrame: state.videoFrame,
-    videoFps: state.videoFps,
-    odometry: state.odometry,
-    availablePorts: state.availablePorts,
-    status: state.status,
-    linkStatus: state.linkStatus,
-    connect: safeConnect,
-    disconnect: safeDisconnect,
-    sendCommand: state.sendCommand,
-    sendSpeed: state.sendSpeed,
-    sendDriveMode: state.sendDriveMode
-  }
+export function useWebSocket(): WebSocketInstance {
+  return getInstance()
 }

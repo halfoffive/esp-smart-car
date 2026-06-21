@@ -28,13 +28,18 @@ use tracing::{error, info, warn};
 
 /// Mutex 中毒恢复扩展 trait
 ///
-/// AGENTS.md 规范要求禁止使用 unwrap/expect。对于非关键状态（如缓存、日志节流），
+/// AGENTS.md 规范要求禁止使用 unwrap/expect。对于非关键状态（如缓存、日志节流）,
 /// poison 时直接 panic 会导致单个线程的错误扩散为整个服务崩溃。此 trait 在 poison 时
 /// 记录警告并恢复锁内的数据，让服务继续运行，同时保留诊断信息。
 ///
 /// 对于关键状态（如 serial_manager），应使用 `lock_or_panic`，确保数据损坏时快速失败。
 pub trait MutexExt<T> {
     /// 获取锁；若 Mutex 已中毒，记录警告并恢复内部数据
+    ///
+    /// 仅用于非关键状态（如 odometry、ws_clients、ble_devices、last_cmd_log 等缓存或
+    /// 日志节流状态）：中毒后丢失一次更新不影响协议正确性，服务可继续运行。
+    /// 关键状态（如 serial_manager）必须使用 `lock_or_panic`，避免在数据损坏后继续写入
+    /// 串口造成硬件侧异常。
     fn lock_or_recover(&self, name: &str) -> MutexGuard<'_, T>;
 
     /// 获取锁；若 Mutex 已中毒，直接 panic（用于关键状态）
@@ -68,8 +73,8 @@ impl<T> MutexExt<T> for Mutex<T> {
 pub struct SharedVideoFrame {
     /// Base64 编码后的帧数据
     pub b64: Arc<String>,
-    /// 帧格式："jpeg" 或 "webp"
-    pub format: Arc<str>,
+    /// 帧格式："jpeg" 或 "webp"（只有两种取值，使用 &'static str 避免 Arc 开销）
+    pub format: &'static str,
     /// 帧哈希（用于 WebSocket 去重）
     pub hash: u64,
 }
@@ -97,8 +102,8 @@ pub struct AppState {
     pub link_status: Arc<std::sync::Mutex<LinkStatus>>,
     /// 服务器启动时间（用于计算运行时长）
     pub started_at: std::time::Instant,
-    /// 可用串口列表（使用 tokio::sync::Mutex，供 async 端点读取）
-    pub available_ports: Arc<tokio::sync::Mutex<Vec<String>>>,
+    /// 可用串口列表（使用 std::sync::Mutex，仅短时持锁复制 Vec<String>，不跨 .await 持锁）
+    pub available_ports: Arc<std::sync::Mutex<Vec<String>>>,
     /// 上一次扫描到的串口列表（使用 std::sync::Mutex，不跨 .await 持锁）
     pub last_ports: Arc<std::sync::Mutex<Vec<String>>>,
     /// BLE 设备列表（使用 std::sync::Mutex，不跨 .await 持锁）
@@ -106,6 +111,9 @@ pub struct AppState {
     /// 命令转发日志节流状态（命令字节, 上次记录时间），相同命令 1 秒内只记一次
     pub last_cmd_log: Arc<std::sync::Mutex<(u8, std::time::Instant)>>,
     /// 错误日志节流状态（错误类别, 上次记录时间），相同错误 5 秒内只记一次
+    ///
+    /// 调用者必须传入固定、有限的类别字符串（如 "serial_read"、"ws_send"），避免使用
+    /// 包含动态内容（如端口号、错误详情）的字符串作为 key，否则 HashMap 会无界增长。
     pub last_error_log: Arc<std::sync::Mutex<HashMap<String, std::time::Instant>>>,
     /// API Token（None 表示认证已禁用，仅用于测试）
     pub api_token: Option<Arc<str>>,
@@ -121,7 +129,7 @@ impl AppState {
     /// 创建新状态（生产环境使用）
     pub fn new() -> Self {
         let api_token = if auth_disabled_from_env() {
-            info!("认证已禁用（DISABLE_AUTH=true 或 --no-auth）");
+            info!("认证已禁用（DISABLE_AUTH=true）");
             None
         } else {
             std::env::var("API_TOKEN")
@@ -165,14 +173,12 @@ impl AppState {
             odometry: Arc::new(std::sync::Mutex::new(OdometryData::default())),
             link_status: Arc::new(std::sync::Mutex::new(LinkStatus::default())),
             started_at: std::time::Instant::now(),
-            available_ports: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+            available_ports: Arc::new(std::sync::Mutex::new(Vec::new())),
             last_ports: Arc::new(std::sync::Mutex::new(Vec::new())),
             ble_devices: Arc::new(std::sync::Mutex::new(Vec::new())),
             last_cmd_log: Arc::new(std::sync::Mutex::new((
                 0,
-                std::time::Instant::now()
-                    .checked_sub(std::time::Duration::from_secs(10))
-                    .unwrap_or_else(std::time::Instant::now),
+                std::time::Instant::now() - std::time::Duration::from_secs(10),
             ))),
             last_error_log: Arc::new(std::sync::Mutex::new(HashMap::new())),
             api_token,
@@ -187,7 +193,7 @@ impl AppState {
             last.0 != cmd || now.duration_since(last.1) >= std::time::Duration::from_secs(1);
         if should_log {
             *last = (cmd, now);
-            info!("转发命令: {:?}", cmd as char);
+            info!("转发命令: 0x{:02x}", cmd);
         }
     }
 

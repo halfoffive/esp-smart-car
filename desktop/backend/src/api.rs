@@ -18,10 +18,11 @@ use axum::{
     extract::State,
     http::{Request, StatusCode},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
     Json,
 };
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq;
 use tracing::{info, warn};
 
 use crate::serial::{SerialConnectionState, DEFAULT_BAUD_RATE};
@@ -50,8 +51,6 @@ pub struct StatusResponse {
     pub bytes_sent: u64,
     /// 当前速度 PWM 值（0-255）
     pub current_speed: u8,
-    /// 当前行走模式（0=普通，1=直线修正，2=航向锁定）
-    pub drive_mode: u8,
     /// WebSocket连接数
     pub ws_clients: usize,
     /// 运行时间（秒）
@@ -88,19 +87,54 @@ pub struct ApiResponse {
     pub message: String,
 }
 
+/// 串口列表响应（typed，避免裸 serde_json::Value）
+#[derive(Debug, Serialize)]
+pub struct PortsResponse {
+    /// 是否成功
+    pub success: bool,
+    /// 可用串口列表
+    pub ports: Vec<String>,
+}
+
+/// BLE 设备响应（typed，避免裸 serde_json::Value）
+#[derive(Debug, Serialize)]
+pub struct BleDevicesResponse {
+    /// 是否成功
+    pub success: bool,
+    /// BLE 设备列表
+    pub devices: Vec<BleDeviceDto>,
+}
+
+/// BLE 设备 DTO（序列化用）
+#[derive(Debug, Serialize)]
+pub struct BleDeviceDto {
+    /// 设备名称
+    pub name: String,
+    /// BLE MAC 地址
+    pub mac: String,
+    /// WiFi MAC 地址（可选）
+    pub wifi_mac: Option<String>,
+    /// 信号强度
+    pub rssi: i16,
+}
+
 /// 列出可用串口（使用 AppState 缓存的串口列表，避免每次请求都执行 spawn_blocking）
 pub async fn list_ports(
     State(state): State<Arc<AppState>>,
-) -> (StatusCode, Json<serde_json::Value>) {
+) -> (StatusCode, Json<PortsResponse>) {
     // 使用 AppState 缓存的串口列表，避免每次请求都执行 spawn_blocking
-    let ports = state.available_ports.lock().await.clone();
+    // available_ports 改为 std::sync::Mutex 后用 lock_or_recover 短时持锁复制
+    let ports = state
+        .available_ports
+        .lock_or_recover("available_ports")
+        .clone();
 
     (
         StatusCode::OK,
-        Json(serde_json::json!({
-            "success": true,
-            "ports": ports,
-        })),
+        Json(PortsResponse {
+            success: true,
+            ports,
+        }),
     )
 }
 
@@ -169,7 +203,18 @@ pub async fn handle_command(
         }
     }
 
-    // 单字符命令
+    // 单字符命令：长度 > 1 且不是 S: 格式时拒绝（避免误用多字节字符串作为命令）
+    if request.command.len() > 1 {
+        warn!("多字节命令不支持（仅接受单字符或 S:<pwm>）: {}", request.command);
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse {
+                success: false,
+                message: "仅接受单字符命令或 'S:<pwm>' 格式".to_string(),
+            }),
+        );
+    }
+
     let cmd = match request.command.as_bytes().first().copied() {
         Some(c) => c,
         None => {
@@ -250,6 +295,11 @@ pub async fn handle_command(
 
 /// 获取系统状态
 pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json<StatusResponse>) {
+    // 锁策略说明：
+    // - `serial_manager` 使用 `lock_or_panic`：串口连接状态属于关键状态，中毒意味着
+    //   数据可能已损坏，应快速失败而非继续对外暴露不一致的连接信息。
+    // - `ws_manager` / `odometry` 使用 `lock_or_recover`：这两者仅用于状态展示（客户端
+    //   计数、测速读数），中毒后丢失一次更新不影响协议正确性，恢复后服务可继续运行。
     // 逐把加锁，复制数据后立即释放，减少锁争用
     let (serial_status, port_name, baud_rate, frame_count, bytes_sent, command_count) = {
         let manager = state.serial_manager.lock_or_panic("serial_manager");
@@ -282,7 +332,6 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
     };
 
     let current_speed = state.current_speed.load(Ordering::Relaxed);
-    let drive_mode = state.current_drive_mode.load(Ordering::Relaxed);
 
     let (left_speed, right_speed, heading, total_distance) = {
         let odom = state.odometry.lock_or_recover("odometry");
@@ -303,7 +352,6 @@ pub async fn get_status(State(state): State<Arc<AppState>>) -> (StatusCode, Json
         frame_count,
         bytes_sent,
         current_speed,
-        drive_mode,
         ws_clients,
         uptime,
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -325,13 +373,27 @@ pub async fn connect_serial(
     let baud_rate = request.baud_rate.unwrap_or(DEFAULT_BAUD_RATE);
     let port_name = request.port_name;
 
-    // 在单个 spawn_blocking 中原子完成 disconnect + connect，避免中间状态泄漏
+    // 在单个 spawn_blocking 中原子完成 disconnect + connect + 探测包发送，
+    // 避免中间状态泄漏，并将探测结果并入响应（SubTask 1.4）
     let state_clone = Arc::clone(&state);
     let port_name_clone = port_name.clone();
     let connect_result = tokio::task::spawn_blocking(move || {
         let mut manager = state_clone.serial_manager.lock_or_panic("serial_manager");
         manager.disconnect();
-        manager.connect(&port_name_clone, baud_rate)
+        match manager.connect(&port_name_clone, baud_rate) {
+            Ok(()) => {
+                // 连接成功后立即发送 LINK_STATUS 探测包，触发 Dongle 上报链路状态 JSON
+                // 用户可感知"连接 = 链路打通"，避免连接后无反馈
+                let seq = state_clone.packet_seq.fetch_add(1, Ordering::Relaxed);
+                let packet = build_wireless_packet(11, 0, 0, seq);
+                // 探测包不属于控制命令，不递增 command_count
+                match manager.send_bytes(&packet) {
+                    Ok(()) => Ok(()),
+                    Err(e) => Err(format!("连接成功但探测包发送失败: {}", e)),
+                }
+            }
+            Err(e) => Err(e.to_string()),
+        }
     })
     .await;
 
@@ -339,18 +401,6 @@ pub async fn connect_serial(
     match connect_result {
         Ok(Ok(())) => {
             info!("串口连接成功: {} @ {}", port_name, baud_rate);
-            // 连接成功后立即发送 LINK_STATUS 探测包，触发 Dongle 上报链路状态 JSON
-            // 用户可感知"连接 = 链路打通"，避免连接后无反馈
-            let state_clone = Arc::clone(&state);
-            tokio::task::spawn_blocking(move || {
-                let seq = state_clone.packet_seq.fetch_add(1, Ordering::Relaxed);
-                let packet = build_wireless_packet(11, 0, 0, seq);
-                let mut manager = state_clone.serial_manager.lock_or_panic("serial_manager");
-                // 探测包不属于控制命令，不递增 command_count
-                if let Err(e) = manager.send_bytes(&packet) {
-                    warn!("发送探测命令 'P' 失败: {}", e);
-                }
-            });
             (
                 StatusCode::OK,
                 Json(ApiResponse {
@@ -360,7 +410,7 @@ pub async fn connect_serial(
             )
         }
         Ok(Err(e)) => {
-            warn!("串口连接失败: {}", e);
+            warn!("串口连接或探测失败: {}", e);
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(ApiResponse {
@@ -386,48 +436,58 @@ pub async fn connect_serial(
 pub async fn disconnect_serial(
     State(state): State<Arc<AppState>>,
 ) -> (StatusCode, Json<ApiResponse>) {
-    tokio::task::spawn_blocking(move || {
+    // 处理 JoinError：spawn_blocking 任务本身可能因 panic 失败，不能静默 .ok()
+    let disconnect_result = tokio::task::spawn_blocking(move || {
         let mut manager = state.serial_manager.lock_or_panic("serial_manager");
         manager.disconnect();
     })
-    .await
-    .ok();
+    .await;
 
-    info!("串口已断开");
-
-    (
-        StatusCode::OK,
-        Json(ApiResponse {
-            success: true,
-            message: "串口已断开".to_string(),
-        }),
-    )
+    match disconnect_result {
+        Ok(()) => {
+            info!("串口已断开");
+            (
+                StatusCode::OK,
+                Json(ApiResponse {
+                    success: true,
+                    message: "串口已断开".to_string(),
+                }),
+            )
+        }
+        Err(e) => {
+            warn!("串口断开任务异常: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    success: false,
+                    message: format!("断开任务异常: {}", e),
+                }),
+            )
+        }
+    }
 }
 
 /// 获取 BLE 设备列表
-pub async fn get_ble_devices(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+pub async fn get_ble_devices(
+    State(state): State<Arc<AppState>>,
+) -> Json<BleDevicesResponse> {
     let devices = state.ble_devices.lock_or_recover("ble_devices");
-    let device_list: Vec<serde_json::Value> = devices
+    let device_list: Vec<BleDeviceDto> = devices
         .iter()
-        .map(|d| {
-            let mut json = serde_json::json!({
-                "name": d.name,
-                "mac": d.mac,
-                "rssi": d.rssi
-            });
+        .map(|d| BleDeviceDto {
+            name: d.name.clone(),
+            mac: d.mac.clone(),
             // wifi_mac 为可选项：仅车载 C6/S3 等设备会广播
             // 与 WebSocket 广播格式保持一致
-            if let Some(ref wm) = d.wifi_mac {
-                json["wifi_mac"] = serde_json::Value::String(wm.clone());
-            }
-            json
+            wifi_mac: d.wifi_mac.clone(),
+            rssi: d.rssi,
         })
         .collect();
 
-    Json(serde_json::json!({
-        "success": true,
-        "devices": device_list
-    }))
+    Json(BleDevicesResponse {
+        success: true,
+        devices: device_list,
+    })
 }
 
 /// API 认证中间件
@@ -438,11 +498,11 @@ pub async fn auth_middleware(
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if state.api_token.is_none() {
+    // 一次性处理 None 分支：认证禁用时直接放行，避免后续 unwrap_or("") 不可达分支
+    let Some(expected) = state.api_token.as_deref() else {
         return next.run(request).await;
-    }
+    };
 
-    let expected = state.api_token.as_deref().unwrap_or("");
     let provided = request
         .headers()
         .get("authorization")
@@ -450,12 +510,18 @@ pub async fn auth_middleware(
         .and_then(|s| s.strip_prefix("Bearer "))
         .unwrap_or("");
 
-    if provided != expected {
+    // 恒定时间比较，避免时序侧信道攻击（SubTask 1.1）
+    // ct_eq 返回 Choice，用 bool::from 转换；长度不同时 ct_eq 返回 false
+    if !bool::from(provided.as_bytes().ct_eq(expected.as_bytes())) {
         warn!("API 认证失败：Authorization 头中的 token 不匹配");
-        return Response::builder()
-            .status(StatusCode::UNAUTHORIZED)
-            .body(Body::from("Unauthorized"))
-            .unwrap_or_else(|_| Response::new(Body::empty()));
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse {
+                success: false,
+                message: "Unauthorized".into(),
+            }),
+        )
+            .into_response();
     }
 
     next.run(request).await
@@ -519,7 +585,6 @@ mod tests {
             frame_count: 0,
             bytes_sent: 0,
             current_speed: 128,
-            drive_mode: 0,
             ws_clients: 0,
             uptime: 42,
             version: "1.2.0".to_string(),
@@ -535,7 +600,7 @@ mod tests {
         assert!(json.contains("\"version\":\"1.2.0\""));
     }
 
-    /// 测试超长命令处理：handle_command 应只取第一个字节，不 panic
+    /// 测试超长命令处理：handle_command 应拒绝多字节命令，返回 400 而非尝试发送
     #[tokio::test]
     async fn test_handle_command_too_long() {
         let state = create_test_state();
@@ -546,16 +611,15 @@ mod tests {
             command: long_command,
         };
 
-        // 调用 handle_command（无串口连接时应返回 503）
+        // 多字节命令应被拒绝（SubTask 1.5），返回 400
         let (status, Json(resp)) = handle_command(State(state), Json(request)).await;
 
-        // 无串口连接时发送失败，但不应 panic
         assert_eq!(
             status,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "无串口连接时应返回 503 状态码"
+            StatusCode::BAD_REQUEST,
+            "多字节命令应返回 400 状态码"
         );
-        assert!(!resp.success, "发送失败时 success 应为 false");
+        assert!(!resp.success, "拒绝时 success 应为 false");
     }
 
     /// 测试特殊字符命令处理：包括空格、换行符、Unicode 等

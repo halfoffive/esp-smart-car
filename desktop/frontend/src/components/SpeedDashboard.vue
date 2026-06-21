@@ -46,29 +46,23 @@ import { useWebSocket } from '../composables/useWebSocket'
 // WebSocket 测速数据
 const { odometry } = useWebSocket()
 
-// 速度条最大参考值：50 cm/s（对应 500 mm/s）
 const MAX_SPEED_MMS = 500
-// 轮子转速条最大参考值：500 RPM
-const MAX_RPM = 500
-// 轮子直径（mm），与固件 OdometerConfig::WHEEL_DIAMETER_MM 保持一致
 const WHEEL_DIAMETER_MM = 65
 
-// 当前左右轮速度（cm/s）
 const leftSpeedCm = computed(() => (odometry.value.leftSpeed / 10).toFixed(1))
 const rightSpeedCm = computed(() => (odometry.value.rightSpeed / 10).toFixed(1))
 
-// 当前速度条百分比（取左右轮绝对值较大者）
 const currentSpeedBarPercent = computed(() => {
   const maxWheelSpeed = Math.max(Math.abs(odometry.value.leftSpeed), Math.abs(odometry.value.rightSpeed))
   return Math.min(100, Math.round((maxWheelSpeed / MAX_SPEED_MMS) * 100))
 })
 
-// 根据线速度（mm/s）计算轮子转速（RPM）
 const mmpsToRpm = (mmps: number): number => {
   const circumference = Math.PI * WHEEL_DIAMETER_MM
-  if (circumference <= 0) return 0
   return (mmps * 60) / circumference
 }
+
+const MAX_RPM = mmpsToRpm(MAX_SPEED_MMS)
 
 const leftRpm = computed(() => mmpsToRpm(odometry.value.leftSpeed).toFixed(0))
 const rightRpm = computed(() => mmpsToRpm(odometry.value.rightSpeed).toFixed(0))
@@ -100,6 +94,6 @@ const wheelRpmBarPercent = computed(() => {
 .speed-fill {
   height: 100%;
   border-radius: 9999px;
-  transition: all 0.3s;
+  transition: width 0.3s ease;
 }
 </style>

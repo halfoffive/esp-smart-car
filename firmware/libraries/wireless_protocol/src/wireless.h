@@ -48,18 +48,9 @@ struct __attribute__((packed)) WirelessPacket {
     CommandType type;     // 命令类型
     uint8_t data;         // 数据字节（如WASD命令或角度/模式值）
     uint8_t speed;        // 速度值：直接表示 PWM 占空比，范围 0-255
+    // 注意：seq 字段未按 16 位边界对齐；ESP32 可处理，但可移植性降低
     uint16_t seq;         // 序列号
     uint8_t checksum;     // 校验和
-
-    // 默认构造函数（用于声明未初始化的局部变量，后续赋值）
-    WirelessPacket() : magic(0), version(0), type(CommandType::NONE),
-                       data(0), speed(0), seq(0), checksum(0) {}
-
-    // 带参构造函数
-    constexpr WirelessPacket(
-        uint8_t m, uint8_t v, CommandType t,
-        uint8_t d, uint8_t s, uint16_t sq, uint8_t c
-    ) : magic(m), version(v), type(t), data(d), speed(s), seq(sq), checksum(c) {}
 };
 
 /**
@@ -71,17 +62,12 @@ struct __attribute__((packed)) OdometryPacket {
     uint8_t magic;            // 魔术字(0xA5)
     uint8_t version;          // 协议版本
     CommandType type;         // ODOMETRY
+    // 注意：以下 int16/uint16 字段在 packed 结构体中未按 16 位边界对齐；ESP32 可处理，但可移植性降低
     int16_t leftSpeedMmps;    // 左轮速度(mm/s)，有符号
     int16_t rightSpeedMmps;   // 右轮速度(mm/s)，有符号
     int16_t headingX100;      // 航向角(弧度*100)，有符号
     uint16_t totalDistMm;     // 总行走距离(mm)
     uint8_t checksum;         // 校验和
-
-    constexpr OdometryPacket(
-        uint8_t m, uint8_t v, CommandType t,
-        int16_t ls, int16_t rs, int16_t hd, uint16_t td, uint8_t c
-    ) : magic(m), version(v), type(t), leftSpeedMmps(ls),
-        rightSpeedMmps(rs), headingX100(hd), totalDistMm(td), checksum(c) {}
 };
 
 /**
@@ -91,6 +77,7 @@ struct __attribute__((packed)) OdometryPacket {
 struct __attribute__((packed)) VideoPacket {
     uint8_t magic;        // 魔术字 0xA6
     uint8_t version;      // 版本
+    // 注意：以下 uint16 字段在 packed 结构体中未按 16 位边界对齐；ESP32 可处理，但可移植性降低
     uint16_t frameId;     // 帧序号
     uint16_t packetId;    // 包序号
     uint16_t totalPackets; // 总包数
@@ -107,11 +94,6 @@ namespace WirelessConfig {
     constexpr uint8_t PROTOCOL_VERSION = 1;   // 协议版本
 }
 
-namespace SpeedConfig {
-    constexpr uint8_t MIN_PWM = 0;    // 最小 PWM 占空比
-    constexpr uint8_t MAX_PWM = 255;  // 最大 PWM 占空比
-}
-
 namespace StreamConfig {
     constexpr uint8_t VIDEO_MAGIC = 0xA6;       // 视频帧魔术字
     constexpr uint8_t PROTOCOL_VERSION = 1;   // 协议版本
@@ -125,6 +107,7 @@ namespace StreamConfig {
 namespace UdpConfig {
     constexpr uint16_t CONTROL_PORT = 9000;   // 控制命令 UDP 端口
     constexpr uint16_t TELEMETRY_PORT = 9001; // 遥测数据 UDP 端口
+    constexpr uint16_t VIDEO_PORT = 9002;     // 视频流 UDP 端口（与遥测分离）
 }
 
 namespace NetworkConfig {
@@ -132,7 +115,8 @@ namespace NetworkConfig {
     constexpr const char* AP_PASSWORD = WIFI_AP_PASSWORD; // 软接入点密码（来自 wifi_credentials.h）
     constexpr uint8_t AP_IP[4] = {192, 168, 4, 1};       // 接入点 IP
     constexpr uint8_t CAR_IP[4] = {192, 168, 4, 2};      // 车载端固定 IP
-    constexpr uint8_t GATEWAY[4] = {192, 168, 4, 1};     // 默认网关
+    // 注意：GATEWAY 复用 AP_IP，接入点模式下网关与 AP_IP 相同
+    constexpr const uint8_t (&GATEWAY)[4] = AP_IP;       // 默认网关
     constexpr uint8_t SUBNET[4] = {255, 255, 255, 0};    // 子网掩码
 }
 
@@ -167,53 +151,43 @@ inline bool validatePacket(const WirelessPacket& packet) {
 }
 
 /**
- * 创建命令数据包（非纯函数：内部维护序列号计数器）
- * 输入：命令类型，数据，速度
+ * 创建命令数据包（纯函数：序列号由调用方传入）
+ * 输入：命令类型，数据，速度，序列号
  * 输出：数据包
  */
 inline WirelessPacket createCommandPacket(
-    CommandType type, uint8_t data, uint8_t speed
+    CommandType type, uint8_t data, uint8_t speed, uint16_t seq
 ) {
-    static uint16_t seqCounter = 0;
-
-    WirelessPacket packet(
-        WirelessConfig::MAGIC_BYTE,
-        WirelessConfig::PROTOCOL_VERSION,
-        type,
-        data,
-        speed,
-        ++seqCounter,
-        0  // 校验和先设为0
-    );
-
-    const uint8_t checksum = calculateChecksum(packet);
-
-    return WirelessPacket(
-        packet.magic, packet.version, packet.type,
-        packet.data, packet.speed, packet.seq,
-        checksum
-    );
+    WirelessPacket packet{};
+    packet.magic = WirelessConfig::MAGIC_BYTE;
+    packet.version = WirelessConfig::PROTOCOL_VERSION;
+    packet.type = type;
+    packet.data = data;
+    packet.speed = speed;
+    packet.seq = seq;
+    packet.checksum = calculateChecksum(packet);
+    return packet;
 }
 
 /**
  * 纯函数：创建运动命令包
  */
-inline WirelessPacket createMovePacket(uint8_t wasdCmd, uint8_t speed) {
-    return createCommandPacket(CommandType::MOVE, wasdCmd, speed);
+inline WirelessPacket createMovePacket(uint8_t wasdCmd, uint8_t speed, uint16_t seq) {
+    return createCommandPacket(CommandType::MOVE, wasdCmd, speed, seq);
 }
 
 /**
  * 纯函数：创建停止命令包
  */
-inline WirelessPacket createStopPacket() {
-    return createCommandPacket(CommandType::STOP, 0, 0);
+inline WirelessPacket createStopPacket(uint16_t seq) {
+    return createCommandPacket(CommandType::STOP, 0, 0, seq);
 }
 
 /**
  * 纯函数：创建状态查询包
  */
-inline WirelessPacket createStatusPacket() {
-    return createCommandPacket(CommandType::STATUS, 0, 0);
+inline WirelessPacket createStatusPacket(uint16_t seq) {
+    return createCommandPacket(CommandType::STATUS, 0, 0, seq);
 }
 
 #endif // WIRELESS_H

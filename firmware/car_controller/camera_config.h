@@ -77,14 +77,13 @@ struct CameraConfiguration {
     int8_t saturation;          // 饱和度（-2到2）
     bool verticalFlip;          // 垂直翻转
     bool horizontalMirror;      // 水平镜像
-    uint8_t fps;                // 目标帧率
 
     constexpr CameraConfiguration(
         Resolution res, ImageQuality q,
         int8_t bri, int8_t con, int8_t sat,
-        bool vflip, bool hmirror, uint8_t fps
+        bool vflip, bool hmirror
     ) : resolution(res), quality(q), brightness(bri), contrast(con),
-        saturation(sat), verticalFlip(vflip), horizontalMirror(hmirror), fps(fps) {}
+        saturation(sat), verticalFlip(vflip), horizontalMirror(hmirror) {}
 };
 
 // ============================================
@@ -140,34 +139,7 @@ inline CameraConfiguration createDefaultConfig() {
         0,                     // 默认对比度
         0,                     // 默认饱和度
         false,                 // 不垂直翻转
-        true,                  // 水平镜像（使画面符合直觉）
-        60                     // 60 FPS 上限，实际帧率由串口/网络带宽决定
-    );
-}
-
-/**
- * 纯函数：创建高性能配置（低延迟）
- */
-inline CameraConfiguration createHighPerformanceConfig() {
-    return CameraConfiguration(
-        Resolution::QQVGA,      // 160x120，最小分辨率
-        ImageQuality::QUALITY_LOW,     // 低质量，高压缩
-        0, 0, 0,
-        false, true,
-        60                     // 60 FPS
-    );
-}
-
-/**
- * 纯函数：创建高质量配置
- */
-inline CameraConfiguration createHighQualityConfig() {
-    return CameraConfiguration(
-        Resolution::VGA,      // 640x480
-        ImageQuality::QUALITY_HIGH,    // 高质量
-        0, 0, 0,
-        false, true,
-        15                     // 15 FPS
+        true                   // 水平镜像（使画面符合直觉）
     );
 }
 
@@ -236,22 +208,6 @@ inline bool initializeCamera(const CameraConfiguration& config) {
     const auto [width, height] = resolutionToSize(config.resolution);
     Serial.printf("[摄像头] 初始化成功: %dx%d, 质量:%d\n", 
                   width, height, static_cast<int>(config.quality));
-    
-    return true;
-}
-
-/**
- * 更新摄像头配置（可在 loop() 中调用以运行时切换图像参数，当前未使用）
- */
-inline bool updateCameraConfig(const CameraConfiguration& config) {
-    sensor_t* sensor = esp_camera_sensor_get();
-    if (sensor == NULL) return false;
-    
-    sensor->set_brightness(sensor, config.brightness);
-    sensor->set_contrast(sensor, config.contrast);
-    sensor->set_saturation(sensor, config.saturation);
-    sensor->set_vflip(sensor, config.verticalFlip);
-    sensor->set_hmirror(sensor, config.horizontalMirror);
     
     return true;
 }

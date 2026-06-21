@@ -3,8 +3,8 @@
     <div class="panel-header flex items-center justify-between py-2">
       <span class="text-sm">实时视频</span>
       <div class="flex items-center gap-2">
-        <span v-if="fps > 0" class="text-xs text-primary-400 font-mono">
-          {{ fps }} FPS / {{ renderFps }} Render FPS
+        <span v-if="videoFps > 0" class="text-xs text-primary-400 font-mono">
+          {{ videoFps }} FPS / {{ renderFps }} Render FPS
         </span>
       </div>
     </div>
@@ -45,25 +45,21 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onUnmounted } from 'vue'
+import { ref, watch, onMounted, onUnmounted } from 'vue'
 import { useWebSocket } from '../composables/useWebSocket'
 
 const { videoFrame, isConnected, videoFps } = useWebSocket()
 
 const videoSrc = ref<string | null>(null)
-const fps = computed(() => videoFps.value)
+const pendingFrame = ref<string | null>(null)
+let rafId: number | null = null
 
 const renderedFrames = ref(0)
 const lastRenderCountTime = ref(Date.now())
 const renderFps = ref(0)
 
-const updateVideo = () => {
-  if (!videoFrame.value) {
-    return
-  }
-  videoSrc.value = videoFrame.value
+const updateRenderFps = () => {
   renderedFrames.value++
-
   const now = Date.now()
   if (now - lastRenderCountTime.value >= 1000) {
     renderFps.value = renderedFrames.value
@@ -72,9 +68,58 @@ const updateVideo = () => {
   }
 }
 
+const renderFrame = () => {
+  rafId = null
+  videoSrc.value = pendingFrame.value
+  if (pendingFrame.value) {
+    updateRenderFps()
+  }
+}
+
+const scheduleRender = () => {
+  if (rafId !== null) return
+  if (document.hidden) return
+  rafId = requestAnimationFrame(renderFrame)
+}
+
+const updateVideo = () => {
+  if (!videoFrame.value || !videoFrame.value.startsWith('data:image/')) {
+    pendingFrame.value = null
+    videoSrc.value = null
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId)
+      rafId = null
+    }
+    return
+  }
+  pendingFrame.value = videoFrame.value
+  scheduleRender()
+}
+
+const handleVisibilityChange = () => {
+  if (document.hidden) {
+    if (rafId !== null) {
+      cancelAnimationFrame(rafId)
+      rafId = null
+    }
+  } else if (pendingFrame.value) {
+    scheduleRender()
+  }
+}
+
 const unwatch = watch(videoFrame, updateVideo)
 
+onMounted(() => {
+  document.addEventListener('visibilitychange', handleVisibilityChange)
+  updateVideo()
+})
+
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  if (rafId !== null) {
+    cancelAnimationFrame(rafId)
+    rafId = null
+  }
   unwatch()
 })
 </script>

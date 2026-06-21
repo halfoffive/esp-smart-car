@@ -264,6 +264,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serialport",
+ "subtle",
  "tokio",
  "tokio-rustls",
  "tokio-util",

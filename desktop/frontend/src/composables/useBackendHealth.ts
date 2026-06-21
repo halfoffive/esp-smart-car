@@ -27,6 +27,8 @@ const PROBE_TIMEOUT = 1000
 interface BackendHealthInstance {
   backendAvailable: Ref<boolean>
   recheck: () => void
+  start: () => void
+  stop: () => void
 }
 
 /**
@@ -51,6 +53,8 @@ function createBackendHealth(): BackendHealthInstance {
   const check = async () => {
     if (isChecking) return
     isChecking = true
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT)
     try {
       const token = (import.meta.env.VITE_API_TOKEN as string | undefined) || DEFAULT_API_TOKEN
       const headers: Record<string, string> = token
@@ -58,13 +62,14 @@ function createBackendHealth(): BackendHealthInstance {
         : {}
       const response = await fetch('/api/status', {
         headers,
-        signal: AbortSignal.timeout(PROBE_TIMEOUT),
+        signal: controller.signal,
       })
       backendAvailable.value = response.ok
     } catch {
       // fetch 失败（网络错误/超时/AbortError）→ 后端不可用
       backendAvailable.value = false
     } finally {
+      clearTimeout(timeoutId)
       isChecking = false
     }
   }
@@ -74,21 +79,29 @@ function createBackendHealth(): BackendHealthInstance {
     check()
   }
 
-  // 启动时立即探测一次，随后每 10 秒重试
-  check()
-  intervalId = setInterval(check, CHECK_INTERVAL)
+  /** 启动轮询（由 App.vue 在 onMounted 中调用） */
+  const start = () => {
+    if (intervalId) return
+    check()
+    intervalId = setInterval(check, CHECK_INTERVAL)
+  }
+
+  /** 停止轮询（由 App.vue 在 onUnmounted 中调用） */
+  const stop = () => {
+    if (intervalId) {
+      clearInterval(intervalId)
+      intervalId = null
+    }
+  }
 
   // HMR 清理：模块热重载时取消旧定时器，避免多个定时器并存
   if (import.meta.hot) {
     import.meta.hot.dispose(() => {
-      if (intervalId) {
-        clearInterval(intervalId)
-        intervalId = null
-      }
+      stop()
     })
   }
 
-  return { backendAvailable, recheck }
+  return { backendAvailable, recheck, start, stop }
 }
 
 /** 单例实例（闭包内，HMR 重载时自动重置） */
@@ -107,7 +120,9 @@ function getInstance(): BackendHealthInstance {
  *
  * @returns backendAvailable - 后端是否可用的响应式状态
  * @returns recheck - 手动触发一次检测的方法
+ * @returns start - 启动轮询（由 App.vue 在 onMounted 中调用）
+ * @returns stop - 停止轮询（由 App.vue 在 onUnmounted 中调用）
  */
-export const useBackendHealth = (): BackendHealthInstance => {
+export function useBackendHealth(): BackendHealthInstance {
   return getInstance()
 }

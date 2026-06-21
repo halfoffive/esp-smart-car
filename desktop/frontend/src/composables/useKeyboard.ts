@@ -20,7 +20,8 @@
  * - 1-9: 速度快捷档位（映射到 0-255 PWM）
  */
 
-import { ref, onMounted, onUnmounted } from 'vue'
+import { reactive, onMounted, onUnmounted } from 'vue'
+import { COMMAND_REPEAT_INTERVAL_MS } from '../config/constants'
 
 /** 有效的控制键集合 */
 const VALID_KEYS = new Set([
@@ -43,9 +44,9 @@ const PREVENT_DEFAULT_KEYS = new Set(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'Arro
  * @param sendCommand - 发送命令的回调函数
  * @param setSpeed - 设置速度 PWM 的回调函数（接收 0-255 数值）
  */
-export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: number) => void) => {
+export function useKeyboard(sendCommand: (cmd: string) => void, setSpeed: (pwm: number) => void) {
   // 当前激活的按键（响应式，供 UI 高亮显示）
-  const activeKeys = ref<Set<string>>(new Set())
+  const activeKeys = reactive(new Set<string>())
 
   // 当前按下的方向键（闭包内部状态，确保互斥）
   let currentDirectionKey: string | null = null
@@ -65,7 +66,7 @@ export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: 
     stopCommandRepeat()
     commandRepeatTimer = setInterval(() => {
       sendCommand(command)
-    }, 300)
+    }, COMMAND_REPEAT_INTERVAL_MS)
   }
 
   /** 处理按键按下 */
@@ -95,8 +96,8 @@ export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: 
       return
     }
 
-    // 添加到激活集合（替换整个 Set 以触发 Vue 响应式）
-    activeKeys.value = new Set(activeKeys.value).add(key)
+    // 添加到激活集合
+    activeKeys.add(key)
 
     // 处理方向键（互斥）
     if (DIRECTION_KEYS.has(key)) {
@@ -107,7 +108,7 @@ export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: 
       }
       currentDirectionKey = key
       sendCommand(key)
-      // 按住期间每 300ms 重发，防止车载端超时停车
+      // 按住期间周期性重发，防止车载端超时停车
       startCommandRepeat(key)
     }
     // 处理空格（停止）
@@ -127,8 +128,8 @@ export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: 
   const handleKeyUp = (event: KeyboardEvent) => {
     const key = event.key.toUpperCase()
 
-    // 从激活集合移除（替换整个 Set 以触发 Vue 响应式）
-    activeKeys.value = new Set([...activeKeys.value].filter(k => k !== key))
+    // 从激活集合移除
+    activeKeys.delete(key)
 
     // 如果释放的是当前方向键，停止
     if (DIRECTION_KEYS.has(key) && currentDirectionKey === key) {
@@ -140,7 +141,7 @@ export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: 
 
   /** 处理窗口失去焦点（自动停止所有运动） */
   const handleBlur = () => {
-    activeKeys.value = new Set()
+    activeKeys.clear()
     if (currentDirectionKey) {
       currentDirectionKey = null
       stopCommandRepeat()
@@ -151,7 +152,7 @@ export const useKeyboard = (sendCommand: (cmd: string) => void, setSpeed: (pwm: 
   /** 处理页面可见性变化（切换标签页/最小化时自动停止） */
   const handleVisibilityChange = () => {
     if (document.hidden) {
-      activeKeys.value = new Set()
+      activeKeys.clear()
       if (currentDirectionKey) {
         currentDirectionKey = null
         stopCommandRepeat()

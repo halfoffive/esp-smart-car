@@ -28,13 +28,8 @@
       </span>
     </div>
 
-    <!-- 链路状态（4 级） -->
-    <div
-      class="flex items-center gap-1.5 px-1.5 py-0.5 rounded-full border"
-      :class="linkStatusStyle.bgClass"
-      :title="linkStatusStyle.title"
-      aria-label="链路状态"
-    >
+    <!-- 链路状态 -->
+    <div class="flex items-center gap-1.5" aria-label="链路状态" :title="linkStatusStyle.title">
       <span
         :class="['w-1.5 h-1.5 rounded-full', linkStatusStyle.dotClass]"
         aria-hidden="true"
@@ -43,11 +38,11 @@
     </div>
 
     <!-- 帧率 -->
-    <div v-if="fps > 0" class="flex items-center gap-1 text-dark-400">
+    <div class="flex items-center gap-1 text-dark-400">
       <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
       </svg>
-      <span class="font-mono">{{ fps }}FPS</span>
+      <span class="font-mono">{{ videoFps }}FPS</span>
     </div>
 
     <!-- 当前速度 -->
@@ -77,34 +72,15 @@ const { isConnected, videoFps, linkStatus } = useWebSocket()
 const { status } = useStatus()
 
 const serialConnected = computed(() => status.value.serialStatus.startsWith('已连接'))
-const fps = computed(() => videoFps.value || 0)
 const currentSpeed = computed(() => status.value.currentSpeed || 0)
 const currentSpeedPercent = computed(() => Math.round((currentSpeed.value / 255) * 100))
 const frameCount = computed(() => status.value.frameCount || 0)
 
-/** 链路状态等级样式（4 级 + 串口未连接） */
-interface LinkStatusStyle {
-  text: string
-  title: string
-  bgClass: string
-  textClass: string
-  dotClass: string
-}
-
-/**
- * 计算 4 级链路状态显示样式：
- * - 串口未连接：灰色
- * - 串口已连接，dongleOk=false：探测中（黄色）
- * - dongleOk=true, carPaired=false：Dongle 已连接，车载未上线（蓝色）
- * - carPaired=true, lastOdomMs > 10000 或 =0（无数据）：车载已上线但离线（黄色）
- * - carPaired=true, lastOdomMs <= 10000：车载在线（绿色）
- */
-const linkStatusStyle = computed<LinkStatusStyle>(() => {
+const linkStatusStyle = computed(() => {
   if (!serialConnected.value) {
     return {
       text: '串口未连接',
       title: '串口未连接，请先连接 Dongle',
-      bgClass: 'bg-dark-700/50 border-dark-600',
       textClass: 'text-dark-400',
       dotClass: 'bg-dark-500',
     }
@@ -113,7 +89,6 @@ const linkStatusStyle = computed<LinkStatusStyle>(() => {
     return {
       text: '探测中',
       title: '正在探测 Dongle 链路状态',
-      bgClass: 'bg-yellow-500/20 border-yellow-500/30',
       textClass: 'text-yellow-400',
       dotClass: 'bg-yellow-400 animate-pulse',
     }
@@ -122,18 +97,14 @@ const linkStatusStyle = computed<LinkStatusStyle>(() => {
     return {
       text: 'Dongle 已连接',
       title: 'Dongle 正常，车载未上线',
-      bgClass: 'bg-blue-500/20 border-blue-500/30',
       textClass: 'text-blue-400',
       dotClass: 'bg-blue-400',
     }
   }
-  // carPaired = true
-  // lastOdomMs = 0 表示从未收到车载数据，按"已配对但离线"处理
   if (linkStatus.value.lastOdomMs === 0 || linkStatus.value.lastOdomMs > 10000) {
     return {
       text: '车载已配对',
       title: `车载已配对但离线（${linkStatus.value.lastOdomMs}ms 无数据）`,
-      bgClass: 'bg-yellow-500/20 border-yellow-500/30',
       textClass: 'text-yellow-400',
       dotClass: 'bg-yellow-400',
     }
@@ -141,7 +112,6 @@ const linkStatusStyle = computed<LinkStatusStyle>(() => {
   return {
     text: '车载在线',
     title: `车载在线（${linkStatus.value.lastOdomMs}ms 前收到数据）`,
-    bgClass: 'bg-green-500/20 border-green-500/30',
     textClass: 'text-green-400',
     dotClass: 'bg-green-400 animate-pulse',
   }

@@ -116,149 +116,50 @@ inline void initializeMotorPins() {
 }
 
 /**
- * 纯函数：计算电机方向对应的引脚电平
- * 输入：目标方向
- * 输出：tuple(in1, in2)
- * 无副作用，纯计算
- */
-inline auto calculateMotorPins(const MotorDirection dir) -> std::tuple<uint8_t, uint8_t> {
-    switch (dir) {
-        case MotorDirection::FORWARD:
-            return {HIGH, LOW};   // IN1=1, IN2=0 -> 正转
-        case MotorDirection::BACKWARD:
-            return {LOW, HIGH};   // IN1=0, IN2=1 -> 反转
-        case MotorDirection::STOP:
-        default:
-            return {LOW, LOW};    // IN1=0, IN2=0 -> 停止
-    }
-}
-
-/**
- * 纯函数：应用单个电机状态到硬件
+ * 应用单个电机状态到硬件
  * 这是一个"命令"函数，产生副作用（更新硬件）
  * 但逻辑上基于输入状态确定性地执行
  */
 inline void applyMotorState(const MotorState& motor) {
-    const auto [in1Level, in2Level] = calculateMotorPins(motor.direction);
-    
-    digitalWrite(motor.pinIn1, in1Level);
-    digitalWrite(motor.pinIn2, in2Level);
-    
+    // 根据方向直接设置 IN1/IN2 电平
+    switch (motor.direction) {
+        case MotorDirection::FORWARD:
+            digitalWrite(motor.pinIn1, HIGH);
+            digitalWrite(motor.pinIn2, LOW);
+            break;
+        case MotorDirection::BACKWARD:
+            digitalWrite(motor.pinIn1, LOW);
+            digitalWrite(motor.pinIn2, HIGH);
+            break;
+        case MotorDirection::STOP:
+        default:
+            digitalWrite(motor.pinIn1, LOW);
+            digitalWrite(motor.pinIn2, LOW);
+            break;
+    }
+
     // 只有在非停止状态下才输出PWM
     if (motor.direction != MotorDirection::STOP) {
-        // 死区补偿：低于死区阈值的命令速度直接输出 0，避免电机机械不响应
-        const uint8_t effectiveSpeed = (motor.speed <= MotorConfig::DEADBAND_PWM) ? 0 : motor.speed;
+        // 死区平滑过渡：将 [DEADBAND_PWM, 255] 线性映射到 [0, 255]，
+        // 避免命令速度在死区阈值附近出现 15->16 的突变启动。
+        uint8_t effectiveSpeed = 0;
+        if (motor.speed > MotorConfig::DEADBAND_PWM) {
+            const uint16_t mapped = static_cast<uint16_t>(motor.speed - MotorConfig::DEADBAND_PWM) * 255U
+                                    / (255U - MotorConfig::DEADBAND_PWM);
+            effectiveSpeed = static_cast<uint8_t>((mapped > 255U) ? 255U : mapped);
+        }
         analogWrite(motor.pinEn, effectiveSpeed);
     } else {
         analogWrite(motor.pinEn, 0);
     }
 }
 
-/**
- * 纯函数：创建新电机状态（不改变原状态）
- * 输入：原状态，新方向，新速度
- * 输出：新电机状态
- */
-inline MotorState createMotorState(
-    const uint8_t in1, const uint8_t in2, const uint8_t en,
-    const MotorDirection dir, const uint8_t speed
-) {
-    return MotorState(in1, in2, en, dir, speed);
-}
-
 // ============================================
-// 高阶函数：运动模式组合
+// 应用整车运动状态
 // ============================================
 
 /**
- * 纯函数：创建基础停止状态
- */
-inline VehicleMotion createStopState() {
-    return VehicleMotion(
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::STOP, 0),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::STOP, 0)
-    );
-}
-
-/**
- * 纯函数：前进状态
- * 输入：速度值
- * 输出：整车运动状态
- */
-inline VehicleMotion createForwardState(const uint8_t speed) {
-    return VehicleMotion(
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::FORWARD, speed)
-    );
-}
-
-/**
- * 纯函数：后退状态
- */
-inline VehicleMotion createBackwardState(const uint8_t speed) {
-    return VehicleMotion(
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::BACKWARD, speed),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::BACKWARD, speed)
-    );
-}
-
-/**
- * 纯函数：左转状态（差速转弯）
- * 原理：左侧电机后退，右侧电机前进，或左侧速度低于右侧
- */
-inline VehicleMotion createLeftTurnState(const uint8_t speed) {
-    return VehicleMotion(
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::BACKWARD, (speed + 1) / 2),  // 左侧慢速后退（奇数保持对称）
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::FORWARD, speed)          // 右侧正常前进
-    );
-}
-
-/**
- * 纯函数：右转状态（差速转弯）
- */
-inline VehicleMotion createRightTurnState(const uint8_t speed) {
-    return VehicleMotion(
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::FORWARD, speed),         // 左侧正常前进
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::BACKWARD, (speed + 1) / 2)   // 右侧慢速后退（奇数保持对称）
-    );
-}
-
-/**
- * 纯函数：原地左转（左右轮反向）
- */
-inline VehicleMotion createInPlaceLeftState(const uint8_t speed) {
-    return VehicleMotion(
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::BACKWARD, speed),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::FORWARD, speed)
-    );
-}
-
-/**
- * 纯函数：原地右转（左右轮反向）
- */
-inline VehicleMotion createInPlaceRightState(const uint8_t speed) {
-    return VehicleMotion(
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   MotorDirection::FORWARD, speed),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   MotorDirection::BACKWARD, speed)
-    );
-}
-
-/**
- * 高阶函数：应用整车运动状态到所有电机
+ * 应用整车运动状态到所有电机
  * 输入：整车运动状态
  * 副作用：更新所有电机硬件
  */
@@ -267,51 +168,77 @@ inline void applyVehicleMotion(const VehicleMotion& motion) {
     applyMotorState(motion.right);
 }
 
-/**
- * 纯函数：创建差速运动状态（左右轮不同速度）
- * 用于PID修正后的精确控制
- * 输入：左电机方向+速度，右电机方向+速度
- * 输出：整车运动状态
- */
-inline VehicleMotion createDifferentialState(
-    MotorDirection leftDir, uint8_t leftSpeed,
-    MotorDirection rightDir, uint8_t rightSpeed
-) {
-    return VehicleMotion(
-        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                   leftDir, leftSpeed),
-        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                   rightDir, rightSpeed)
-    );
-}
-
 // ============================================
 // 命令解析函数：从WASD映射到运动状态
 // ============================================
 
 /**
- * 纯函数：将WASD命令字符映射到运动状态
- * 输入：命令字符（W/A/S/D/空格）
+ * 将WASD命令字符映射到运动状态
+ * 输入：命令字符（W/A/S/D/Q/E/空格）
  * 输入：速度值
- * 输出：对应的整车运动状态
+ * 输出：通过 out 返回对应的整车运动状态
+ * 返回值：true 表示命令有效，false 表示未知命令（out 保持不变）
  */
-inline VehicleMotion parseWASDCommand(const char cmd, const uint8_t speed) {
+inline bool commandToVehicleMotion(const char cmd, const uint8_t speed, VehicleMotion& out) {
     switch (cmd) {
         case 'W': case 'w':
-            return createForwardState(speed);
+            out = VehicleMotion(
+                MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                           MotorDirection::FORWARD, speed),
+                MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                           MotorDirection::FORWARD, speed)
+            );
+            return true;
         case 'S': case 's':
-            return createBackwardState(speed);
+            out = VehicleMotion(
+                MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                           MotorDirection::BACKWARD, speed),
+                MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                           MotorDirection::BACKWARD, speed)
+            );
+            return true;
         case 'A': case 'a':
-            return createLeftTurnState(speed);
+            out = VehicleMotion(
+                MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                           MotorDirection::BACKWARD, (speed + 1) / 2),  // 左侧慢速后退（奇数保持对称）
+                MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                           MotorDirection::FORWARD, speed)              // 右侧正常前进
+            );
+            return true;
         case 'D': case 'd':
-            return createRightTurnState(speed);
+            out = VehicleMotion(
+                MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                           MotorDirection::FORWARD, speed),             // 左侧正常前进
+                MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                           MotorDirection::BACKWARD, (speed + 1) / 2)   // 右侧慢速后退（奇数保持对称）
+            );
+            return true;
         case 'Q': case 'q':
-            return createInPlaceLeftState(speed);
+            out = VehicleMotion(
+                MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                           MotorDirection::BACKWARD, speed),
+                MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                           MotorDirection::FORWARD, speed)
+            );
+            return true;
         case 'E': case 'e':
-            return createInPlaceRightState(speed);
+            out = VehicleMotion(
+                MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                           MotorDirection::FORWARD, speed),
+                MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                           MotorDirection::BACKWARD, speed)
+            );
+            return true;
         case ' ':  // 空格键停止
+            out = VehicleMotion(
+                MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                           MotorDirection::STOP, 0),
+                MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                           MotorDirection::STOP, 0)
+            );
+            return true;
         default:
-            return createStopState();
+            return false;
     }
 }
 

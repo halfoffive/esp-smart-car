@@ -33,9 +33,7 @@
     <!-- 主内容区 -->
     <main class="flex-1 flex gap-3 p-3 overflow-hidden min-h-0">
       <!-- 左侧视频区 -->
-      <div class="flex-1 flex flex-col gap-3 min-w-0 min-h-0">
-        <VideoPlayer />
-      </div>
+      <VideoPlayer class="flex-1 min-w-0 min-h-0" />
 
       <!-- 右侧控制面板 -->
       <div class="w-72 shrink-0 flex flex-col gap-3 min-h-0 overflow-y-auto">
@@ -49,12 +47,24 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted, onUnmounted } from 'vue'
 import VideoPlayer from './components/VideoPlayer.vue'
 import ControlPanel from './components/ControlPanel.vue'
 import StatusBar from './components/StatusBar.vue'
 import SpeedDashboard from './components/SpeedDashboard.vue'
 import { useBackendHealth } from './composables/useBackendHealth'
+import { useWebSocket } from './composables/useWebSocket'
 
-// 后端健康检测：单例，启动时自动探测，每 10 秒重试
-const { backendAvailable } = useBackendHealth()
+const { backendAvailable, start: startHealthCheck, stop: stopHealthCheck } = useBackendHealth()
+const { connect: wsConnect, disconnect: wsDisconnect } = useWebSocket()
+
+onMounted(() => {
+  startHealthCheck()
+  wsConnect()
+})
+
+onUnmounted(() => {
+  stopHealthCheck()
+  wsDisconnect()
+})
 </script>

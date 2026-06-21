@@ -21,7 +21,7 @@ desktop/frontend/
     │   ├── VideoPlayer.vue    # 视频播放器
     │   ├── ControlPanel.vue   # 控制面板（含直线修正开关）
     │   ├── StatusBar.vue      # 状态栏
-    │   └── SpeedDashboard.vue # 测速仪表盘（4模块）
+    │   ├── SpeedDashboard.vue # 测速仪表盘（2模块：当前速度 cm/s、轮子转速 RPM）
     └── composables/
         ├── useWebSocket.ts   # WebSocket + 测速数据
         ├── useKeyboard.ts   # 键盘控制
@@ -37,7 +37,7 @@ desktop/frontend/
 | 修改视频显示 | `src/components/VideoPlayer.vue` | 实时视频 |
 | 修改控制面板 | `src/components/ControlPanel.vue` | WASD + 速度调节 + 三态行走模式 + BLE 扫描 |
 | 修改状态栏 | `src/components/StatusBar.vue` | 连接状态 |
-| 修改测速显示 | `src/components/SpeedDashboard.vue` | 4模块：当前/最高/平均速度+运行信息 |
+| 修改测速显示 | `src/components/SpeedDashboard.vue` | 2模块：当前车轮速度 cm/s、轮子转速 RPM |
 | 修改 WebSocket | `src/composables/useWebSocket.ts` | 连接管理+测速数据解析 |
 | 修改键盘控制 | `src/composables/useKeyboard.ts` | 键盘映射 |
 | 修改样式 | `src/style.css` | TailwindCSS 自定义 |
@@ -71,19 +71,19 @@ desktop/frontend/
 ### VideoPlayer
 - **Props**: 无
 - **Emits**: 无
-- **State**: `videoSrc`, `fps`, `isConnected`
-- **Features**: 视频显示、FPS 计算、截图
+- **State**: `videoSrc`, `videoFps`, `renderFps`, `isConnected`
+- **Features**: 视频显示、RAF 节流渲染（`requestAnimationFrame`）、videoFps/renderFps 双计数、截图
 
 ### ControlPanel
 - **Props**: 无
-- **Emits**: `command`, `speed`
 - **State**: `activeKeys`, `currentSpeed` (0-255 PWM), `logs`, `driveMode`
-- **Features**: WASD 控制、速度调节（0-255 PWM）、三态行走模式（普通/直线/锁定）、BLE 扫描、系统日志
+- **Features**: WASD 控制、速度调节（0-255 PWM，200ms 防抖）、三态行走模式（普通/直线/锁定）、BLE 扫描、系统日志
+- **注意**：只读使用 `useWebSocket`（发送命令/速度/模式、读取连接状态与串口列表），不管理 WebSocket 连接生命周期；`connect()`/`disconnect()` 仅用于串口
 
 ### SpeedDashboard
 - **Props**: 无（从 useWebSocket 获取测速数据）
-- **State**: `maxLeftSpeed`, `maxRightSpeed`, `commandCount`, `runTimeSeconds`
-- **Features**: 4个测速模块、实时速度显示、最高速度记录、平均速度、航向角、运行时长
+- **State**: `leftSpeedCm`, `rightSpeedCm`, `leftRpm`, `rightRpm`
+- **Features**: 2个测速模块（当前车轮速度 cm/s、轮子转速 RPM），RPM 由 mm/s 按轮径 65mm 实时换算
 
 ### StatusBar
 - **Props**: 无
@@ -124,8 +124,11 @@ bun run preview      # 预览生产构建
 - **智能修正**：通过 WebSocket 发送 `drive_mode` 命令切换
 - **响应式**：全屏100vh布局，右侧面板含控制+测速模块
 - **主题**：深色模式，使用 `dark-` 颜色系列
-- **WebSocket 单管理员模式**：`useWebSocket(owner = false)` — 只有 `owner=true` 的调用者（App.vue）才能执行 `connect()`/`disconnect()`，其他组件只消费状态。防止多组件卸载时意外断开全局连接。
-- **重连保护**：`disconnect()` 设置 `shouldReconnect = false` 后再关闭 socket，阻止 `onclose` handler 自动重连。
+- **WebSocket 连接管理**：`App.vue` 是 WebSocket owner，在 `onMounted`/`onUnmounted` 中统一调用 `connect()`/`disconnect()`；`ControlPanel.vue` 等组件只读使用 `useWebSocket`（发送命令/速度/模式、读取连接状态与串口列表），不管理连接生命周期
+- **重连保护**：`disconnect()` 设置 `shouldReconnect = false` 后再关闭 socket，阻止 `onclose` handler 自动重连；自动重连使用指数退避（1s→30s），最大 10 次
+- **心跳**：前端 30 秒发送一次 heartbeat，90 秒未收到后端响应判定超时并主动关闭连接
+- **SpeedDashboard**：2 个模块（当前车轮速度 cm/s、轮子转速 RPM），RPM 由 mm/s 按轮径 65mm 实时换算
+- **useStatus**：保留，作为 WS `status` 消息消费包装，未删除
 
 ## 近期修复记录
 

@@ -35,11 +35,8 @@ export function useApi() {
    * @throws 网络错误、超时、HTTP 错误或 JSON 解析错误时抛出异常
    */
   const request = async <T = ApiResponse>(url: string, options?: RequestInit & { timeout?: number }): Promise<T> => {
-    // 认证校验：优先使用环境变量，否则使用默认 Token
+    // 认证：优先使用环境变量，否则使用默认 Token
     const token = (import.meta.env.VITE_API_TOKEN as string | undefined) || DEFAULT_API_TOKEN
-    if (!token) {
-      throw new Error('VITE_API_TOKEN 未配置，请在 .env 文件中设置后刷新页面')
-    }
 
     // 默认 headers：认证 + 仅在有请求体时设置 Content-Type
     const defaultHeaders: Record<string, string> = {
@@ -49,10 +46,10 @@ export function useApi() {
       defaultHeaders['Content-Type'] = 'application/json'
     }
 
-    // 深度合并 headers：默认 headers 在前，调用方 headers 在后（可覆盖）
-    const mergedHeaders: Record<string, string> = {
-      ...defaultHeaders,
-      ...(options?.headers as Record<string, string> | undefined),
+    // 合并 headers：默认 headers 在前，调用方 headers 在后（可覆盖）
+    const mergedHeaders = new Headers(defaultHeaders)
+    for (const [k, v] of new Headers(options?.headers)) {
+      mergedHeaders.set(k, v)
     }
 
     // 超时控制：默认 10 秒，调用方可通过 options.timeout 覆盖
@@ -81,12 +78,6 @@ export function useApi() {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`)
     }
 
-    // 处理空响应体（如 204 No Content）：返回空对象
-    const contentLength = response.headers.get('content-length')
-    if (response.status === 204 || contentLength === '0') {
-      return {} as T
-    }
-
     // JSON 解析错误处理：避免后端返回非 JSON 时直接抛出 SyntaxError
     const text = await response.text()
     if (!text.trim()) {
@@ -113,7 +104,7 @@ export function useApi() {
   const post = async <T = ApiResponse>(url: string, body?: unknown, timeout?: number): Promise<T> => {
     return request<T>(url, {
       method: 'POST',
-      body: body ? JSON.stringify(body) : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
       timeout,
     })
   }

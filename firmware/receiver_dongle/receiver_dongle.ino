@@ -17,7 +17,11 @@
  * 接收器 -> 车载: WiFi UDP
  * 摄像头 -> 接收器: WiFi UDP (视频帧)
  * 接收器 -> 电脑: USB 串口 (视频帧)
- * 
+ *
+ * 说明：
+ * - 接收器以 WiFi AP-only 模式运行，车载端/摄像头作为 STA 接入，
+ *   无需接收器连接外部网络。
+ *
  * 作者：智能车项目团队
  * 版本：2.1.0（修复 P0-04/P1-01/P1-04/P1-05/P1-14/P3-01/P3-13/P3-14/P3-15）
  * 日期：2026-06-20
@@ -65,8 +69,6 @@ struct VideoFrameBuffer {
 struct BleDeviceInfo {
     char name[32];          // 设备名称
     uint8_t mac[6];         // BLE MAC 地址（扫描到的广播地址）
-    uint8_t wifiMac[6];     // WiFi MAC 地址（从 Manufacturer Data 提取，保留兼容）
-    bool hasWifiMac;        // 是否包含 WiFi MAC
     int8_t rssi;            // 信号强度
     bool isValid;           // 是否有效
 };
@@ -86,14 +88,17 @@ struct BleScanResult {
 // ============================================
 VideoFrameBuffer g_videoBuffer;
 
-/// BLE 扫描是否正在进行
-bool g_bleScanning = false;
+/// BLE 扫描是否正在进行（可能在 BLE 回调中修改，使用 volatile）
+volatile bool g_bleScanning = false;
 
 /// BLE 扫描是否完成（非阻塞扫描模式下由回调置位）
 static volatile bool g_bleScanComplete = false;
 
 /// 上次收到车载 UDP 数据的时间戳（0 表示从未收到）
 static uint32_t g_lastCarDataTime = 0;
+
+/// 动态记录的车载端 IP（默认 0.0.0.0，表示未记录，回退到固定 CAR_IP）
+static IPAddress g_carIp;
 
 /// 上次发送链路状态的时间戳
 static uint32_t g_lastLinkStatus = 0;
@@ -105,10 +110,14 @@ static uint32_t g_serialBytesWritten = 0;
 static uint32_t g_lastCounterLogTime = 0;
 
 /// UDP 控制端口对象（接收器 -> 车载）
+/// 该 socket 仅用于发送控制包，本地端口不影响功能
 WiFiUDP g_udpControl;
 
 /// UDP 遥测端口对象（车载 -> 接收器）
 WiFiUDP g_udpTelemetry;
+
+/// UDP 视频端口对象（摄像头 -> 接收器）
+WiFiUDP g_udpVideo;
 
 /// 当前已连接 STA 数量（用于输出连接/断开日志）
 static uint8_t g_lastStationCount = 0;
@@ -121,31 +130,51 @@ static uint8_t g_lastStationCount = 0;
  * 从串口读取一个 WirelessPacket
  * 输入：packet 引用
  * 输出：true 表示成功读取并校验通过（magic/version/checksum）
- * 
+ *
  * 说明：串口协议已统一为二进制 WirelessPacket，与 UDP 控制载荷格式一致。
  *       读取字节数为 sizeof(WirelessPacket)（当前为 8 字节），由 packed 结构体决定。
- *       增加帧同步：逐字节扫描直到读到 MAGIC_BYTE 0xA5，再读取剩余字节。
+ *       增加帧同步：维护一个滑动窗口，找到 MAGIC_BYTE 后尝试解析；
+ *       若校验失败，仅丢弃当前 MAGIC_BYTE 而非整包，实现单字节重同步。
  */
 inline bool readSerialPacket(WirelessPacket& packet) {
-    while (Serial.available() > 0) {
-        // 窥视第一个字节，未确认完整包之前不消耗同步字节
-        const int first = Serial.peek();
-        if (first != static_cast<int>(WirelessConfig::MAGIC_BYTE)) {
-            Serial.read();  // 丢弃非同步字节
+    static uint8_t s_buf[sizeof(WirelessPacket)];
+    static size_t s_len = 0;
+
+    // 从串口填充缓冲区
+    while (s_len < sizeof(WirelessPacket) && Serial.available() > 0) {
+        s_buf[s_len++] = static_cast<uint8_t>(Serial.read());
+    }
+
+    while (s_len > 0) {
+        // 查找魔术字位置
+        size_t magicPos = 0;
+        while (magicPos < s_len && s_buf[magicPos] != WirelessConfig::MAGIC_BYTE) {
+            magicPos++;
+        }
+
+        // 丢弃魔术字之前的字节
+        if (magicPos > 0) {
+            memmove(s_buf, s_buf + magicPos, s_len - magicPos);
+            s_len -= magicPos;
             continue;
         }
 
-        if (Serial.available() < static_cast<int>(sizeof(WirelessPacket))) {
-            return false;  // 数据不足，等待下次轮询
+        // 数据不足，等待下次轮询
+        if (s_len < sizeof(WirelessPacket)) {
+            return false;
         }
 
-        uint8_t buffer[sizeof(WirelessPacket)];
-        if (Serial.readBytes(buffer, sizeof(WirelessPacket)) != sizeof(WirelessPacket)) {
-            return false;  // 读取异常，丢弃本次数据
+        memcpy(&packet, s_buf, sizeof(WirelessPacket));
+        if (validatePacket(packet)) {
+            // 消费完整数据包
+            memmove(s_buf, s_buf + sizeof(WirelessPacket), s_len - sizeof(WirelessPacket));
+            s_len -= sizeof(WirelessPacket);
+            return true;
         }
 
-        memcpy(&packet, buffer, sizeof(WirelessPacket));
-        return validatePacket(packet);
+        // 校验失败：只丢弃开头的魔术字，保留剩余字节继续同步
+        memmove(s_buf, s_buf + 1, s_len - 1);
+        s_len--;
     }
 
     return false;
@@ -157,9 +186,17 @@ inline bool readSerialPacket(WirelessPacket& packet) {
 
 /**
  * 转发二进制 WirelessPacket 到车载控制器（通过 UDP 控制端口）
+ * 优先使用从 telemetry 动态记录的车载端 IP，未记录时回退到固定 CAR_IP。
  */
 inline void forwardToCar(const WirelessPacket& packet) {
-    IPAddress carIp(NetworkConfig::CAR_IP[0], NetworkConfig::CAR_IP[1], NetworkConfig::CAR_IP[2], NetworkConfig::CAR_IP[3]);
+    if (WiFi.softAPgetStationNum() == 0) {
+        return;  // 无 STA 连接，直接返回
+    }
+
+    IPAddress carIp = g_carIp;
+    if (carIp == IPAddress(0, 0, 0, 0)) {
+        carIp = IPAddress(NetworkConfig::CAR_IP[0], NetworkConfig::CAR_IP[1], NetworkConfig::CAR_IP[2], NetworkConfig::CAR_IP[3]);
+    }
     g_udpControl.beginPacket(carIp, UdpConfig::CONTROL_PORT);
     g_udpControl.write(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
     if (!g_udpControl.endPacket()) {
@@ -205,20 +242,6 @@ public:
         memcpy(dev.mac, mac, 6);
         dev.rssi = advertisedDevice.getRSSI();
         dev.isValid = true;
-        dev.hasWifiMac = false;  // 默认无 WiFi MAC
-
-        // 尝试从 Manufacturer Data 提取 WiFi MAC（保留兼容）
-        // 车载 C6 广播格式: [Company ID 2字节=0xFFFF] + [WiFi MAC 6字节]
-        // NimBLE 的 getManufacturerData() 返回 Arduino String，非 std::string
-        if (advertisedDevice.haveManufacturerData()) {
-            String mfgData = advertisedDevice.getManufacturerData();
-            if (mfgData.length() >= 8) {
-                // 前 2 字节为 Company ID（应为 0xFF 0xFF），跳过
-                // 后 6 字节为 WiFi MAC
-                memcpy(dev.wifiMac, mfgData.c_str() + 2, 6);
-                dev.hasWifiMac = true;
-            }
-        }
 
         // 获取设备名称
         if (advertisedDevice.haveName()) {
@@ -275,15 +298,30 @@ void performBleScan() {
 }
 
 /**
- * 输出 JSON 字符串时对特殊字符进行转义
- * 目前处理：" 和 \
+ * 输出 JSON 字符串时对特殊字符进行完整转义
+ * 处理：" \\ \b \f \n \r \t 及控制字符 \u00xx
  */
 inline void printJsonEscaped(const char* str) {
     for (const char* p = str; *p != '\0'; ++p) {
-        if (*p == '"' || *p == '\\') {
-            Serial.print('\\');
+        const unsigned char c = static_cast<unsigned char>(*p);
+        switch (c) {
+            case '"':  Serial.print("\\\""); break;
+            case '\\': Serial.print("\\\\"); break;
+            case '\b': Serial.print("\\b");  break;
+            case '\f': Serial.print("\\f");  break;
+            case '\n': Serial.print("\\n");  break;
+            case '\r': Serial.print("\\r");  break;
+            case '\t': Serial.print("\\t");  break;
+            default:
+                if (c < 0x20) {
+                    char buf[7];
+                    snprintf(buf, sizeof(buf), "\\u%04x", c);
+                    Serial.print(buf);
+                } else {
+                    Serial.print(*p);
+                }
+                break;
         }
-        Serial.print(*p);
     }
 }
 
@@ -298,25 +336,17 @@ inline void sendBleScanResult() {
     g_bleScanComplete = false;
 
     // 输出 JSON 格式结果
-    // 格式: {"t":"ble","devices":[{"name":"xxx","mac":"AA:BB:CC:DD:EE:FF","rssi":-42,"wifi_mac":"AA:BB:CC:DD:EE:FF"},...]}
-    // wifi_mac 仅当设备广播了 Manufacturer Data 且包含 WiFi MAC 时才会出现
+    // 格式: {"t":"ble","devices":[{"name":"xxx","mac":"AA:BB:CC:DD:EE:FF","rssi":-42},...]}
     Serial.print("{\"t\":\"ble\",\"devices\":[");
     for (uint8_t i = 0; i < g_bleScanResult.count; i++) {
         if (i > 0) Serial.print(",");
         const BleDeviceInfo& dev = g_bleScanResult.devices[i];
         Serial.print("{\"name\":\"");
         printJsonEscaped(dev.name);
-        Serial.printf("\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"rssi\":%d",
+        Serial.printf("\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"rssi\":%d}",
                       dev.mac[0], dev.mac[1], dev.mac[2],
                       dev.mac[3], dev.mac[4], dev.mac[5],
                       dev.rssi);
-        // 如果有 WiFi MAC，追加到 JSON 中
-        if (dev.hasWifiMac) {
-            Serial.printf(",\"wifi_mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\"",
-                          dev.wifiMac[0], dev.wifiMac[1], dev.wifiMac[2],
-                          dev.wifiMac[3], dev.wifiMac[4], dev.wifiMac[5]);
-        }
-        Serial.print("}");
     }
     Serial.println("]}");
 
@@ -366,31 +396,32 @@ inline void sendLinkStatus() {
 // ============================================
 
 /**
- * 初始化视频缓冲区（静态数组无需动态分配）
- */
-inline void initVideoBuffer() {
-    g_videoBuffer.size = 0;
-    g_videoBuffer.isComplete = false;
-}
-
-/**
  * 处理视频包
+ * 按字节偏移解析 10 字节头部，不依赖固定 139 字节的 VideoPacket 结构体布局。
+ * 返回 true 表示成功处理一个有效视频包。
  */
-inline void handleVideoPacket(const uint8_t* data, int len) {
+inline bool handleVideoPacket(const uint8_t* data, int len) {
     // VideoPacket 最小长度：10字节头部 + 1字节数据 + 1字节校验和 = 12字节
-    if (len < 12) return;
+    if (len < 12) return false;
 
-    const VideoPacket* packet = reinterpret_cast<const VideoPacket*>(data);
+    // 按字节偏移解析头部（小端 uint16）
+    const uint8_t magic = data[0];
+    const uint8_t version = data[1];
+    const uint16_t frameId = static_cast<uint16_t>(data[2]) | (static_cast<uint16_t>(data[3]) << 8);
+    const uint16_t packetId = static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
+    const uint16_t totalPackets = static_cast<uint16_t>(data[6]) | (static_cast<uint16_t>(data[7]) << 8);
+    const uint16_t dataLen = static_cast<uint16_t>(data[8]) | (static_cast<uint16_t>(data[9]) << 8);
+
     // 严格校验视频包魔术字和版本，防止误判
-    if (packet->magic != StreamConfig::VIDEO_MAGIC ||
-        packet->version != StreamConfig::PROTOCOL_VERSION) return;
+    if (magic != StreamConfig::VIDEO_MAGIC ||
+        version != StreamConfig::PROTOCOL_VERSION) return false;
     // 校验 dataLen 边界，防止缓冲区溢出
-    if (packet->dataLen > StreamConfig::MAX_PACKET_SIZE) return;
+    if (dataLen > StreamConfig::MAX_PACKET_SIZE) return false;
     // 校验 dataLen 与实际接收长度 len 的一致性
     // 发送大小 = 10 (header) + dataLen + 1 (checksum) = 11 + dataLen
     // 若 dataLen + 11 > len，说明 dataLen 超过实际数据长度（损坏/篡改包），
     // 后续 memcpy 会读取越界，必须提前拒绝
-    if (static_cast<int>(packet->dataLen) + 11 > len) return;
+    if (static_cast<int>(dataLen) + 11 > len) return false;
 
     // 按实际接收长度计算并验证校验和（校验和为最后一个字节）
     uint8_t checksum = 0;
@@ -398,51 +429,51 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
         checksum += data[i];
     }
     if (checksum != data[len - 1]) {
-        return;  // 校验失败，丢弃该包
+        return false;  // 校验失败，丢弃该包
     }
 
     // 校验通过，统计接收到的视频包
     g_videoPacketsReceived++;
 
     // 包序号/总数合法性检查
-    if (packet->totalPackets == 0 || packet->packetId >= packet->totalPackets) {
+    if (totalPackets == 0 || packetId >= totalPackets) {
         g_videoBuffer.size = 0;
         g_videoBuffer.packetsReceived = 0;
         g_videoBuffer.isComplete = false;
-        return;
+        return false;
     }
 
     // 新帧开始
-    if (packet->packetId == 0) {
+    if (packetId == 0) {
         g_videoBuffer.size = 0;
-        g_videoBuffer.frameId = packet->frameId;
-        g_videoBuffer.totalPackets = packet->totalPackets;
+        g_videoBuffer.frameId = frameId;
+        g_videoBuffer.totalPackets = totalPackets;
         g_videoBuffer.packetsReceived = 0;
         g_videoBuffer.isComplete = false;
     }
 
     // 帧序号、总包数或包顺序异常：丢弃当前帧
-    if (packet->frameId != g_videoBuffer.frameId ||
-        packet->totalPackets != g_videoBuffer.totalPackets ||
-        packet->packetId != g_videoBuffer.packetsReceived) {
+    if (frameId != g_videoBuffer.frameId ||
+        totalPackets != g_videoBuffer.totalPackets ||
+        packetId != g_videoBuffer.packetsReceived) {
         g_videoBuffer.size = 0;
         g_videoBuffer.packetsReceived = 0;
         g_videoBuffer.isComplete = false;
-        return;
+        return false;
     }
 
     // 追加数据（帧缓冲区溢出保护）
     // 安全检查：如果当前数据写入会超出缓冲区边界，
     // 丢弃当前帧并重置缓冲区，防止内存越界写入
-    if (g_videoBuffer.size + packet->dataLen > g_videoBuffer.capacity) {
+    if (g_videoBuffer.size + dataLen > g_videoBuffer.capacity) {
         // 缓冲区溢出，丢弃当前帧，重置状态
         g_videoBuffer.size = 0;
         g_videoBuffer.packetsReceived = 0;
         g_videoBuffer.isComplete = false;
-        return;
+        return false;
     }
-    memcpy(g_videoBuffer.data + g_videoBuffer.size, packet->data, packet->dataLen);
-    g_videoBuffer.size += packet->dataLen;
+    memcpy(g_videoBuffer.data + g_videoBuffer.size, data + 10, dataLen);
+    g_videoBuffer.size += dataLen;
     g_videoBuffer.packetsReceived++;
 
     // 检查帧是否完整
@@ -450,12 +481,13 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
         g_videoBuffer.isComplete = true;
 
         // 通过USB串口发送完整帧
-        // 格式: [0xAA][0x55][帧大小(4字节)][帧数据]
+        // 格式: [0xAA][0x55][帧大小(4字节，小端)][帧数据]
         // 取消整帧缓冲空间检查，改为先写 6 字节帧头，再循环分块写出数据，
         // 避免 JPEG 帧因一次可用空间不足被整帧丢弃
         g_videoFramesForwarded++;
         const uint8_t header[] = {0xAA, 0x55};
         Serial.write(header, 2);
+        // 帧大小按小端字节序写入（ESP32 为小端架构）
         Serial.write(reinterpret_cast<const uint8_t*>(&g_videoBuffer.size), 4);
         g_serialBytesWritten += 6;
 
@@ -487,6 +519,8 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
         g_videoBuffer.size = 0;
         g_videoBuffer.packetsReceived = 0;
     }
+
+    return true;
 }
 
 // ============================================
@@ -494,26 +528,21 @@ inline void handleVideoPacket(const uint8_t* data, int len) {
 // ============================================
 
 /**
- * 处理来自车载端的 UDP 遥测数据
- * 包括视频分包和里程计数据
+ * 处理来自车载端的 UDP 遥测数据（仅里程计，视频已移至独立 VIDEO_PORT）
  */
 void handleTelemetryPacket() {
     int len = g_udpTelemetry.parsePacket();
     if (len <= 0) return;
 
     uint8_t buf[256];
+    // 超大包丢弃而非截断：清空 UDP 当前包并返回
     if (len > static_cast<int>(sizeof(buf))) {
-        len = sizeof(buf);
-    }
-    g_udpTelemetry.read(buf, len);
-
-    // 视频包：最小 12 字节，且头部匹配视频魔术字与版本
-    if (len >= 12 && buf[0] == StreamConfig::VIDEO_MAGIC &&
-        buf[1] == StreamConfig::PROTOCOL_VERSION) {
-        g_lastCarDataTime = millis();
-        handleVideoPacket(buf, len);
+        while (g_udpTelemetry.available() > 0) {
+            g_udpTelemetry.read(buf, sizeof(buf));
+        }
         return;
     }
+    g_udpTelemetry.read(buf, len);
 
     // 里程计包
     if (len >= static_cast<int>(sizeof(OdometryPacket))) {
@@ -531,6 +560,8 @@ void handleTelemetryPacket() {
                 return;  // 校验失败，丢弃遥测包
             }
 
+            // 收到有效车载遥测数据，动态记录车载端 IP
+            g_carIp = g_udpTelemetry.remoteIP();
             g_lastCarDataTime = millis();
             Serial.printf("{\"t\":\"odom\",\"ls\":%d,\"rs\":%d,\"hd\":%d,\"dist\":%u}\n",
                          odomPacket->leftSpeedMmps,
@@ -542,6 +573,30 @@ void handleTelemetryPacket() {
     }
 
     Serial.printf("[UDP] 收到未知遥测包，长度: %d\n", len);
+}
+
+/**
+ * 处理来自摄像头的 UDP 视频数据（独立 VIDEO_PORT）
+ */
+void handleVideoUdp() {
+    int len = g_udpVideo.parsePacket();
+    if (len <= 0) return;
+
+    uint8_t buf[256];
+    // 超大包丢弃而非截断：清空 UDP 当前包并返回
+    if (len > static_cast<int>(sizeof(buf))) {
+        while (g_udpVideo.available() > 0) {
+            g_udpVideo.read(buf, sizeof(buf));
+        }
+        return;
+    }
+    g_udpVideo.read(buf, len);
+
+    if (handleVideoPacket(buf, len)) {
+        // 有效视频包也来自车载端，动态记录 IP
+        g_carIp = g_udpVideo.remoteIP();
+        g_lastCarDataTime = millis();
+    }
 }
 
 // ============================================
@@ -558,10 +613,11 @@ void setup() {
     Serial.println("版本: 2.1.0");
     Serial.println("================================\n");
     
-    // 配置 WiFi AP 模式
+    // AP-only 模式：本设备作为 Soft-AP，等待车载端 STA 接入
     WiFi.mode(WIFI_AP);
     IPAddress apIp(NetworkConfig::AP_IP[0], NetworkConfig::AP_IP[1], NetworkConfig::AP_IP[2], NetworkConfig::AP_IP[3]);
-    IPAddress gateway(NetworkConfig::GATEWAY[0], NetworkConfig::GATEWAY[1], NetworkConfig::GATEWAY[2], NetworkConfig::GATEWAY[3]);
+    // 网关复用 AP_IP（AP-only 模式下二者相同）
+    IPAddress gateway(NetworkConfig::AP_IP[0], NetworkConfig::AP_IP[1], NetworkConfig::AP_IP[2], NetworkConfig::AP_IP[3]);
     IPAddress subnet(NetworkConfig::SUBNET[0], NetworkConfig::SUBNET[1], NetworkConfig::SUBNET[2], NetworkConfig::SUBNET[3]);
     WiFi.softAPConfig(apIp, gateway, subnet);
     if (!WiFi.softAP(NetworkConfig::AP_SSID, NetworkConfig::AP_PASSWORD)) {
@@ -576,8 +632,9 @@ void setup() {
     // 启动 UDP 服务器
     g_udpControl.begin(UdpConfig::CONTROL_PORT);
     g_udpTelemetry.begin(UdpConfig::TELEMETRY_PORT);
-    Serial.printf("[UDP] 控制端口 %d，遥测端口 %d 已启动\n",
-                  UdpConfig::CONTROL_PORT, UdpConfig::TELEMETRY_PORT);
+    g_udpVideo.begin(UdpConfig::VIDEO_PORT);
+    Serial.printf("[UDP] 控制端口 %d，遥测端口 %d，视频端口 %d 已启动\n",
+                  UdpConfig::CONTROL_PORT, UdpConfig::TELEMETRY_PORT, UdpConfig::VIDEO_PORT);
     
     // 打印 MAC 地址（优先使用 AP MAC）
     String mac = WiFi.softAPmacAddress();
@@ -589,10 +646,9 @@ void setup() {
     
     // 初始化 BLE（扫描前只需初始化一次）
     BLEDevice::init("智能车");
-    
-    // 初始化视频缓冲区
-    initVideoBuffer();
-    
+
+    // 视频缓冲区 g_videoBuffer 为全局静态对象，构造函数已完成初始化
+
     Serial.println("[初始化] 接收器就绪，等待命令...");
     Serial.println("[命令格式] 串口输入已统一为二进制 WirelessPacket");
 }
@@ -604,7 +660,7 @@ void setup() {
 void loop() {
     // 1. 处理串口输入（二进制 WirelessPacket）
     if (Serial.available() >= static_cast<int>(sizeof(WirelessPacket))) {
-        WirelessPacket packet;
+        WirelessPacket packet{};  // aggregate initialization，删除构造函数后的调用方式
         if (readSerialPacket(packet)) {
             // 本地命令：不转发到车载端
             if (packet.type == CommandType::BLE_SCAN) {
@@ -617,9 +673,12 @@ void loop() {
             }
         }
     }
-    
-    // 2. 处理车载 UDP 遥测数据
+
+    // 2. 处理车载 UDP 遥测数据（里程计）
     handleTelemetryPacket();
+
+    // 2.1 处理车载 UDP 视频数据（独立 VIDEO_PORT）
+    handleVideoUdp();
 
     // 2.5 输出非阻塞 BLE 扫描结果（如有）
     sendBleScanResult();
