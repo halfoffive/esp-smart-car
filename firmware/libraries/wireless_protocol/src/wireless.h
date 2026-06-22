@@ -98,10 +98,10 @@ namespace StreamConfig {
     constexpr uint8_t VIDEO_MAGIC = 0xA6;       // 视频帧魔术字
     constexpr uint8_t PROTOCOL_VERSION = 1;   // 协议版本
     constexpr uint8_t MAX_PACKET_SIZE = 128;   // 每包最大数据量
-    constexpr uint16_t TARGET_FPS = 30;       // 目标帧率
+    constexpr uint16_t TARGET_FPS = 12;       // 目标帧率（12 FPS 稳定传输，每帧 ~83ms 充裕发送窗口）
     constexpr uint32_t FRAME_INTERVAL = 1000 / TARGET_FPS; // 帧间隔
-    constexpr uint8_t JPEG_QUALITY_MIN = 5;   // 最小JPEG质量
-    constexpr uint8_t JPEG_QUALITY_MAX = 50;  // 最大JPEG质量
+    constexpr uint8_t JPEG_QUALITY_MIN = 12;  // 最小压缩值=最高质量（范围收窄，防质量振荡→FB-OVF）
+    constexpr uint8_t JPEG_QUALITY_MAX = 35;  // 最大压缩值=最低质量（范围收窄，防极端低质量像素块）
 }
 
 namespace UdpConfig {

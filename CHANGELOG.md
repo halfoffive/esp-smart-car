@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 12FPS 稳定视频传输（FB-OVF 消除 + 渐进阻尼质量 + 无像素块）
+
+- `firmware/libraries/wireless_protocol/src/wireless.h` — `TARGET_FPS` 30→12（`FRAME_INTERVAL`=83ms，每帧充裕发送窗口）；`JPEG_QUALITY` 范围收窄：[5,50]→[12,35]
+- `firmware/car_controller/camera_config.h` — `ImageQuality` 枚举对齐新范围（LOW=35/MEDIUM=22/HIGH=15/BEST=12）；`createDefaultConfig` 初始质量 50→22（~4KB/帧，无像素块）
+- `firmware/car_controller/video_stream.h` — `adjustQuality()` 重写为渐进阻尼（每步 ±2，目标 2.5-5KB），根除质量二值振荡（5↔50）导致的 FB-OVF 与像素块交替
+- `firmware/car_controller/car_controller.ino` — 对接新 `adjustQuality(frameSize, currentQuality)` 双参数接口
+
 ### WiFi 稳定性 + 视频帧率修复
 
 - `firmware/car_controller/car_controller.ino` — `setup()` 新增 `WiFi.setSleep(false)` 禁用省电模式，防止空闲断开

@@ -58,6 +58,8 @@ inline uint8_t g_consecutiveFailures = 0;
 extern WiFiUDP g_udpTelemetry;
 /// 连续失败超过此阈值时重启摄像头
 constexpr uint8_t CAMERA_RESTART_THRESHOLD = 10;
+/// 当前 JPEG 压缩值（供 adjustQuality 渐进调整，初始与 camera_config.h 默认值对齐）
+inline uint8_t g_currentQuality = 22;
 
 // ============================================
 // 纯函数：帧处理
@@ -120,18 +122,31 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
 }
 
 /**
- * 纯函数：动态调整质量
- * 根据网络状况调整JPEG质量
+ * 纯函数：渐进阻尼质量调整
+ * 根据帧大小缓慢调整 JPEG 压缩值，避免质量二值振荡 → FB-OVF / 像素块
+ * 目标：160x120 下每帧控制在 2500-5000 字节，12 FPS 稳定传输
+ * 
+ * 注意：ESP32 摄像头驱动中压缩值越小 = 质量越高 = 帧越大
  */
-inline uint8_t adjustQuality(const uint32_t frameSize) {
-    // 目标：在 160x120 分辨率下把单帧控制在 2KB 左右，缓解 921600 串口带宽瓶颈
-    if (frameSize > 2300) {
-        return StreamConfig::JPEG_QUALITY_MAX; // 帧过大，继续加压
+inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQuality) {
+    constexpr uint32_t TARGET_MAX = 5000;  // 帧过大则加压（提高压缩值，缩小帧）
+    constexpr uint32_t TARGET_MIN = 2500;  // 帧过小则减压（降低压缩值，提升质量）
+    constexpr uint8_t STEP = 2;             // 每步调整量（渐进，防止剧烈振荡）
+
+    if (frameSize > TARGET_MAX) {
+        // 帧过大：提高压缩值（向 QUALITY_MAX 方向），每步 +STEP
+        return (currentQuality < StreamConfig::JPEG_QUALITY_MAX - STEP)
+                   ? currentQuality + STEP
+                   : StreamConfig::JPEG_QUALITY_MAX;
     }
-    if (frameSize < 1700) {
-        return StreamConfig::JPEG_QUALITY_MIN; // 帧很小，可适当提升质量
+    if (frameSize < TARGET_MIN) {
+        // 帧过小：降低压缩值（向 QUALITY_MIN 方向），每步 -STEP
+        return (currentQuality > StreamConfig::JPEG_QUALITY_MIN + STEP)
+                   ? currentQuality - STEP
+                   : StreamConfig::JPEG_QUALITY_MIN;
     }
-    return 30; // 默认质量
+    // 帧大小在目标区间内，保持当前质量
+    return currentQuality;
 }
 
 // ============================================

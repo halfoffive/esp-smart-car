@@ -18,7 +18,7 @@
  * - 右编码器: GPIO2（中断引脚）
  * 
  * 作者：智能车项目团队
- * 版本：1.9.2（修复 WiFi 稳定性 + FB-OVF 双缓冲 + 帧率优化）
+ * 版本：1.9.3（12FPS 稳定传输：调整目标帧率+渐进阻尼质量+FB-OVF 消除）
  * 日期：2026-06-20
  */
 
@@ -32,7 +32,7 @@
 #include "video_stream.h"
 
 // 版本常量（统一 car_controller / video_stream / camera_config 的对外版本号）
-constexpr const char* VERSION = "1.9.2";
+constexpr const char* VERSION = "1.9.3";
 
 // UDP 套接字（video_stream.h 中通过 extern 声明，在同一 sketch 中定义即可）
 WiFiUDP g_udpControl;
@@ -427,11 +427,11 @@ bool captureAndSendVideoFrame() {
   const size_t cachedFrameSize = frame.frameSize;  // frameSize 是栈值，释放帧后仍可读
   releaseFrame(frame);
 
-  // 动态调整质量（根据帧大小自适应压缩率）—— 在释放帧后访问 sensor，避免与摄像头 DMA 竞争
-  const uint8_t newQuality = adjustQuality(cachedFrameSize);
+  // 动态调整质量（渐进阻尼，每步 ±2，稳定在质量 12-35 区间）
+  g_currentQuality = adjustQuality(cachedFrameSize, g_currentQuality);
   sensor_t* sensor = esp_camera_sensor_get();
   if (sensor != NULL) {
-    sensor->set_quality(sensor, newQuality);
+    sensor->set_quality(sensor, g_currentQuality);
   }
 
   // 每100帧打印一次统计
