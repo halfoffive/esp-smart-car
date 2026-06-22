@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `firmware/car_controller/car_controller.ino` — `captureAndSendVideoFrame()` 新增 WiFi 连接守卫（`WiFi.status() != WL_CONNECTED` 直接跳过），避免 lwIP socket 未就绪时 beginPacket/endPacket → StoreProhibited
 - `firmware/car_controller/car_controller.ino` — `adjustQuality()` / `sensor->set_quality()` 移至 `releaseFrame()` 之后执行，消除持帧期间 I2C 访问 sensor 与摄像头 DMA 的竞争
 - `firmware/car_controller/car_controller.ino` — `sendOdometryData()` 新增 WiFi 连接守卫（`WiFi.status() != WL_CONNECTED` 直接返回），避免每 100ms 无条件调用 `beginPacket`/`endPacket` → StoreProhibited（**崩溃根因**）
+- `firmware/car_controller/odometer.h` — `initializeOdometer()` 移除 `noInterrupts()`/`interrupts()` 包裹。ESP32-S3 上 `attachInterrupt()` 配置 GPIO 中断矩阵耗时较长，在关中断下导致 CPU1 IWDT 超时 panic。ISR 仅做原子自增，无数据破坏风险；新增初始化日志便于追踪
 
 ### build.rs 自动构建前端
 

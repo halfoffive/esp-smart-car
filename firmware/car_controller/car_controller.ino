@@ -18,7 +18,7 @@
  * - 右编码器: GPIO2（中断引脚）
  * 
  * 作者：智能车项目团队
- * 版本：1.9.0（Task 6 跨文件同步：UDP 错误包处理、WiFi 非阻塞+指数退避、视频端口分离、版本统一）
+ * 版本：1.9.1（修复 sendOdometryData WiFi 守卫 + initializeOdometer IWDT 超时）
  * 日期：2026-06-20
  */
 
@@ -32,7 +32,7 @@
 #include "video_stream.h"
 
 // 版本常量（统一 car_controller / video_stream / camera_config 的对外版本号）
-constexpr const char* VERSION = "1.9.0";
+constexpr const char* VERSION = "1.9.1";
 
 // UDP 套接字（video_stream.h 中通过 extern 声明，在同一 sketch 中定义即可）
 WiFiUDP g_udpControl;

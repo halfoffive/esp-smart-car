@@ -174,8 +174,9 @@ inline void initializeOdometer() {
     pinMode(OdometerConfig::LEFT_ENCODER_PIN, INPUT_PULLUP);
     pinMode(OdometerConfig::RIGHT_ENCODER_PIN, INPUT_PULLUP);
 
-    // 先关中断、清零所有状态和标志，再 attach 中断，防止启动瞬间的脉冲计入旧状态
-    noInterrupts();
+    // 在 attach 中断前清零所有状态（ISR 仅做原子自增，即使立即触发也无数据破坏风险）
+    // 注意：不再使用 noInterrupts()/interrupts()——ESP32-S3 上 attachInterrupt 内部
+    // 配置 GPIO 中断矩阵可能耗时较长（>300ms），在关中断下会导致 IWDT 超时 panic
     OdometerState::g_leftPulses = 0;
     OdometerState::g_rightPulses = 0;
     OdometerState::g_lastLeftPulses = 0;
@@ -195,7 +196,8 @@ inline void initializeOdometer() {
                     onLeftEncoderPulse, FALLING);
     attachInterrupt(digitalPinToInterrupt(OdometerConfig::RIGHT_ENCODER_PIN),
                     onRightEncoderPulse, FALLING);
-    interrupts();
+
+    Serial.println("[测速模块] 初始化完成（编码器中断已挂载）");
 }
 
 // ============================================
