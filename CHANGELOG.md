@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `firmware/car_controller/camera_config.h` — XCLK 频率从 10MHz 恢复为 20MHz（Freenove FNK0085 必须值；10MHz 导致摄像头 DMA/中断野指针 → StoreProhibited）
 - `firmware/car_controller/car_controller.ino` — `captureAndSendVideoFrame()` 新增 WiFi 连接守卫（`WiFi.status() != WL_CONNECTED` 直接跳过），避免 lwIP socket 未就绪时 beginPacket/endPacket → StoreProhibited
 - `firmware/car_controller/car_controller.ino` — `adjustQuality()` / `sensor->set_quality()` 移至 `releaseFrame()` 之后执行，消除持帧期间 I2C 访问 sensor 与摄像头 DMA 的竞争
+- `firmware/car_controller/car_controller.ino` — `sendOdometryData()` 新增 WiFi 连接守卫（`WiFi.status() != WL_CONNECTED` 直接返回），避免每 100ms 无条件调用 `beginPacket`/`endPacket` → StoreProhibited（**崩溃根因**）
 
 ### build.rs 自动构建前端
 

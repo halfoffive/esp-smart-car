@@ -168,6 +168,7 @@ Key connections:
 - **XCLK 频率回归** — `camera_config.h` `xclk_freq_hz` 从 10MHz 恢复为 20MHz。Freenove FNK0085 必须 20MHz XCLK；10MHz 导致摄像头 DMA/中断时序异常，驱动内部操作野指针 → StoreProhibited。
 - **WiFi 连接守卫** — `car_controller.ino` `captureAndSendVideoFrame()` 开头新增 `WiFi.status() != WL_CONNECTED` 检查，跳过视频发送。WiFi 未连接时 `beginPacket`/`endPacket` 底层 lwIP socket 未就绪，写入 NULL → StoreProhibited。
 - **sensor 访问时机** — `car_controller.ino` 将 `adjustQuality()` / `sensor->set_quality()` 移至 `releaseFrame()` 之后，消除持帧期 I2C 访问 sensor 与摄像头 DMA 的竞争。
+- **测速 WiFi 守卫（根因）** — `car_controller.ino` `sendOdometryData()` 新增 `WiFi.status() != WL_CONNECTED` 守卫。`loop()` 中每 100ms 无条件调用 `g_udpTelemetry.beginPacket()`/`endPacket()`，WiFi 未连接时 lwIP socket 未就绪 → StoreProhibited。
 
 ### 2026-06-20 - Karpathy 指南审计修复
 
