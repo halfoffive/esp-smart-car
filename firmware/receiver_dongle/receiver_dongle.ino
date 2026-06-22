@@ -40,7 +40,7 @@ namespace ReceiverConfig {
     constexpr uint32_t SERIAL_BAUD = 921600;   // 串口波特率（高速传输）
     constexpr uint32_t BUFFER_SIZE = 32768;    // 缓冲区大小（32KB，匹配后端帧上限）
     constexpr uint32_t LINK_STATUS_INTERVAL = 5000; // 链路状态上报间隔（5秒）
-    constexpr uint32_t MAX_SERIAL_WRITE_WAIT_MS = 100; // 串口写入最大等待时间（毫秒）
+    constexpr uint32_t MAX_SERIAL_WRITE_WAIT_MS = 30; // 串口写出保底超时（毫秒，批量写出路径不触发）
 }
 
 // ============================================
@@ -482,8 +482,7 @@ inline bool handleVideoPacket(const uint8_t* data, int len) {
 
         // 通过USB串口发送完整帧
         // 格式: [0xAA][0x55][帧大小(4字节，小端)][帧数据]
-        // 取消整帧缓冲空间检查，改为先写 6 字节帧头，再循环分块写出数据，
-        // 避免 JPEG 帧因一次可用空间不足被整帧丢弃
+        // 使用批量 write 一次性写入帧头+数据，USB-CDC 内部缓冲 ~64KB，无需轮询 availableForWrite
         g_videoFramesForwarded++;
         const uint8_t header[] = {0xAA, 0x55};
         Serial.write(header, 2);
@@ -491,28 +490,11 @@ inline bool handleVideoPacket(const uint8_t* data, int len) {
         Serial.write(reinterpret_cast<const uint8_t*>(&g_videoBuffer.size), 4);
         g_serialBytesWritten += 6;
 
-        // 分块写出帧数据，限制最大等待时间，避免主循环长期阻塞导致 UDP 丢包
-        size_t remaining = g_videoBuffer.size;
-        const uint8_t* ptr = g_videoBuffer.data;
-        const uint32_t writeStartMs = millis();
-        while (remaining > 0) {
-            if (millis() - writeStartMs > ReceiverConfig::MAX_SERIAL_WRITE_WAIT_MS) {
-                Serial.printf("[视频] 串口写入等待超时，放弃剩余 %u 字节\n", remaining);
-                break;
-            }
-            const int avail = Serial.availableForWrite();
-            if (avail <= 0) {
-                delay(1);
-                continue;
-            }
-            const size_t chunk = min(remaining, static_cast<size_t>(avail));
-            const size_t written = Serial.write(ptr, chunk);
-            if (written == 0) {
-                break;  // 写入异常，放弃剩余数据
-            }
-            g_serialBytesWritten += written;
-            ptr += written;
-            remaining -= written;
+        // 批量写出帧数据（非阻塞：USB-CDC 缓冲足够容纳 2-4KB 帧，无需分块轮询）
+        const size_t written = Serial.write(g_videoBuffer.data, g_videoBuffer.size);
+        g_serialBytesWritten += written;
+        if (written < g_videoBuffer.size) {
+            Serial.printf("[视频] 批量写出不完整: %u/%u 字节\n", written, g_videoBuffer.size);
         }
 
         g_videoBuffer.isComplete = false;

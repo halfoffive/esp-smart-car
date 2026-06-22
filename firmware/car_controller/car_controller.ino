@@ -18,7 +18,7 @@
  * - 右编码器: GPIO2（中断引脚）
  * 
  * 作者：智能车项目团队
- * 版本：1.9.3（12FPS 稳定传输：调整目标帧率+渐进阻尼质量+FB-OVF 消除）
+ * 版本：1.9.4（2s延时消除：C6批量写+S3 WiFi稳定期+测速初始化修正）
  * 日期：2026-06-20
  */
 
@@ -32,7 +32,7 @@
 #include "video_stream.h"
 
 // 版本常量（统一 car_controller / video_stream / camera_config 的对外版本号）
-constexpr const char* VERSION = "1.9.3";
+constexpr const char* VERSION = "1.9.4";
 
 // UDP 套接字（video_stream.h 中通过 extern 声明，在同一 sketch 中定义即可）
 WiFiUDP g_udpControl;
@@ -96,6 +96,7 @@ constexpr uint16_t ODOMETRY_REPORT_INTERVAL_MS = OdometerConfig::SAMPLE_PERIOD_M
  * 超过此时间未收到任何有效命令（运动/速度/心跳/行走模式）则自动停车
  */
 constexpr uint32_t COMMAND_TIMEOUT_MS = 1000;
+// 初始值 0 标记"未初始化"，setup() 末尾赋值为 millis()，避免首轮立即触发测速发送
 uint32_t g_lastOdomReportTime = 0;
 
 /**
@@ -522,14 +523,21 @@ void checkWiFiConnection() {
   // 仅监测 WiFi 状态变化，不主动重连。
   // ESP32 WiFi 栈内部自动处理重连，手动 reconnect() 反而强制重置导致断连循环。
   static bool wasConnected = false;
+  static uint32_t connectedSince = 0;
   const bool isConnected = (WiFi.status() == WL_CONNECTED);
 
   if (isConnected && !wasConnected) {
     wasConnected = true;
+    connectedSince = millis();
     Serial.printf("[WiFi_STA] 已连接，IP: %s\n", WiFi.localIP().toString().c_str());
   } else if (!isConnected && wasConnected) {
     wasConnected = false;
     Serial.println("[WiFi_STA] 连接断开（等待自动重连...）");
+  }
+
+  // 首次连接后等待 200ms，让 ARP/lwIP 路由表就绪再发 UDP，避免首帧 endPacket 失败
+  if (wasConnected && (millis() - connectedSince < 200)) {
+    delay(10);
   }
 }
 
@@ -603,6 +611,7 @@ void setup() {
   // 默认中速（PWM 128），与前端默认值一致
   g_currentSpeed = 128;
   g_emergencyStop = false;
+  g_lastOdomReportTime = millis();  // 初始化测速时间戳，首轮 100ms 后再发（与 WiFi 稳定期错开）
   // g_smartDriveEnabled 保持全局声明时的初始值 false，匹配前端默认 OFF
 
   Serial.println("[初始化] 系统启动完成，等待命令...");

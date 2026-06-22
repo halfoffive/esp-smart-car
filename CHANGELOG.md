@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 2s 视频延时消除（C6 批量写 + S3 WiFi 稳定期）
+
+- `firmware/receiver_dongle/receiver_dongle.ino` — `handleVideoPacket` 帧写出从 `availableForWrite()+delay(1)` 轮询改为单次 `Serial.write(data, size)` 批量写出，延时从 ~2.6s/帧 降至 ~5ms/帧（**延时段根因**）
+- `firmware/receiver_dongle/receiver_dongle.ino` — `MAX_SERIAL_WRITE_WAIT_MS` 100→30（保底超时，批量路径不触发）
+- `firmware/car_controller/car_controller.ino` — `checkWiFiConnection()` 首次连接后等待 200ms（ARP/lwIP 路由表就绪），消除首帧 `endPacket` 失败
+- `firmware/car_controller/car_controller.ino` — `g_lastOdomReportTime` 初始化从 0 改为 `setup()` 末尾赋 `millis()`，首轮循环不再立即触发测速发送
+
 ### 12FPS 稳定视频传输（FB-OVF 消除 + 渐进阻尼质量 + 无像素块）
 
 - `firmware/libraries/wireless_protocol/src/wireless.h` — `TARGET_FPS` 30→12（`FRAME_INTERVAL`=83ms，每帧充裕发送窗口）；`JPEG_QUALITY` 范围收窄：[5,50]→[12,35]
