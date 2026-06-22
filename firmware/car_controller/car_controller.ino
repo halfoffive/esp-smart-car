@@ -18,7 +18,7 @@
  * - 右编码器: GPIO2（中断引脚）
  * 
  * 作者：智能车项目团队
- * 版本：1.9.1（修复 sendOdometryData WiFi 守卫 + initializeOdometer IWDT 超时）
+ * 版本：1.9.2（修复 WiFi 稳定性 + FB-OVF 双缓冲 + 帧率优化）
  * 日期：2026-06-20
  */
 
@@ -32,7 +32,7 @@
 #include "video_stream.h"
 
 // 版本常量（统一 car_controller / video_stream / camera_config 的对外版本号）
-constexpr const char* VERSION = "1.9.1";
+constexpr const char* VERSION = "1.9.2";
 
 // UDP 套接字（video_stream.h 中通过 extern 声明，在同一 sketch 中定义即可）
 WiFiUDP g_udpControl;
@@ -107,10 +107,6 @@ bool g_smartDriveEnabled = false;
  * 摄像头配置（运行时复用，错误恢复时重新初始化）
  */
 CameraConfiguration g_cameraConfig = createDefaultConfig();
-
-uint32_t g_lastReconnectAttempt = 0;
-uint32_t g_reconnectBackoffMs = 1000;
-bool g_wifiWasConnected = false;
 
 /**
  * 最后生效的运动命令字符（SPEED 变化时重发，保持当前运动状态）
@@ -523,22 +519,17 @@ void handleUdpControlPacket() {
 }
 
 void checkWiFiConnection() {
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!g_wifiWasConnected) {
-      g_wifiWasConnected = true;
-      g_reconnectBackoffMs = 1000;  // 连接成功后重置退避
-      Serial.printf("[WiFi_STA] 已连接，IP: %s\n", WiFi.localIP().toString().c_str());
-    }
-    return;
-  }
+  // 仅监测 WiFi 状态变化，不主动重连。
+  // ESP32 WiFi 栈内部自动处理重连，手动 reconnect() 反而强制重置导致断连循环。
+  static bool wasConnected = false;
+  const bool isConnected = (WiFi.status() == WL_CONNECTED);
 
-  // 未连接：使用 WiFi.reconnect() + 指数退避，避免 disconnect+begin 导致长时间阻塞
-  if (millis() - g_lastReconnectAttempt > g_reconnectBackoffMs) {
-    Serial.println("[WiFi_STA] 检测到断线，尝试重连...");
-    g_wifiWasConnected = false;
-    WiFi.reconnect();
-    g_lastReconnectAttempt = millis();
-    g_reconnectBackoffMs = min(g_reconnectBackoffMs * 2, 30000UL);
+  if (isConnected && !wasConnected) {
+    wasConnected = true;
+    Serial.printf("[WiFi_STA] 已连接，IP: %s\n", WiFi.localIP().toString().c_str());
+  } else if (!isConnected && wasConnected) {
+    wasConnected = false;
+    Serial.println("[WiFi_STA] 连接断开（等待自动重连...）");
   }
 }
 
@@ -585,6 +576,7 @@ void setup() {
   WiFi.config(carIp, gateway, subnet);
   Serial.printf("[WiFi_STA] 连接热点: %s\n", NetworkConfig::AP_SSID);
   WiFi.begin(NetworkConfig::AP_SSID, NetworkConfig::AP_PASSWORD);
+  WiFi.setSleep(false);  // 禁用 WiFi 省电模式，防止空闲断开（视频流需要持续连接）
   Serial.println("[WiFi_STA] 正在连接热点（非阻塞，loop 中轮询）...");
   g_udpControl.begin(UdpConfig::CONTROL_PORT);
   g_udpTelemetry.begin(UdpConfig::TELEMETRY_PORT);
@@ -662,6 +654,6 @@ void loop() {
     }
   }
 
-  // 4. 小延迟，避免占用过多CPU
-  delay(1);
+  // 4. 小延迟，给 WiFi 后台任务足够 CPU 时间维持连接
+  delay(5);
 }

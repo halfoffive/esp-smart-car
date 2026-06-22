@@ -179,7 +179,7 @@ inline bool initializeCamera(const CameraConfiguration& config) {
     cameraConfig.pixel_format = PIXFORMAT_JPEG;  // JPEG格式，适合传输
     cameraConfig.frame_size = resolutionToFramesize(config.resolution);
     cameraConfig.jpeg_quality = static_cast<int>(config.quality);
-    cameraConfig.fb_count = 1;  // 单缓冲（减少 PSRAM 占用）
+    cameraConfig.fb_count = 2;  // 双缓冲（避免摄像头 DMA 覆盖正在发送的帧 → FB-OVF 花屏）
     cameraConfig.xclk_freq_hz = 20000000;  // 20MHz XCLK（Freenove FNK0085 必须值；10MHz 导致摄像头驱动 DMA/中断野指针→StoreProhibited）
     cameraConfig.fb_location = CAMERA_FB_IN_PSRAM;  // 帧缓冲使用 PSRAM（S3 CAM 必需）
     

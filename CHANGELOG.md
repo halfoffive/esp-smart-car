@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### WiFi 稳定性 + 视频帧率修复
+
+- `firmware/car_controller/car_controller.ino` — `setup()` 新增 `WiFi.setSleep(false)` 禁用省电模式，防止空闲断开
+- `firmware/car_controller/car_controller.ino` — `checkWiFiConnection()` 重写：移除 `WiFi.reconnect()`（强制重置导致断连循环），改为仅监测状态变化；删除废弃的 reconnect 退避全局变量
+- `firmware/car_controller/car_controller.ino` — `loop()` 中 `delay(1)` → `delay(5)`，给 WiFi 后台任务更多 CPU 时间维持连接
+- `firmware/car_controller/camera_config.h` — `fb_count` 1 → 2（双缓冲），消除 `cam_hal: FB-OVF` 帧缓冲溢出 → 花屏/模糊
+
 ### S3 启动崩溃修复（StoreProhibited EXCCAUSE 6）
 
 - `firmware/car_controller/camera_config.h` — XCLK 频率从 10MHz 恢复为 20MHz（Freenove FNK0085 必须值；10MHz 导致摄像头 DMA/中断野指针 → StoreProhibited）
