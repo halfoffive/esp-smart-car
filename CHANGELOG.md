@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### build.rs 自动构建前端
+
+- `desktop/backend/build.rs` 重写：`cargo build` 时自动检测包管理器（bun 优先，npm 回退），自动执行 `install` + `run build` 完成前端构建
+- 保留 `SKIP_FRONTEND_BUILD=1` 环境变量跳过开关（适用于 CI / 离线场景）
+- 文档同步更新：AGENTS.md / README.md 构建命令说明修正
+
 ### Karpathy 审计修复 v2
 
 - **Token 安全**

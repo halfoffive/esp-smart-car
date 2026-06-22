@@ -162,16 +162,13 @@ S3 将视频帧通过 UDP 遥测端口 `9001` 分包发送到 C6 接收器（每
 
 ### 桌面端
 
-前端已集成到后端中，但 `desktop/backend/build.rs` 不再自动运行 `bun install` / `bun run build`，需先手动构建前端，再编译后端。
+前端已集成到后端中，`cargo build` 会自动构建前端（自动检测 bun / npm，执行 install + build）；设置 `SKIP_FRONTEND_BUILD=1` 可跳过自动构建。
 
 #### 后端（Rust）
 ```bash
 cd desktop/backend
 
-# 首次或前端源码变更后，需先手动构建前端（见下方 Frontend 命令）
-# build.rs 仅检查 frontend/dist 是否存在，不存在会 panic 提示
-
-# 编译后端（将已构建的 frontend/dist 嵌入二进制）
+# 编译后端（自动构建前端并嵌入二进制）
 cargo build
 
 # 运行（前端已编译进 exe，无需 .env 文件即可在任意位置运行，访问 http://localhost:8080）
@@ -296,7 +293,7 @@ cargo clippy       # 静态分析检查
     - 前端 WebSocket owner 上移到 `App.vue`，`ControlPanel.vue` 只读使用 `useWebSocket`
     - `SpeedDashboard.vue` 精简为 2 模块并新增 RPM 计算；`VideoPlayer.vue` 使用 RAF 节流
     - 固件 PID 方向/`HEADING_LOCK` 修复；UDP 遥测/视频端口分离（9001/9002）；receiver_dongle 动态记录车载 IP
-    - `desktop/backend/build.rs` 不再自动 `bun install/build`，需手动构建前端
+    - `desktop/backend/build.rs` 自动构建前端（检测 bun/npm，自动 install + build；`SKIP_FRONTEND_BUILD=1` 可跳过）
 
 - v1.5.1 - 2026-06-20（未发布）
   - 视频帧率与链路可观测性优化

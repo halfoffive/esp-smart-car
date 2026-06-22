@@ -101,8 +101,8 @@ esp-smart-car/
 ```bash
 # Backend (Rust)
 cd desktop/backend
-# 注意：build.rs 不再自动 bun install/build，需先手动构建前端（见下方 Frontend 命令）
-cargo build        # Build（将已构建的 frontend/dist 嵌入二进制）
+# build.rs 自动构建前端（检测 bun 或 npm，自动 install + build；设 SKIP_FRONTEND_BUILD=1 可跳过）
+cargo build        # Build（自动构建前端并嵌入二进制）
 cargo run          # Run server（前端已编译进 exe，可在任意位置运行）
 cargo test         # Run all tests
 
