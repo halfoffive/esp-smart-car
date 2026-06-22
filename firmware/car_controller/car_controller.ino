@@ -307,6 +307,11 @@ void handleDriveModeCommand(const uint8_t mode) {
  * 通过 WiFi UDP 发送 OdometryPacket
  */
 void sendOdometryData() {
+  // WiFi 守卫：未连接时跳过发送，避免 lwIP socket 野指针 → StoreProhibited
+  if (WiFi.status() != WL_CONNECTED) {
+    return;
+  }
+
   const OdometryData odom = getCurrentOdometry();
 
   // 将浮点数据压缩为整数（有符号16位），使用 constrain 防止溢出
