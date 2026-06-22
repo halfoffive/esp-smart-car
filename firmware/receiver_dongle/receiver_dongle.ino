@@ -564,7 +564,7 @@ void handleVideoUdp() {
     int len = g_udpVideo.parsePacket();
     if (len <= 0) return;
 
-    uint8_t buf[256];
+    uint8_t buf[1024];  // 扩容以容纳 512B 数据包（10B头+512B数据+1B校验和=523B）
     // 超大包丢弃而非截断：清空 UDP 当前包并返回
     if (len > static_cast<int>(sizeof(buf))) {
         while (g_udpVideo.available() > 0) {

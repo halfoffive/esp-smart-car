@@ -18,7 +18,7 @@
  * - 右编码器: GPIO2（中断引脚）
  * 
  * 作者：智能车项目团队
- * 版本：1.9.4（2s延时消除：C6批量写+S3 WiFi稳定期+测速初始化修正）
+ * 版本：1.10.0（QVGA 320x240 + 512B大包 + 10FPS — 画质4倍提升）
  * 日期：2026-06-20
  */
 
@@ -32,7 +32,7 @@
 #include "video_stream.h"
 
 // 版本常量（统一 car_controller / video_stream / camera_config 的对外版本号）
-constexpr const char* VERSION = "1.9.4";
+constexpr const char* VERSION = "1.10.0";
 
 // UDP 套接字（video_stream.h 中通过 extern 声明，在同一 sketch 中定义即可）
 WiFiUDP g_udpControl;

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### v1.10.0 — QVGA 320×240 + 512B 大包（画质 4 倍提升，包数反降）
+
+- `firmware/libraries/wireless_protocol/src/wireless.h` — `VideoPacket.data[128]`→`[512]`；`MAX_PACKET_SIZE` uint8(128)→uint16(512)；`TARGET_FPS` 12→10（FRAME_INTERVAL=100ms）
+- `firmware/car_controller/camera_config.h` — 分辨率 QQVGA(160×120)→**QVGA(320×240)**；`QUALITY_MEDIUM` 22→25
+- `firmware/car_controller/video_stream.h` — `adjustQuality` 阈值翻倍（TARGET_MAX 5000→10000，TARGET_MIN 2500→5000）；`g_currentQuality` 22→25
+- `firmware/receiver_dongle/receiver_dongle.ino` — `handleVideoUdp` 接收缓冲 256B→1024B
+
+**效果**：320×240 QVGA 下每帧 ~8-12KB ≈ 20 包 512B（反比之前 160×120 的 21 包 128B 更少），10 FPS 下包速率 200 包/秒 < 之前 252 包/秒，画质 4 倍提升
+
 ### 2s 视频延时消除（C6 批量写 + S3 WiFi 稳定期）
 
 - `firmware/receiver_dongle/receiver_dongle.ino` — `handleVideoPacket` 帧写出从 `availableForWrite()+delay(1)` 轮询改为单次 `Serial.write(data, size)` 批量写出，延时从 ~2.6s/帧 降至 ~5ms/帧（**延时段根因**）

@@ -82,7 +82,7 @@ struct __attribute__((packed)) VideoPacket {
     uint16_t packetId;    // 包序号
     uint16_t totalPackets; // 总包数
     uint16_t dataLen;     // 数据长度
-    uint8_t data[128];    // 数据（最大128字节）
+    uint8_t data[512];    // 数据（最大512字节，减少分包数降低UDP开销）
     uint8_t checksum;     // 校验和
 };
 
@@ -97,8 +97,8 @@ namespace WirelessConfig {
 namespace StreamConfig {
     constexpr uint8_t VIDEO_MAGIC = 0xA6;       // 视频帧魔术字
     constexpr uint8_t PROTOCOL_VERSION = 1;   // 协议版本
-    constexpr uint8_t MAX_PACKET_SIZE = 128;   // 每包最大数据量
-    constexpr uint16_t TARGET_FPS = 12;       // 目标帧率（12 FPS 稳定传输，每帧 ~83ms 充裕发送窗口）
+    constexpr uint16_t MAX_PACKET_SIZE = 512; // 每包最大数据量（与 VideoPacket.data[512] 对齐）
+    constexpr uint16_t TARGET_FPS = 10;       // 目标帧率（10 FPS，QVGA 320x240 下充裕发送窗口）
     constexpr uint32_t FRAME_INTERVAL = 1000 / TARGET_FPS; // 帧间隔
     constexpr uint8_t JPEG_QUALITY_MIN = 12;  // 最小压缩值=最高质量（范围收窄，防质量振荡→FB-OVF）
     constexpr uint8_t JPEG_QUALITY_MAX = 35;  // 最大压缩值=最低质量（范围收窄，防极端低质量像素块）

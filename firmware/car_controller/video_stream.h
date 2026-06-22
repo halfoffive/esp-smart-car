@@ -59,7 +59,7 @@ extern WiFiUDP g_udpTelemetry;
 /// 连续失败超过此阈值时重启摄像头
 constexpr uint8_t CAMERA_RESTART_THRESHOLD = 10;
 /// 当前 JPEG 压缩值（供 adjustQuality 渐进调整，初始与 camera_config.h 默认值对齐）
-inline uint8_t g_currentQuality = 22;
+inline uint8_t g_currentQuality = 25;
 
 // ============================================
 // 纯函数：帧处理
@@ -124,13 +124,13 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
 /**
  * 纯函数：渐进阻尼质量调整
  * 根据帧大小缓慢调整 JPEG 压缩值，避免质量二值振荡 → FB-OVF / 像素块
- * 目标：160x120 下每帧控制在 2500-5000 字节，12 FPS 稳定传输
+ * 目标：QVGA 320x240 下每帧控制在 5000-10000 字节，10 FPS 稳定传输
  * 
  * 注意：ESP32 摄像头驱动中压缩值越小 = 质量越高 = 帧越大
  */
 inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQuality) {
-    constexpr uint32_t TARGET_MAX = 5000;  // 帧过大则加压（提高压缩值，缩小帧）
-    constexpr uint32_t TARGET_MIN = 2500;  // 帧过小则减压（降低压缩值，提升质量）
+    constexpr uint32_t TARGET_MAX = 10000; // QVGA 320x240 帧过大则加压
+    constexpr uint32_t TARGET_MIN = 5000;  // QVGA 320x240 帧过小则减压
     constexpr uint8_t STEP = 2;             // 每步调整量（渐进，防止剧烈振荡）
 
     if (frameSize > TARGET_MAX) {
