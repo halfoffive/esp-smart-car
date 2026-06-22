@@ -366,6 +366,11 @@ void sendOdometryData() {
 bool captureAndSendVideoFrame() {
   const uint32_t currentTime = millis();
 
+  // WiFi 守卫：未连接时跳过视频发送，避免底层 lwIP socket 野指针 → StoreProhibited
+  if (WiFi.status() != WL_CONNECTED) {
+    return false;
+  }
+
   // 帧率控制：使用 wireless.h 中的统一常量
   if (currentTime - g_streamState.lastFrameTime < StreamConfig::FRAME_INTERVAL) {
     return false;
@@ -406,13 +411,6 @@ bool captureAndSendVideoFrame() {
   // 通过 WiFi UDP 分包发送到接收器（S3 单芯片直发，无 Serial1 桥接）
   const bool sent = sendVideoFrame(frame);
 
-  // 动态调整质量（根据帧大小自适应压缩率）
-  const uint8_t newQuality = adjustQuality(frame.frameSize);
-  sensor_t* sensor = esp_camera_sensor_get();
-  if (sensor != NULL) {
-    sensor->set_quality(sensor, newQuality);
-  }
-
   // 更新流状态：发送失败计为丢帧（直接修改可变结构体字段）
   const uint16_t fps = calculateFPS(g_streamState.lastFrameTime, currentTime);
   g_streamState.lastFrameTime = currentTime;
@@ -424,8 +422,16 @@ bool captureAndSendVideoFrame() {
     g_streamState.droppedFrames++;
   }
 
-  // 释放帧缓冲
+  // 释放帧缓冲（先归还 DMA 缓冲，再访问 sensor，避免持帧期间 I2C 竞争导致 StoreProhibited）
+  const size_t cachedFrameSize = frame.frameSize;  // frameSize 是栈值，释放帧后仍可读
   releaseFrame(frame);
+
+  // 动态调整质量（根据帧大小自适应压缩率）—— 在释放帧后访问 sensor，避免与摄像头 DMA 竞争
+  const uint8_t newQuality = adjustQuality(cachedFrameSize);
+  sensor_t* sensor = esp_camera_sensor_get();
+  if (sensor != NULL) {
+    sensor->set_quality(sensor, newQuality);
+  }
 
   // 每100帧打印一次统计
   static uint32_t lastLoggedFrame = 0;

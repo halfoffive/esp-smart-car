@@ -180,7 +180,7 @@ inline bool initializeCamera(const CameraConfiguration& config) {
     cameraConfig.frame_size = resolutionToFramesize(config.resolution);
     cameraConfig.jpeg_quality = static_cast<int>(config.quality);
     cameraConfig.fb_count = 1;  // 单缓冲（减少 PSRAM 占用）
-    cameraConfig.xclk_freq_hz = 10000000;  // 10MHz XCLK（Freenove S3 CAM 典型值）
+    cameraConfig.xclk_freq_hz = 20000000;  // 20MHz XCLK（Freenove FNK0085 必须值；10MHz 导致摄像头驱动 DMA/中断野指针→StoreProhibited）
     cameraConfig.fb_location = CAMERA_FB_IN_PSRAM;  // 帧缓冲使用 PSRAM（S3 CAM 必需）
     
     // 初始化摄像头

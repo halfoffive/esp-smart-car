@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### S3 启动崩溃修复（StoreProhibited EXCCAUSE 6）
+
+- `firmware/car_controller/camera_config.h` — XCLK 频率从 10MHz 恢复为 20MHz（Freenove FNK0085 必须值；10MHz 导致摄像头 DMA/中断野指针 → StoreProhibited）
+- `firmware/car_controller/car_controller.ino` — `captureAndSendVideoFrame()` 新增 WiFi 连接守卫（`WiFi.status() != WL_CONNECTED` 直接跳过），避免 lwIP socket 未就绪时 beginPacket/endPacket → StoreProhibited
+- `firmware/car_controller/car_controller.ino` — `adjustQuality()` / `sensor->set_quality()` 移至 `releaseFrame()` 之后执行，消除持帧期间 I2C 访问 sensor 与摄像头 DMA 的竞争
+
 ### build.rs 自动构建前端
 
 - `desktop/backend/build.rs` 重写：`cargo build` 时自动检测包管理器（bun 优先，npm 回退），自动执行 `install` + `run build` 完成前端构建

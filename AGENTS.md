@@ -159,6 +159,16 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-21 - S3 启动 StoreProhibited 崩溃修复（3项修复）
+
+**问题**: ESP32-S3 上电后立即崩溃，EXCCAUSE 6 (StoreProhibited) EXCVADDR 0x00000000，A11=0x0000cdcd（野指针模式）。
+
+**修复**:
+
+- **XCLK 频率回归** — `camera_config.h` `xclk_freq_hz` 从 10MHz 恢复为 20MHz。Freenove FNK0085 必须 20MHz XCLK；10MHz 导致摄像头 DMA/中断时序异常，驱动内部操作野指针 → StoreProhibited。
+- **WiFi 连接守卫** — `car_controller.ino` `captureAndSendVideoFrame()` 开头新增 `WiFi.status() != WL_CONNECTED` 检查，跳过视频发送。WiFi 未连接时 `beginPacket`/`endPacket` 底层 lwIP socket 未就绪，写入 NULL → StoreProhibited。
+- **sensor 访问时机** — `car_controller.ino` 将 `adjustQuality()` / `sensor->set_quality()` 移至 `releaseFrame()` 之后，消除持帧期 I2C 访问 sensor 与摄像头 DMA 的竞争。
+
 ### 2026-06-20 - Karpathy 指南审计修复
 
 **问题**: 基于 Karpathy 指南的 5 视角并行审计发现 52 项独立漏洞/缺陷，集中在安全性、协议鲁棒性、异步 I/O 隔离与状态一致性四个方面。
