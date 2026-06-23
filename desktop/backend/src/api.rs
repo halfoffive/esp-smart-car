@@ -382,11 +382,12 @@ pub async fn connect_serial(
         manager.disconnect();
         match manager.connect(&port_name_clone, baud_rate) {
             Ok(()) => {
-                // 连接成功后立即发送 LINK_STATUS 探测包，触发 Dongle 上报链路状态 JSON
-                // 用户可感知"连接 = 链路打通"，避免连接后无反馈
+                // Windows 打开串口会触发 DTR 复位 → ESP32 重启，需等待 C6 启动完成
+                // C6 启动约需 2-3 秒（WiFi AP 初始化 + BLE init），此处等待 3 秒
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                // 连接成功后发送 LINK_STATUS 探测包，触发 Dongle 上报链路状态 JSON
                 let seq = state_clone.packet_seq.fetch_add(1, Ordering::Relaxed);
                 let packet = build_wireless_packet(11, 0, 0, seq);
-                // 探测包不属于控制命令，不递增 command_count
                 match manager.send_bytes(&packet) {
                     Ok(()) => Ok(()),
                     Err(e) => Err(format!("连接成功但探测包发送失败: {}", e)),

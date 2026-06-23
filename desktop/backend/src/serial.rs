@@ -696,6 +696,9 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                                         last_odom_right as f64,
                                         last_odom_heading as f64
                                     );
+                                } else if !line.is_empty() {
+                                    // 诊断：输出无法识别的串口行（非 ble/link/odom），帮助定位问题
+                                    info!("串口未识别行: {}", line);
                                 }
                             }
                             SerialReadResult::NoData => {}
