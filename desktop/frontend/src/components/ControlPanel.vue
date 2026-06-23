@@ -391,7 +391,7 @@ const connect = async () => {
   try {
     const result = await post('/api/connect', {
       port_name: selectedPort.value,
-      baud_rate: 921600
+      baud_rate: 3000000
     })
 
     if (result.success) {
