@@ -24,7 +24,7 @@ use crate::{AppState, MutexExt, SharedVideoFrame};
 /// 帧头标记，与固件 VideoFrame 发送端一致
 const FRAME_HEADER: [u8; 2] = [0xAA, 0x55];
 /// 默认波特率，与固件 UART 配置一致
-pub const DEFAULT_BAUD_RATE: u32 = 921_600;
+pub const DEFAULT_BAUD_RATE: u32 = 3_000_000;
 /// 单次 read 超时，拆分长 I/O 为短循环以支持 generation 检查
 const READ_TIMEOUT: Duration = Duration::from_millis(100);
 /// 最大帧大小，与固件 VideoFrameBuffer 对齐

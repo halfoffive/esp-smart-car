@@ -74,7 +74,7 @@ pub struct StatusResponse {
 pub struct ConnectRequest {
     /// 串口名称
     pub port_name: String,
-    /// 波特率（可选，默认 921600）
+    /// 波特率（可选，默认 3000000）
     pub baud_rate: Option<u32>,
 }
 

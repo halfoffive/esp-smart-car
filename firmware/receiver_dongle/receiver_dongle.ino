@@ -37,7 +37,7 @@
 // 常量定义
 // ============================================
 namespace ReceiverConfig {
-    constexpr uint32_t SERIAL_BAUD = 921600;   // 串口波特率（高速传输）
+    constexpr uint32_t SERIAL_BAUD = 3000000;  // 串口波特率（USB-CDC 虚拟串口，拉满吞吐）
     constexpr uint32_t BUFFER_SIZE = 32768;    // 缓冲区大小（32KB，匹配后端帧上限）
     constexpr uint32_t LINK_STATUS_INTERVAL = 5000; // 链路状态上报间隔（5秒）
     constexpr uint32_t MAX_SERIAL_WRITE_WAIT_MS = 30; // 串口写出保底超时（毫秒，批量写出路径不触发）
