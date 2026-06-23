@@ -101,7 +101,7 @@ namespace StreamConfig {
     constexpr uint16_t TARGET_FPS = 10;       // 目标帧率（10 FPS，QVGA 320x240 下充裕发送窗口）
     constexpr uint32_t FRAME_INTERVAL = 1000 / TARGET_FPS; // 帧间隔
     constexpr uint8_t JPEG_QUALITY_MIN = 12;  // 最小压缩值=最高质量（范围收窄，防质量振荡→FB-OVF）
-    constexpr uint8_t JPEG_QUALITY_MAX = 35;  // 最大压缩值=最低质量（范围收窄，防极端低质量像素块）
+    constexpr uint8_t JPEG_QUALITY_MAX = 50;  // 最大压缩值=最低质量（扩大到 50，适应复杂场景下帧压缩）
 }
 
 namespace UdpConfig {

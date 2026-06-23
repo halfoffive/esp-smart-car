@@ -60,8 +60,8 @@ enum class Resolution : uint8_t {
  * 因此 LOW 对应最大压缩值，BEST 对应最小压缩值
  */
 enum class ImageQuality : uint8_t {
-    QUALITY_LOW = 35,      // 低质量（高压缩；与 JPEG_QUALITY_MAX 对齐，防像素块）
-    QUALITY_MEDIUM = 25,   // 中等质量（QVGA 320x240 下 ~8-12KB/帧，10FPS 稳定）
+    QUALITY_LOW = 50,      // 低质量（高压缩；与 JPEG_QUALITY_MAX 对齐，复杂场景下帧不超限）
+    QUALITY_MEDIUM = 25,   // 中等质量（QVGA 320x240 下 ~1.5-2.2KB/帧，10FPS 稳定）
     QUALITY_HIGH = 15,     // 高质量（低压缩）
     QUALITY_BEST = 12      // 最佳质量（最低压缩值；与 JPEG_QUALITY_MIN 对齐，防 FB-OVF）
 };
