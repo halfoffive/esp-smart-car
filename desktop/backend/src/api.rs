@@ -373,33 +373,14 @@ pub async fn connect_serial(
     let baud_rate = request.baud_rate.unwrap_or(DEFAULT_BAUD_RATE);
     let port_name = request.port_name;
 
-    // 在单个 spawn_blocking 中原子完成 disconnect + connect + 探测包发送，
-    // 避免中间状态泄漏，并将探测结果并入响应（SubTask 1.4）
+    // 连接串口（Windows 每次 open 都会触发 DTR 复位导致 ESP32 重启，
+    // 无法可靠发送 P 探测；链路状态由 dongle 每 5 秒自动上报 JSON）
     let state_clone = Arc::clone(&state);
     let port_name_clone = port_name.clone();
     let connect_result = tokio::task::spawn_blocking(move || {
         let mut manager = state_clone.serial_manager.lock_or_panic("serial_manager");
         manager.disconnect();
-        match manager.connect(&port_name_clone, baud_rate) {
-            Ok(()) => {
-                // Windows 打开 COM 口触发 DTR 复位 → ESP32 重启 → USB-CDC 重枚举。
-                // 关闭端口，等 C6 启动完成（~3 秒），再打开新端口发 P 探测。
-                manager.disconnect();
-                std::thread::sleep(std::time::Duration::from_secs(3));
-                match manager.connect(&port_name_clone, baud_rate) {
-                    Ok(()) => {
-                        let seq = state_clone.packet_seq.fetch_add(1, Ordering::Relaxed);
-                        let packet = build_wireless_packet(11, 0, 0, seq);
-                        match manager.send_bytes(&packet) {
-                            Ok(()) => Ok(()),
-                            Err(e) => Err(format!("连接成功但探测包发送失败: {}", e)),
-                        }
-                    }
-                    Err(e) => Err(format!("二次连接失败: {}", e)),
-                }
-            }
-            Err(e) => Err(e.to_string()),
-        }
+        manager.connect(&port_name_clone, baud_rate).map_err(|e| e.to_string())
     })
     .await;
 
