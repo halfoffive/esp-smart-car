@@ -167,6 +167,10 @@ function createWebSocket() {
   /** 重置所有业务状态（彻底断开时调用） */
   const resetAllState = () => {
     resetConnectionState()
+    // 释放旧 Blob URL
+    if (videoFrame.value && videoFrame.value.startsWith('blob:')) {
+      URL.revokeObjectURL(videoFrame.value)
+    }
     videoFrame.value = null
     videoFps.value = 0
     frameCount = 0
@@ -359,6 +363,45 @@ function createWebSocket() {
         }
 
         socket.onmessage = (event) => {
+          // 二进制消息：视频帧（Blob 或 ArrayBuffer）
+          if (event.data instanceof Blob || event.data instanceof ArrayBuffer) {
+            try {
+              const buffer = event.data instanceof Blob
+                ? event.data.arrayBuffer()
+                : Promise.resolve(event.data)
+              buffer.then((data: ArrayBuffer) => {
+                if (data.byteLength < 16) return  // 最小头部 16 字节
+                // 二进制头部布局：frameHash(8B LE) + timestamp(8B LE) + JPEG数据
+                const jpegData = data.slice(16)
+
+                // 创建 Blob URL 用于渲染
+                const blob = new Blob([jpegData], { type: 'image/jpeg' })
+                const url = URL.createObjectURL(blob)
+
+                // 释放旧 URL 避免内存泄漏
+                if (videoFrame.value && videoFrame.value.startsWith('blob:')) {
+                  URL.revokeObjectURL(videoFrame.value)
+                }
+
+                videoFrame.value = url
+                videoFps.value = videoFps.value  // force reactivity
+                // 更新 videoFps：每秒统计接收到的视频帧数
+                frameCount++
+                const now = Date.now()
+                if (now - lastFpsUpdate >= 1000) {
+                  videoFps.value = frameCount
+                  frameCount = 0
+                  lastFpsUpdate = now
+                }
+              }).catch(() => {
+                // Blob 解析失败，丢弃
+              })
+            } catch {
+              // 二进制数据解析异常，丢弃
+            }
+            return
+          }
+
           try {
             const message: unknown = JSON.parse(event.data)
 
@@ -376,22 +419,6 @@ function createWebSocket() {
                 // 心跳响应：重置超时检测（仅在心跳运行时）
                 if (heartbeatResponseTimer) {
                   startHeartbeatResponseTimer()
-                }
-                break
-
-              case 'video':
-                // 接收视频帧（支持 jpeg / webp 动态格式）
-                if (msg.data) {
-                  const format = typeof msg.format === 'string' ? msg.format : 'jpeg'
-                  videoFrame.value = `data:image/${format};base64,${msg.data}`
-                  // 更新 videoFps：每秒统计接收到的视频帧数
-                  frameCount++
-                  const now = Date.now()
-                  if (now - lastFpsUpdate >= 1000) {
-                    videoFps.value = frameCount
-                    frameCount = 0
-                    lastFpsUpdate = now
-                  }
                 }
                 break
 

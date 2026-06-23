@@ -69,11 +69,12 @@ impl<T> MutexExt<T> for Mutex<T> {
 }
 
 /// 共享视频帧数据（原子发布给所有 WebSocket 客户端）
+/// 整帧单包模式下，直接存储原始二进制数据，不做 Base64 编码
 #[derive(Clone)]
 pub struct SharedVideoFrame {
-    /// Base64 编码后的帧数据
-    pub b64: Arc<String>,
-    /// 帧格式："jpeg" 或 "webp"（只有两种取值，使用 &'static str 避免 Arc 开销）
+    /// 原始帧数据（JPEG 二进制）
+    pub data: Arc<Vec<u8>>,
+    /// 帧格式："jpeg"（只有 jpeg 取值，使用 &'static str 避免 Arc 开销）
     pub format: &'static str,
     /// 帧哈希（用于 WebSocket 去重）
     pub hash: u64,

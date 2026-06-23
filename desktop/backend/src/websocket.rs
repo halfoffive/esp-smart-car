@@ -362,38 +362,35 @@ async fn video_broadcast_task(
             }
         }
 
-        // 获取共享视频帧（单锁保证 b64/format/hash 三者一致）
-        let (frame_b64, frame_hash, frame_format): (
-            Option<Arc<String>>,
-            Option<u64>,
-            &'static str,
-        ) = {
+        // 获取共享视频帧（单锁保证 data/hash 一致）
+        let (frame_raw, frame_hash): (Option<Arc<Vec<u8>>>, Option<u64>) = {
             let vf = video_state.video_frame.lock_or_recover("video_frame");
             vf.as_ref()
-                .map(|f| (Some(f.b64.clone()), Some(f.hash), f.format))
-                .unwrap_or((None, None, "jpeg"))
+                .map(|f| (Some(f.data.clone()), Some(f.hash)))
+                .unwrap_or((None, None))
         };
 
         let mut frame_sent = false;
 
-        if let (Some(b64_data), Some(hash)) = (frame_b64.as_ref(), frame_hash) {
+        if let (Some(raw_data), Some(hash)) = (frame_raw.as_ref(), frame_hash) {
             if last_frame_hash != Some(hash) {
                 last_frame_hash = Some(hash);
 
-                let message = json!({
-                    "type": "video",
-                    "format": frame_format,
-                    "data": b64_data.as_str(),
-                    "timestamp": SystemTime::now()
-                        .duration_since(UNIX_EPOCH)
-                        .expect("系统时间不应早于 UNIX 纪元")
-                        .as_millis() as i64
-                });
+                // 构建二进制视频消息：[frame_hash(8字节 LE)][timestamp(8字节 LE)][JPEG数据]
+                let ts = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .expect("系统时间不应早于 UNIX 纪元")
+                    .as_millis() as u64;
+                let header_len = 16;  // 8B hash + 8B timestamp
+                let mut bin_msg = Vec::with_capacity(header_len + raw_data.len());
+                bin_msg.extend_from_slice(&hash.to_le_bytes());
+                bin_msg.extend_from_slice(&ts.to_le_bytes());
+                bin_msg.extend_from_slice(raw_data);
 
                 if !send_ws_message(
                     &video_tx,
                     &video_state,
-                    Message::Text(message.to_string().into()),
+                    Message::Binary(bin_msg.into()),
                     "ws_video_send_full",
                     &mut consecutive_full,
                     &video_cancel,

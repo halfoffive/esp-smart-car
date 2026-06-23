@@ -1,11 +1,11 @@
 /**
  * 视频流传输系统 - 函数式编程风格
- * 基于 ESP32-S3 CAM（Freenove FNK0085），视频帧通过 WiFi UDP 分包直发到接收器
+ * 基于 ESP32-S3 CAM（Freenove FNK0085），视频帧通过 WiFi UDP 整帧直发到接收器
  * 支持动态质量调整和帧率控制
  * 
  * 作者：智能车项目团队
- * 版本：1.6.0（同步 Task 6：合并 StreamConfig、端口分离、滑动窗口 FPS、可变 StreamState）
- * 日期：2026-06-21
+ * 版本：2.0.0（整帧单包传输 + 多任务支持）
+ * 日期：2026-06-23
  */
 
 #ifndef VIDEO_STREAM_H
@@ -60,6 +60,19 @@ extern WiFiUDP g_udpTelemetry;
 constexpr uint8_t CAMERA_RESTART_THRESHOLD = 10;
 /// 当前 JPEG 压缩值（供 adjustQuality 渐进调整，初始与 camera_config.h 默认值对齐）
 inline uint8_t g_currentQuality = 25;
+
+// ============================================
+// 整帧传输协议常量
+// ============================================
+namespace FrameProtocol {
+    /// 整帧传输帧头标记（4字节）
+    constexpr uint8_t FRAME_HEADER[4] = {0xAA, 0x55, 0xAA, 0x55};
+    /// 最大帧大小限制（UDP 单包 payload 上限约 1472 字节，留有余量）
+    constexpr size_t MAX_FRAME_SIZE = 1400;
+    /// 帧头后紧跟的帧大小字段字节数
+    constexpr uint8_t SIZE_FIELD_BYTES = 2;
+    /// 帧头后紧跟的帧大小字段（uint16_t，小端）
+}
 
 // ============================================
 // 纯函数：帧处理
@@ -124,14 +137,14 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
 /**
  * 纯函数：渐进阻尼质量调整
  * 根据帧大小缓慢调整 JPEG 压缩值，避免质量二值振荡 → FB-OVF / 像素块
- * 目标：QVGA 320x240 下每帧控制在 5000-10000 字节，10 FPS 稳定传输
+ * 目标：QVGA 320x240 下每帧控制在 800-1400 字节，确保整帧单包传输
  * 
  * 注意：ESP32 摄像头驱动中压缩值越小 = 质量越高 = 帧越大
  */
 inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQuality) {
-    constexpr uint32_t TARGET_MAX = 10000; // QVGA 320x240 帧过大则加压
-    constexpr uint32_t TARGET_MIN = 5000;  // QVGA 320x240 帧过小则减压
-    constexpr uint8_t STEP = 2;             // 每步调整量（渐进，防止剧烈振荡）
+    constexpr uint32_t TARGET_MAX = FrameProtocol::MAX_FRAME_SIZE; // 帧上限 = 单包上限
+    constexpr uint32_t TARGET_MIN = 800;  // 帧下限（保证基本画质）
+    constexpr uint8_t STEP = 3;             // 每步调整量（渐进，防止剧烈振荡）
 
     if (frameSize > TARGET_MAX) {
         // 帧过大：提高压缩值（向 QUALITY_MAX 方向），每步 +STEP
@@ -150,68 +163,51 @@ inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQual
 }
 
 // ============================================
-// 传输函数
+// 传输函数（整帧单包）
 // ============================================
 
 /**
- * 发送视频帧
- * 将大帧分割为多个小包通过 WiFi UDP 传输到接收器
- * S3 单芯片架构下由 car_controller.ino 的 loop() 直接调用
- * 返回：true 发送成功，false 发送过程中失败（已中止）
+ * 发送完整视频帧
+ * 将 JPEG 帧整体封装为单包 UDP 数据，直接发送到接收器
+ * 帧格式：[0xAA 0x55 0xAA 0x55][帧大小(2字节小端)][帧数据]
+ * S3 单芯片架构下由独立 FreeRTOS 任务调用
+ * 返回：true 发送成功，false 发送失败
  */
 inline bool sendVideoFrame(const FrameState& frame) {
     if (!frame.isValid) return false;
 
     const uint8_t* data = frame.frameBuffer->buf;
     const size_t totalLen = frame.frameSize;
-    const uint16_t totalPackets = (totalLen + StreamConfig::MAX_PACKET_SIZE - 1) /
-                                   StreamConfig::MAX_PACKET_SIZE;
 
-    // 目标地址移出循环，避免每包重复构造
+    // 安全检查：帧不得超过单包上限
+    if (totalLen > FrameProtocol::MAX_FRAME_SIZE) {
+        Serial.printf("[视频流] 帧过大(%u > %u)，丢弃\n", totalLen, FrameProtocol::MAX_FRAME_SIZE);
+        return false;
+    }
+
+    // 目标地址
     const IPAddress apIp(NetworkConfig::AP_IP[0], NetworkConfig::AP_IP[1],
                          NetworkConfig::AP_IP[2], NetworkConfig::AP_IP[3]);
 
-    for (uint16_t i = 0; i < totalPackets; i++) {
-        const size_t offset = i * StreamConfig::MAX_PACKET_SIZE;
-        const uint16_t packetLen = min(
-            static_cast<size_t>(StreamConfig::MAX_PACKET_SIZE),
-            totalLen - offset
-        );
+    // 构建整帧数据：帧头 + 大小(2字节小端) + 帧数据
+    // 总大小 = 4(头) + 2(大小) + frameSize
+    const size_t packetSize = 4 + 2 + totalLen;
+    uint8_t packet[4 + 2 + FrameProtocol::MAX_FRAME_SIZE];  // 栈上分配，避免动态分配
 
-        // 构建视频包
-        VideoPacket packet = {};
-        packet.magic = StreamConfig::VIDEO_MAGIC;
-        packet.version = StreamConfig::PROTOCOL_VERSION;
-        packet.frameId = frame.frameId;
-        packet.packetId = i;
-        packet.totalPackets = totalPackets;
-        packet.dataLen = packetLen;
-        memcpy(packet.data, data + offset, packetLen);
+    // 写入帧头
+    memcpy(packet, FrameProtocol::FRAME_HEADER, 4);
+    // 写入帧大小（小端）
+    packet[4] = totalLen & 0xFF;
+    packet[5] = (totalLen >> 8) & 0xFF;
+    // 写入帧数据
+    memcpy(packet + 6, data, totalLen);
 
-        // 计算实际发送大小：10字节头部 + packetLen字节数据 + 1字节校验和
-        const size_t sendSize = 10 + packetLen + 1;  // header(10) + data + checksum(1)
-
-        // 计算校验和：覆盖发送范围内除校验和字节外的所有字节（0 到 sendSize-2）
-        uint8_t sum = 0;
-        const uint8_t* packetData = reinterpret_cast<const uint8_t*>(&packet);
-        for (size_t j = 0; j < sendSize - 1; j++) {
-            sum += packetData[j];
-        }
-
-        // 仅通过实际发送包的最后一个字节写入校验和，避免 packed 结构体字段对齐带来的偏移误差
-        uint8_t* const txChecksumPtr = reinterpret_cast<uint8_t*>(&packet) + sendSize - 1;
-        *txChecksumPtr = sum;
-
-        // 通过 WiFi UDP 发送到接收器（AP 的固定 IP），使用独立视频端口
-        g_udpTelemetry.beginPacket(apIp, UdpConfig::VIDEO_PORT);
-        g_udpTelemetry.write(reinterpret_cast<const uint8_t*>(&packet), sendSize);
-        if (!g_udpTelemetry.endPacket()) {
-            Serial.println("[UDP] 视频分包发送失败，中止该帧");
-            return false;
-        }
-
-        // 本地 AP 内网传输，不需要额外延迟；移除以最大化发包速率
-        // delayMicroseconds(50);
+    // 通过 WiFi UDP 整帧发送到接收器
+    g_udpTelemetry.beginPacket(apIp, UdpConfig::VIDEO_PORT);
+    g_udpTelemetry.write(packet, packetSize);
+    if (!g_udpTelemetry.endPacket()) {
+        Serial.println("[UDP] 视频帧发送失败");
+        return false;
     }
 
     return true;
@@ -223,7 +219,7 @@ inline bool sendVideoFrame(const FrameState& frame) {
 inline void startStreaming() {
     g_streamState = {};
     g_streamState.isStreaming = true;
-    Serial.println("[视频流] 开始传输");
+    Serial.println("[视频流] 开始传输（整帧单包模式）");
 }
 
 /**

@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### v2.0.0 — 整帧单包传输 + 多任务架构 + Binary WebSocket（视频性能革命）
+
+**问题**：web 端 1 FPS 卡顿、延时极高、花屏、模糊。根因为串口带宽瓶颈（921600bps ≈ 10KB/s），QVGA JPEG 单帧 8-12KB 传输需 0.8-1.2s；分包组装逻辑复杂导致花屏和性能损耗。
+
+**修复 — 三端全面重构**:
+
+**固件车载端 (S3)**:
+- `video_stream.h` v2.0.0 — **整帧单包传输**：移除分包逻辑，JPEG 帧直接封装为单包 UDP（帧头 4B + 大小 2B + 数据），目标帧大小 800-1400 字节
+- `car_controller.ino` v2.0.0 — **多任务架构**：`videoTask()` 作为独立 FreeRTOS 任务运行在 Core 0（优先级 1），主 `loop()` 运行在 Core 1（仅处理控制命令+测速+超时检测），视频不再阻塞控制响应
+
+**固件接收器端 (C6)**:
+- `receiver_dongle.ino` v2.2.0 — **简化视频处理**：`handleVideoPacket()` 完全重写，移除分包组装逻辑（frameId/packetId/totalPackets/packetsReceived/isComplete），直接接收完整帧并转发到 USB-CDC 串口
+
+**后端 (Rust)**:
+- `lib.rs` — `SharedVideoFrame.b64: Arc<String>` → `data: Arc<Vec<u8>>`，直接存储原始 JPEG 二进制
+- `serial.rs` — 移除 `try_encode_webp()` 和 Base64 编码，`process_video_frame()` 简化为直接保存原始数据
+- `websocket.rs` — **视频帧改为 Binary 消息**：格式 `[hash(8B LE)][timestamp(8B LE)][JPEG 数据]`，替代 JSON Text（节省 33% 数据量）
+- `Cargo.toml` — 添加 `rusb` 依赖；移除 `zune-jpeg`、`webp-rust`（不再需要转码）
+- 清理 `use base64::Engine`、`use webp_rust::*`、`use zune_jpeg::*` 导入
+
+**前端 (Vue + TypeScript)**:
+- `useWebSocket.ts` — 新增 **Binary 消息处理**：`ArrayBuffer`/`Blob` 检测 → `URL.createObjectURL(blob)` 创建 Blob URL，旧 URL 自动 `revokeObjectURL`；移除 JSON video 消息分支
+- `VideoPlayer.vue` — 支持 `blob:` URL 渲染；添加 `releaseBlobUrl()` 在卸载时清理
+
+**预期效果**：
+- 帧率：1 FPS → 10-15 FPS（921600bps 下），更高波特率下可到 20+ FPS
+- 延迟：1-2 秒 → < 100ms
+- 花屏：消除（UDP 不拆包，无帧组装错误）
+- 画质：提升（移除 WebP 转码，直接转发 JPEG）
+- CPU：大幅降低（移除 Base64 编码、JSON 序列化、WebP 转码）
+
 ### v1.10.0 — QVGA 320×240 + 512B 大包（画质 4 倍提升，包数反降）
 
 - `firmware/libraries/wireless_protocol/src/wireless.h` — `VideoPacket.data[128]`→`[512]`；`MAX_PACKET_SIZE` uint8(128)→uint16(512)；`TARGET_FPS` 12→10（FRAME_INTERVAL=100ms）

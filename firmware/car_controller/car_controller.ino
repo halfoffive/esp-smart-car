@@ -18,7 +18,7 @@
  * - 右编码器: GPIO2（中断引脚）
  * 
  * 作者：智能车项目团队
- * 版本：1.10.0（QVGA 320x240 + 512B大包 + 10FPS — 画质4倍提升）
+ * 版本：2.0.0（整帧单包传输 + 多任务架构：videoTask Core0 + loop Core1）
  * 日期：2026-06-20
  */
 
@@ -359,95 +359,90 @@ void sendOdometryData() {
 // ============================================
 
 /**
- * 采集一帧视频并通过 WiFi UDP 分包发送到接收器
- * 包含帧率控制（30 FPS = 33ms 间隔）、错误恢复（连续 10 次失败重启摄像头）、
- * 动态质量调整（根据帧大小自适应 JPEG 压缩率）
- * 
- * 返回：true 表示本次循环已处理帧（无论成功或失败），false 表示未到帧间隔
+ * 视频采集与发送任务（FreeRTOS 独立任务）
+ * 在 Core 0 上运行，独立处理视频帧采集和 WiFi UDP 发送
+ * 与主循环（Core 1）分离，避免视频传输阻塞控制命令处理
  */
-bool captureAndSendVideoFrame() {
-  const uint32_t currentTime = millis();
+void videoTask(void* parameter) {
+  (void)parameter;  // 未使用参数
 
-  // WiFi 守卫：未连接时跳过视频发送，避免底层 lwIP socket 野指针 → StoreProhibited
-  if (WiFi.status() != WL_CONNECTED) {
-    return false;
-  }
+  // 任务初始化日志
+  Serial.println("[视频任务] 已启动（Core 0）");
 
-  // 帧率控制：使用 wireless.h 中的统一常量
-  if (currentTime - g_streamState.lastFrameTime < StreamConfig::FRAME_INTERVAL) {
-    return false;
-  }
-
-  // 捕获帧
-  const FrameState frame = captureFrame();
-  if (!frame.isValid) {
-    // 帧捕获失败，更新丢弃计数
-    g_streamState.droppedFrames++;
-    // 连续失败恢复逻辑：超过阈值时先停车再重启摄像头硬件
-    g_consecutiveFailures++;
-    if (g_consecutiveFailures >= CAMERA_RESTART_THRESHOLD) {
-      Serial.printf("[视频流] 连续 %d 次帧捕获失败，停车并重启摄像头...\n",
-                    g_consecutiveFailures);
-      g_currentMotion = VehicleMotion(
-          MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                     MotorDirection::STOP, 0),
-          MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                     MotorDirection::STOP, 0)
-      );
-      applyVehicleMotion(g_currentMotion);
-      esp_camera_deinit();
-      delay(500);
-      if (!initializeCamera(g_cameraConfig)) {
-        Serial.println("[视频流] 摄像头重启失败，继续重试...");
-      } else {
-        Serial.println("[视频流] 摄像头重启成功");
-      }
-      g_consecutiveFailures = 0;
+  while (true) {
+    // WiFi 守卫：未连接时跳过视频发送，避免底层 lwIP socket 野指针 → StoreProhibited
+    if (WiFi.status() != WL_CONNECTED) {
+      vTaskDelay(pdMS_TO_TICKS(100));
+      continue;
     }
-    return true;
+
+    // 帧率控制：使用 wireless.h 中的统一常量
+    const uint32_t currentTime = millis();
+    if (currentTime - g_streamState.lastFrameTime < StreamConfig::FRAME_INTERVAL) {
+      vTaskDelay(pdMS_TO_TICKS(1));  // 短暂等待，避免占用 CPU
+      continue;
+    }
+
+    // 捕获帧
+    const FrameState frame = captureFrame();
+    if (!frame.isValid) {
+      // 帧捕获失败，更新丢弃计数
+      g_streamState.droppedFrames++;
+      // 连续失败恢复逻辑：超过阈值时先停车再重启摄像头硬件
+      g_consecutiveFailures++;
+      if (g_consecutiveFailures >= CAMERA_RESTART_THRESHOLD) {
+        Serial.printf("[视频流] 连续 %d 次帧捕获失败，重启摄像头...\n", g_consecutiveFailures);
+        esp_camera_deinit();
+        delay(500);
+        if (!initializeCamera(g_cameraConfig)) {
+          Serial.println("[视频流] 摄像头重启失败，继续重试...");
+        } else {
+          Serial.println("[视频流] 摄像头重启成功");
+        }
+        g_consecutiveFailures = 0;
+      }
+      continue;
+    }
+
+    // 帧捕获成功，重置连续失败计数
+    g_consecutiveFailures = 0;
+
+    // 通过 WiFi UDP 整帧发送到接收器（S3 单芯片直发，无 Serial1 桥接）
+    const bool sent = sendVideoFrame(frame);
+
+    // 更新流状态：发送失败计为丢帧
+    const uint16_t fps = calculateFPS(g_streamState.lastFrameTime, currentTime);
+    g_streamState.lastFrameTime = currentTime;
+    g_streamState.fps = fps;
+    g_streamState.totalFrames++;
+    if (sent) {
+      g_streamState.bytesSent += static_cast<uint32_t>(frame.frameSize);
+    } else {
+      g_streamState.droppedFrames++;
+    }
+
+    // 释放帧缓冲（先归还 DMA 缓冲，再访问 sensor，避免持帧期间 I2C 竞争导致 StoreProhibited）
+    const size_t cachedFrameSize = frame.frameSize;  // frameSize 是栈值，释放帧后仍可读
+    releaseFrame(frame);
+
+    // 动态调整质量（渐进阻尼，每步 ±3，稳定在质量 12-35 区间）
+    g_currentQuality = adjustQuality(cachedFrameSize, g_currentQuality);
+    sensor_t* sensor = esp_camera_sensor_get();
+    if (sensor != NULL) {
+      sensor->set_quality(sensor, g_currentQuality);
+    }
+
+    // 每100帧打印一次统计
+    static uint32_t lastLoggedFrame = 0;
+    if (g_streamState.totalFrames != lastLoggedFrame && g_streamState.totalFrames % 100 == 0 && g_streamState.totalFrames > 0) {
+      lastLoggedFrame = g_streamState.totalFrames;
+      Serial.printf("[视频流] FPS:%d, 总帧:%lu, 丢弃:%lu, 发送:%lu KB\n",
+                    g_streamState.fps,
+                    (unsigned long)g_streamState.totalFrames,
+                    (unsigned long)g_streamState.droppedFrames,
+                    (unsigned long)(g_streamState.bytesSent / 1024));
+    }
   }
-
-  // 帧捕获成功，重置连续失败计数
-  g_consecutiveFailures = 0;
-
-  // 通过 WiFi UDP 分包发送到接收器（S3 单芯片直发，无 Serial1 桥接）
-  const bool sent = sendVideoFrame(frame);
-
-  // 更新流状态：发送失败计为丢帧（直接修改可变结构体字段）
-  const uint16_t fps = calculateFPS(g_streamState.lastFrameTime, currentTime);
-  g_streamState.lastFrameTime = currentTime;
-  g_streamState.fps = fps;
-  g_streamState.totalFrames++;
-  if (sent) {
-    g_streamState.bytesSent += static_cast<uint32_t>(frame.frameSize);
-  } else {
-    g_streamState.droppedFrames++;
-  }
-
-  // 释放帧缓冲（先归还 DMA 缓冲，再访问 sensor，避免持帧期间 I2C 竞争导致 StoreProhibited）
-  const size_t cachedFrameSize = frame.frameSize;  // frameSize 是栈值，释放帧后仍可读
-  releaseFrame(frame);
-
-  // 动态调整质量（渐进阻尼，每步 ±2，稳定在质量 12-35 区间）
-  g_currentQuality = adjustQuality(cachedFrameSize, g_currentQuality);
-  sensor_t* sensor = esp_camera_sensor_get();
-  if (sensor != NULL) {
-    sensor->set_quality(sensor, g_currentQuality);
-  }
-
-  // 每100帧打印一次统计
-  static uint32_t lastLoggedFrame = 0;
-  const StreamState state = getStreamState();
-  if (state.totalFrames != lastLoggedFrame && state.totalFrames % 100 == 0 && state.totalFrames > 0) {
-    lastLoggedFrame = state.totalFrames;
-    Serial.printf("[视频流] FPS:%d, 总帧:%lu, 丢弃:%lu, 发送:%lu KB\n",
-                  state.fps,
-                  (unsigned long)state.totalFrames,
-                  (unsigned long)state.droppedFrames,
-                  (unsigned long)(state.bytesSent / 1024));
-  }
-
-  return true;
 }
 
 // ============================================
@@ -597,9 +592,30 @@ void setup() {
     }
   }
 
-  // 启动视频流（标记流状态为活跃，loop() 中按 30 FPS 采集发送）
+  // 启动视频流（标记流状态为活跃）
   startStreaming();
-  Serial.println("[初始化] 摄像头视频流已启动（WiFi UDP 直发接收器）");
+  Serial.println("[初始化] 视频流状态已就绪，等待 FreeRTOS 任务启动...");
+
+  // 创建视频采集与发送任务（Core 0）
+  // 任务栈大小：8192 字节（视频缓冲区较大）
+  // 优先级：1（低于主循环的默认优先级，确保控制命令优先）
+  BaseType_t result = xTaskCreatePinnedToCore(
+    videoTask,           // 任务函数
+    "VideoTask",         // 任务名称
+    8192,                // 栈大小（字节）
+    NULL,                // 任务参数
+    1,                   // 优先级（1 = 低优先级，主循环为默认）
+    NULL,                // 任务句柄（不需要）
+    0                    // 绑定的核心（0 = 视频任务在 Core 0）
+  );
+
+  if (result != pdPASS) {
+    Serial.println("[错误] 视频任务创建失败，系统挂起");
+    while (true) {
+      delay(1000);
+    }
+  }
+  Serial.println("[初始化] 视频任务已创建（Core 0，栈8192字节，优先级1）");
 
   // 初始化状态
   g_currentMotion = VehicleMotion(
@@ -634,18 +650,14 @@ void loop() {
   checkWiFiConnection();
   handleUdpControlPacket();
 
-  // 1. 采集摄像头视频帧并发送到接收器（30 FPS = 33ms 间隔）
-  //    包含错误恢复（连续 10 次失败重启摄像头）和动态质量调整
-  (void)captureAndSendVideoFrame();
-
-  // 2. 定期更新测速数据并发送（与采样周期对齐，避免无效调用）
+  // 1. 定期更新测速数据并发送（与采样周期对齐，避免无效调用）
   if (currentTime - g_lastOdomReportTime >= ODOMETRY_REPORT_INTERVAL_MS) {
     updateOdometer(g_currentMotion.left.direction, g_currentMotion.right.direction);
     sendOdometryData();
     g_lastOdomReportTime = currentTime;
   }
 
-  // 3. 检查通信超时
+  // 2. 检查通信超时
   if (!g_emergencyStop && (currentTime - g_lastCmdTime) > COMMAND_TIMEOUT_MS) {
     // 超过1秒未收到命令，自动停止（任一电机非停即触发）
     if (g_currentMotion.left.direction != MotorDirection::STOP ||
@@ -663,6 +675,6 @@ void loop() {
     }
   }
 
-  // 4. 小延迟，给 WiFi 后台任务足够 CPU 时间维持连接
+  // 3. 小延迟，给 WiFi 后台任务足够 CPU 时间维持连接
   delay(5);
 }

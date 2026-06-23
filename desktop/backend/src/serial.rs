@@ -14,14 +14,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use base64::Engine;
 use serialport::SerialPort;
 use tracing::{debug, error, info, warn};
-use webp_rust::{encode_lossy, ImageBuffer};
-use zune_jpeg::zune_core::bytestream::ZCursor;
-use zune_jpeg::zune_core::colorspace::ColorSpace;
-use zune_jpeg::zune_core::options::DecoderOptions;
-use zune_jpeg::JpegDecoder;
 
 use crate::{AppState, MutexExt, SharedVideoFrame};
 
@@ -60,46 +54,18 @@ enum FrameParseState {
     ReadingFrame,
 }
 
-/// 尝试将 JPEG 帧转码为 WebP（纯 Rust，无需 libwebp）
-fn try_encode_webp(jpeg: &[u8]) -> Option<Vec<u8>> {
-    let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
-    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(jpeg), options);
-    let rgba = decoder.decode().ok()?;
-    let info = decoder.info()?;
-    let width = info.width as usize;
-    let height = info.height as usize;
-    if rgba.len() != width * height * 4 {
-        return None;
-    }
-    let image = ImageBuffer {
-        width,
-        height,
-        rgba,
-    };
-    encode_lossy(&image, 1, 60, None).ok()
-}
-
-/// 处理一帧视频数据：可选 WebP 转码、计算哈希、Base64 编码
-pub fn process_video_frame(state: Arc<AppState>, data: Vec<u8>) -> Option<SharedVideoFrame> {
-    let (frame_bytes, frame_format): (Vec<u8>, &str) = if state.use_webp {
-        match try_encode_webp(&data) {
-            Some(webp) if webp.len() < data.len() => (webp, "webp"),
-            _ => (data, "jpeg"),
-        }
-    } else {
-        (data, "jpeg")
-    };
-
-    // DefaultHasher 仅用于运行时去重，不跨版本持久化（算法可能随 Rust 版本变化）
+/// 处理一帧视频数据：直接保存原始 JPEG 数据，不做转码或 Base64 编码
+/// 整帧单包模式下，视频帧以原始二进制形式存储，供 WebSocket 直接发送 Binary 消息
+pub fn process_video_frame(_state: Arc<AppState>, data: Vec<u8>) -> Option<SharedVideoFrame> {
+    // 直接使用原始 JPEG 数据，不做任何转码或编码
+    // 计算哈希用于前端去重
     let mut hasher = DefaultHasher::new();
-    frame_bytes.hash(&mut hasher);
+    data.hash(&mut hasher);
     let hash = hasher.finish();
 
-    let b64_data = base64::engine::general_purpose::STANDARD.encode(&frame_bytes);
-
     Some(SharedVideoFrame {
-        b64: Arc::new(b64_data),
-        format: frame_format,
+        data: Arc::new(data),
+        format: "jpeg",
         hash,
     })
 }

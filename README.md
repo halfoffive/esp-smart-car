@@ -2,7 +2,7 @@
 
 *部分内容由 AI 生成*
 
-[![Version](https://img.shields.io/badge/version-v1.9.0-blue.svg)](#版本历史)
+[![Version](https://img.shields.io/badge/version-v2.0.0-blue.svg)](#版本历史)
 
 基于 ESP32 的智能车控制系统，包含嵌入式固件、无线通信、视频传输和 Web 控制界面。
 
@@ -121,10 +121,12 @@ esp-smart-car/
 
 #### 视频帧格式
 ```
-[帧头 0xAA 0x55] [帧大小 4字节] [帧数据 N字节]
+S3 → C6 (UDP port 9002)：[0xAA 0x55 0xAA 0x55][帧大小 2字节小端][JPEG数据 N字节]
+C6 → 电脑 (USB-CDC)：[0xAA 0x55][帧大小 4字节小端][JPEG数据 N字节]
+Backend → Frontend (WebSocket Binary)：[帧哈希 8字节小端][时间戳 8字节小端][JPEG数据 N字节]
 ```
 
-S3 将视频帧通过 UDP 遥测端口 `9001` 分包发送到 C6 接收器（每包 128 字节），再由 C6 通过 USB 串口转发给电脑后端。
+S3 将视频帧整帧单包通过 UDP 视频端口 `9002` 发送到 C6 接收器（整帧传输，不拆包），C6 直接通过 USB-CDC 串口转发给电脑后端。后端通过 WebSocket Binary 消息广播到前端，前端使用 Blob URL 渲染。
 
 ### 命令类型
 
@@ -267,12 +269,11 @@ cargo clippy       # 静态分析检查
 - 检查后端 exe 是否运行、端口 8080 是否占用
 
 ### 视频传输卡顿
-- 降低单帧 JPEG 体积：降低分辨率或提高压缩比，使每帧 < 8 KB 最佳，< 16 KB 可接受
-- 降低帧率：监控场景 15 FPS 已足够
-- 检查 WiFi 信号质量（距离、干扰）以及 UDP 端口 `9001` 是否丢包
-- 检查串口链路堆积：观察 `status` 消息中的 `frames_received`/`frames_decoded`/`frames_broadcasted` 以及固件 `[STATS] packets=... frames=... bytes=...` 日志
-- 检查前端渲染帧率：状态栏 "X FPS / Y Render FPS"，若 Render FPS 明显低于 FPS，说明前端解码/渲染是瓶颈
-- 确认 ESP32-C6 使用 USB-CDC/JTAG：当前链路已是原生 USB CDC 虚拟串口，提高波特率不能突破 USB Full Speed 实际瓶颈
+- **v2.0.0 已从分包传输改为整帧单包传输**：单帧卡顿问题已根治，花屏风险消除
+- 若仍有问题：调整 `video_stream.h` 中 `adjustQuality` 目标帧大小（800-1400 字节），平衡画质与延迟
+- 检查 WiFi 信号质量（距离、干扰）以及 UDP 端口 9002 是否丢包
+- `desktop/backend/serial.rs` 中 `run_serial_task` 每 10 秒输出视频摘要（FPS + 字节数），观察吞吐
+- 前端状态栏显示 "X FPS / Y Render FPS"，若 Render FPS 明显低于 FPS，说明前端解码/渲染是瓶颈
 
 ### 电机不转
 - 检查电源电压
@@ -284,6 +285,15 @@ cargo clippy       # 静态分析检查
 - 检查 WebSocket 连接是否正常
 
 ## 版本历史
+
+- v2.0.0 - 2026-06-23（未发布，与 `firmware/car_controller/car_controller.ino` 中 `VERSION` 一致）
+  - **整帧单包传输 + 多任务架构 + Binary WebSocket（视频性能革命）**
+  - 固件 S3：`video_stream.h` v2.0.0 整帧单包传输（帧格式 `[0xAA 0x55 0xAA 0x55][size(2B LE)][JPEG]`，目标 800-1400 字节/帧，MAX_PACKET_SIZE 512→1400）；`car_controller.ino` v2.0.0 多任务架构（`videoTask()` 独立 FreeRTOS 任务 Core 0 优先级 1，`loop()` Core 1 仅控制+测速+超时）
+  - 固件 C6：`receiver_dongle.ino` v2.2.0 `handleVideoPacket()` 完全重写，移除分包组装逻辑（frameId/packetId/totalPackets），直接接收完整帧转发 USB-CDC
+  - 后端：`SharedVideoFrame.b64: Arc<String>` → `data: Arc<Vec<u8>>`；移除 WebP 转码和 Base64 编码；视频帧改为 WebSocket `Message::Binary`（格式 `[hash(8B LE)][ts(8B LE)][JPEG]`）；添加 `rusb` 依赖，移除 `zune-jpeg`/`webp-rust`
+  - 前端：新增 Binary 消息处理 → `URL.createObjectURL(blob)` 渲染；自动 `revokeObjectURL` 旧 URL
+  - 预期：帧率 1 FPS → 10-15 FPS，延迟 1-2s → <100ms，花屏/模糊根治
+  - 验证：`cargo clippy` 0 warnings；`cargo test` 69 测试全过；`bun run build` 成功
 
 - v1.9.0 - 2026-06-21（未发布，与 `firmware/car_controller/car_controller.ino` 中 `VERSION` 一致）
   - Karpathy 审计修复 v2

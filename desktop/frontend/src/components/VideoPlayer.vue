@@ -83,7 +83,7 @@ const scheduleRender = () => {
 }
 
 const updateVideo = () => {
-  if (!videoFrame.value || !videoFrame.value.startsWith('data:image/')) {
+  if (!videoFrame.value || (!videoFrame.value.startsWith('data:image/') && !videoFrame.value.startsWith('blob:'))) {
     pendingFrame.value = null
     videoSrc.value = null
     if (rafId !== null) {
@@ -107,6 +107,13 @@ const handleVisibilityChange = () => {
   }
 }
 
+// 组件卸载时释放 Blob URL
+const releaseBlobUrl = () => {
+  if (videoSrc.value && videoSrc.value.startsWith('blob:')) {
+    URL.revokeObjectURL(videoSrc.value)
+  }
+}
+
 const unwatch = watch(videoFrame, updateVideo)
 
 onMounted(() => {
@@ -120,6 +127,7 @@ onUnmounted(() => {
     cancelAnimationFrame(rafId)
     rafId = null
   }
+  releaseBlobUrl()
   unwatch()
 })
 </script>

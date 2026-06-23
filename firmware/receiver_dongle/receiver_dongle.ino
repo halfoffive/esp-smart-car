@@ -23,7 +23,7 @@
  *   无需接收器连接外部网络。
  *
  * 作者：智能车项目团队
- * 版本：2.1.0（修复 P0-04/P1-01/P1-04/P1-05/P1-14/P3-01/P3-13/P3-14/P3-15）
+ * 版本：2.2.0（整帧单包协议：简化视频处理，移除分包组装逻辑）
  * 日期：2026-06-20
  */
 
@@ -396,110 +396,51 @@ inline void sendLinkStatus() {
 // ============================================
 
 /**
- * 处理视频包
- * 按字节偏移解析 10 字节头部，不依赖固定 139 字节的 VideoPacket 结构体布局。
- * 返回 true 表示成功处理一个有效视频包。
+ * 处理整帧视频包（新协议：整帧单包传输）
+ * 帧格式：[0xAA 0x55 0xAA 0x55][帧大小(2字节小端)][帧数据]
+ * 返回 true 表示成功处理一个完整视频帧。
  */
 inline bool handleVideoPacket(const uint8_t* data, int len) {
-    // VideoPacket 最小长度：10字节头部 + 1字节数据 + 1字节校验和 = 12字节
-    if (len < 12) return false;
+    // 整帧最小长度：4字节帧头 + 2字节大小 + 1字节数据 = 7字节
+    if (len < 7) return false;
 
-    // 按字节偏移解析头部（小端 uint16）
-    const uint8_t magic = data[0];
-    const uint8_t version = data[1];
-    const uint16_t frameId = static_cast<uint16_t>(data[2]) | (static_cast<uint16_t>(data[3]) << 8);
-    const uint16_t packetId = static_cast<uint16_t>(data[4]) | (static_cast<uint16_t>(data[5]) << 8);
-    const uint16_t totalPackets = static_cast<uint16_t>(data[6]) | (static_cast<uint16_t>(data[7]) << 8);
-    const uint16_t dataLen = static_cast<uint16_t>(data[8]) | (static_cast<uint16_t>(data[9]) << 8);
-
-    // 严格校验视频包魔术字和版本，防止误判
-    if (magic != StreamConfig::VIDEO_MAGIC ||
-        version != StreamConfig::PROTOCOL_VERSION) return false;
-    // 校验 dataLen 边界，防止缓冲区溢出
-    if (dataLen > StreamConfig::MAX_PACKET_SIZE) return false;
-    // 校验 dataLen 与实际接收长度 len 的一致性
-    // 发送大小 = 10 (header) + dataLen + 1 (checksum) = 11 + dataLen
-    // 若 dataLen + 11 > len，说明 dataLen 超过实际数据长度（损坏/篡改包），
-    // 后续 memcpy 会读取越界，必须提前拒绝
-    if (static_cast<int>(dataLen) + 11 > len) return false;
-
-    // 按实际接收长度计算并验证校验和（校验和为最后一个字节）
-    uint8_t checksum = 0;
-    for (int i = 0; i < len - 1; i++) {
-        checksum += data[i];
-    }
-    if (checksum != data[len - 1]) {
-        return false;  // 校验失败，丢弃该包
+    // 校验帧头标记
+    if (data[0] != 0xAA || data[1] != 0x55 ||
+        data[2] != 0xAA || data[3] != 0x55) {
+        return false;  // 帧头不匹配，丢弃
     }
 
-    // 校验通过，统计接收到的视频包
+    // 解析帧大小（小端 uint16）
+    const uint16_t frameSize = static_cast<uint16_t>(data[4]) |
+                               (static_cast<uint16_t>(data[5]) << 8);
+
+    // 校验帧大小边界
+    if (frameSize == 0 || frameSize > ReceiverConfig::BUFFER_SIZE) {
+        return false;
+    }
+
+    // 校验实际接收长度是否匹配（6字节头 + frameSize）
+    if (len < static_cast<int>(6 + frameSize)) {
+        return false;  // 数据不完整，丢弃
+    }
+
+    // 统计接收到的视频帧
     g_videoPacketsReceived++;
 
-    // 包序号/总数合法性检查
-    if (totalPackets == 0 || packetId >= totalPackets) {
-        g_videoBuffer.size = 0;
-        g_videoBuffer.packetsReceived = 0;
-        g_videoBuffer.isComplete = false;
-        return false;
-    }
+    // 通过USB串口发送完整帧
+    // 格式: [0xAA][0x55][帧大小(4字节，小端)][帧数据]
+    g_videoFramesForwarded++;
+    const uint8_t header[] = {0xAA, 0x55};
+    Serial.write(header, 2);
+    // 帧大小按小端字节序写入（ESP32 为小端架构）
+    Serial.write(reinterpret_cast<const uint8_t*>(&frameSize), 4);
+    g_serialBytesWritten += 6;
 
-    // 新帧开始
-    if (packetId == 0) {
-        g_videoBuffer.size = 0;
-        g_videoBuffer.frameId = frameId;
-        g_videoBuffer.totalPackets = totalPackets;
-        g_videoBuffer.packetsReceived = 0;
-        g_videoBuffer.isComplete = false;
-    }
-
-    // 帧序号、总包数或包顺序异常：丢弃当前帧
-    if (frameId != g_videoBuffer.frameId ||
-        totalPackets != g_videoBuffer.totalPackets ||
-        packetId != g_videoBuffer.packetsReceived) {
-        g_videoBuffer.size = 0;
-        g_videoBuffer.packetsReceived = 0;
-        g_videoBuffer.isComplete = false;
-        return false;
-    }
-
-    // 追加数据（帧缓冲区溢出保护）
-    // 安全检查：如果当前数据写入会超出缓冲区边界，
-    // 丢弃当前帧并重置缓冲区，防止内存越界写入
-    if (g_videoBuffer.size + dataLen > g_videoBuffer.capacity) {
-        // 缓冲区溢出，丢弃当前帧，重置状态
-        g_videoBuffer.size = 0;
-        g_videoBuffer.packetsReceived = 0;
-        g_videoBuffer.isComplete = false;
-        return false;
-    }
-    memcpy(g_videoBuffer.data + g_videoBuffer.size, data + 10, dataLen);
-    g_videoBuffer.size += dataLen;
-    g_videoBuffer.packetsReceived++;
-
-    // 检查帧是否完整
-    if (g_videoBuffer.packetsReceived >= g_videoBuffer.totalPackets) {
-        g_videoBuffer.isComplete = true;
-
-        // 通过USB串口发送完整帧
-        // 格式: [0xAA][0x55][帧大小(4字节，小端)][帧数据]
-        // 使用批量 write 一次性写入帧头+数据，USB-CDC 内部缓冲 ~64KB，无需轮询 availableForWrite
-        g_videoFramesForwarded++;
-        const uint8_t header[] = {0xAA, 0x55};
-        Serial.write(header, 2);
-        // 帧大小按小端字节序写入（ESP32 为小端架构）
-        Serial.write(reinterpret_cast<const uint8_t*>(&g_videoBuffer.size), 4);
-        g_serialBytesWritten += 6;
-
-        // 批量写出帧数据（非阻塞：USB-CDC 缓冲足够容纳 2-4KB 帧，无需分块轮询）
-        const size_t written = Serial.write(g_videoBuffer.data, g_videoBuffer.size);
-        g_serialBytesWritten += written;
-        if (written < g_videoBuffer.size) {
-            Serial.printf("[视频] 批量写出不完整: %u/%u 字节\n", written, g_videoBuffer.size);
-        }
-
-        g_videoBuffer.isComplete = false;
-        g_videoBuffer.size = 0;
-        g_videoBuffer.packetsReceived = 0;
+    // 批量写出帧数据（非阻塞：USB-CDC 缓冲足够容纳 1.4KB 帧，无需分块轮询）
+    const size_t written = Serial.write(data + 6, frameSize);
+    g_serialBytesWritten += written;
+    if (written < frameSize) {
+        Serial.printf("[视频] 批量写出不完整: %u/%u 字节\n", written, frameSize);
     }
 
     return true;

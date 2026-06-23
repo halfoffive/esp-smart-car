@@ -84,7 +84,7 @@ esp-smart-car/
 
 - **Functional C++**: Value semantics preferred, state changes via function returns; `static` globals allowed only when confined to a single translation unit (e.g. `video_stream.h`, `wireless.h`)
 - **Binary protocol**: Custom 8-byte `WirelessPacket` format used for both WiFi/UDP and PC → receiver_dongle USB serial communication
-- **Frame packetization**: Video frames split into 128-byte chunks for WiFi UDP transmission to receiver video port 9002; telemetry (odometry/link status) uses port 9001; control commands use separate UDP port 9000
+- **Frame transmission**: Video frames sent as single UDP packets (whole-frame, no chunking); format: [0xAA 0x55 0xAA 0x55][size(2B LE)][JPEG]; target 800-1400 bytes per frame; telemetry (odometry/link status) uses port 9001; control commands use port 9000; video uses port 9002
 - **Differential steering**: Left/right motor speed differential for turning
 - **S3 单芯片架构**: ESP32-S3 (Freenove FNK0085) 同时承担摄像头采集 + 电机控制 + 编码器测速 + PID + WiFi STA UDP 收发；S3 不再进行 BLE 广播
 - **Speed control**: Motor PWM is controlled directly as 0-255 via the `WirelessPacket.speed` field; keyboard keys 1-9 are convenience shortcuts mapped to PWM values
@@ -158,6 +158,27 @@ Key connections:
 - **Arduino library**: `wireless.h` is installed as an Arduino library in `firmware/libraries/wireless_protocol/` to avoid duplication across sketches
 
 ## 近期修复记录
+
+### 2026-06-23 — 整帧单包传输 + 多任务架构 + Binary WebSocket（视频性能革命）
+
+**问题**: web 端 1 FPS 卡顿、延时极高、花屏、模糊。
+
+**修复**:
+
+- **固件车载端 (S3)**:
+  - `video_stream.h` v2.0.0 — 整帧单包传输：移除 VideoPacket 分包逻辑；帧格式 `[0xAA 0x55 0xAA 0x55][size(2B LE)][JPEG]`；质量调整目标 800-1400 字节；MAX_PACKET_SIZE 从 512 提升至 1400
+  - `car_controller.ino` v2.0.0 — 多任务架构：`videoTask()` 作为独立 FreeRTOS 任务运行在 Core 0（优先级 1，栈 8192），`loop()` 仅处理控制命令+测速+超时检测在 Core 1
+- **固件接收器端 (C6)**:
+  - `receiver_dongle.ino` v2.2.0 — 简化视频处理：`handleVideoPacket()` 完全重写，移除分包组装逻辑（frameId/packetId/totalPackets），直接接收完整帧并转发到 USB-CDC
+- **后端 (Rust)**:
+  - `lib.rs` — `SharedVideoFrame.b64: Arc<String>` → `data: Arc<Vec<u8>>`（直接存储原始 JPEG 二进制）
+  - `serial.rs` — 移除 `try_encode_webp()` 和 Base64 编码；移除 `use base64::Engine`/`use webp_rust::*`/`use zune_jpeg::*` 导入
+  - `websocket.rs` — `video_broadcast_task` 改为发送 `Message::Binary`（格式 `[hash(8B LE)][timestamp(8B LE)][JPEG]`），替代 JSON Text
+  - `Cargo.toml` — 添加 `rusb`；移除 `zune-jpeg`、`webp-rust`
+- **前端 (Vue + TypeScript)**:
+  - `useWebSocket.ts` — 新增 Binary 消息处理：`ArrayBuffer`→`URL.createObjectURL(blob)`；新帧到达时 `revokeObjectURL` 旧 Blob URL；断连时清理
+  - `VideoPlayer.vue` — 支持 `blob:` URL 渲染；`releaseBlobUrl()` 卸载清理
+- **验证**: `bun run build` 成功；`cargo clippy` 0 warnings；`cargo test` 69 测试全过
 
 ### 2026-06-21 - S3 启动 StoreProhibited 崩溃修复（3项修复）
 
