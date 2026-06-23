@@ -67,8 +67,8 @@ inline uint8_t g_currentQuality = 25;
 namespace FrameProtocol {
     /// 整帧传输帧头标记（4字节）
     constexpr uint8_t FRAME_HEADER[4] = {0xAA, 0x55, 0xAA, 0x55};
-    /// 最大帧大小限制（QVGA 320x240 典型帧 1.5-2.2KB，WiFi MTU 约 2304，分片由 lwIP 自动处理）
-    constexpr size_t MAX_FRAME_SIZE = 2400;
+    /// 最大帧大小限制（QVGA 320x240 复杂场景帧可达 2.8KB，留 200B 余量）
+    constexpr size_t MAX_FRAME_SIZE = 3000;
     /// 帧头后紧跟的帧大小字段字节数
     constexpr uint8_t SIZE_FIELD_BYTES = 2;
 }
@@ -136,14 +136,14 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
 /**
  * 纯函数：渐进阻尼质量调整
  * 根据帧大小缓慢调整 JPEG 压缩值，避免质量二值振荡 → FB-OVF / 像素块
- * 目标：QVGA 320x240 下每帧控制在 1200-2400 字节，确保整帧单包传输
+ * 目标：QVGA 320x240 下每帧控制在 1200-3000 字节，确保整帧单包传输
  * 
  * 注意：ESP32 摄像头驱动中压缩值越小 = 质量越高 = 帧越大
  */
 inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQuality) {
     constexpr uint32_t TARGET_MAX = FrameProtocol::MAX_FRAME_SIZE; // 帧上限 = 单包上限
     constexpr uint32_t TARGET_MIN = 1200;  // 帧下限（保证基本画质，QVGA 下约 1.2KB）
-    constexpr uint8_t STEP = 3;             // 每步调整量（渐进，防止剧烈振荡）
+    constexpr uint8_t STEP = 5;             // 每步调整量（加快收敛：2773→50 需 5 步）
 
     if (frameSize > TARGET_MAX) {
         // 帧过大：提高压缩值（向 QUALITY_MAX 方向），每步 +STEP
