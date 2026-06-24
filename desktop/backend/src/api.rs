@@ -373,8 +373,6 @@ pub async fn connect_serial(
     let baud_rate = request.baud_rate.unwrap_or(DEFAULT_BAUD_RATE);
     let port_name = request.port_name;
 
-    // 连接串口（Windows 每次 open 都会触发 DTR 复位导致 ESP32 重启，
-    // 无法可靠发送 P 探测；链路状态由 dongle 每 5 秒自动上报 JSON）
     let state_clone = Arc::clone(&state);
     let port_name_clone = port_name.clone();
     let connect_result = tokio::task::spawn_blocking(move || {
@@ -388,6 +386,35 @@ pub async fn connect_serial(
     match connect_result {
         Ok(Ok(())) => {
             info!("串口连接成功: {} @ {}", port_name, baud_rate);
+
+            // 连接成功后主动发送 'P' 探测命令，触发 Dongle 立即上报链路状态，
+            // 避免前端等待最多 5 秒的周期上报。
+            // 注意：此探测在单独的 spawn_blocking 中执行，不影响连接响应。
+            // 添加 3 秒延迟：ESP32-C6 在串口打开时可能触发 DTR 复位重启，
+            // 需等待设备完成启动后再发送探测命令，否则命令会丢失。
+            let probe_state = Arc::clone(&state);
+            let probe_port_name = port_name.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                let result = tokio::task::spawn_blocking(move || {
+                    let mut manager = probe_state.serial_manager.lock_or_panic("serial_manager");
+                    manager.send_packet(&crate::websocket::build_wireless_packet(11, 0, 0, 0))
+                })
+                .await;
+
+                match result {
+                    Ok(Ok(())) => {
+                        info!("已发送链路探测命令到 {}", probe_port_name);
+                    }
+                    Ok(Err(e)) => {
+                        warn!("发送链路探测命令失败 {}: {}", probe_port_name, e);
+                    }
+                    Err(e) => {
+                        warn!("链路探测任务异常 {}: {}", probe_port_name, e);
+                    }
+                }
+            });
+
             (
                 StatusCode::OK,
                 Json(ApiResponse {

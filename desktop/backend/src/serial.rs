@@ -215,7 +215,7 @@ impl SerialManager {
         info!("连接串口: {} @ {} 波特", port_name, baud_rate);
         self.state = SerialConnectionState::Connecting;
 
-        let port = match serialport::new(port_name, baud_rate)
+        let mut port = match serialport::new(port_name, baud_rate)
             .timeout(READ_TIMEOUT)
             .data_bits(serialport::DataBits::Eight)
             .parity(serialport::Parity::None)
@@ -229,6 +229,17 @@ impl SerialManager {
                 return Err(e.into());
             }
         };
+
+        // 禁用 DTR：Windows 打开串口时默认触发 DTR，导致 ESP32-C6 复位重启，
+        // 重启期间（约 2-3 秒）串口输出乱码，JSON 解析全部失败。
+        if let Err(e) = port.write_data_terminal_ready(false) {
+            warn!("禁用 DTR 失败（非致命）: {}", e);
+        }
+
+        // 清除读缓冲区：丢弃连接前残留的乱码数据（如 DTR 复位期间的输出）
+        if let Err(e) = port.clear(serialport::ClearBuffer::Input) {
+            warn!("清除读缓冲区失败（非致命）: {}", e);
+        }
 
         // 克隆写句柄：读写使用不同句柄，写句柄由 Mutex 串行化访问
         let write_port = match port.try_clone() {
@@ -331,15 +342,33 @@ impl SerialManager {
     /// 解析链路状态 JSON 行
     /// 格式: {"t":"link","dongle":"ok","car_paired":true/false,"last_odom_ms":...}
     pub fn parse_link_line(line: &str) -> Option<LinkStatus> {
-        let parsed: serde_json::Value = serde_json::from_str(line).ok()?;
+        let parsed: serde_json::Value = match serde_json::from_str(line) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("链路状态 JSON 解析失败: {}，原始行: {}", e, line);
+                return None;
+            }
+        };
         if parsed["t"].as_str()? != "link" {
             return None;
         }
-        let dongle_str = parsed.get("dongle")?.as_str()?;
+        let dongle_str = match parsed.get("dongle").and_then(|v| v.as_str()) {
+            Some(s) => s,
+            None => {
+                warn!("链路状态 JSON 缺少 dongle 字段: {}", line);
+                return None;
+            }
+        };
         let dongle_ok = dongle_str == "ok";
-        let car_paired = parsed.get("car_paired")?.as_bool()?;
+        let car_paired = match parsed.get("car_paired").and_then(|v| v.as_bool()) {
+            Some(b) => b,
+            None => {
+                warn!("链路状态 JSON 缺少 car_paired 字段: {}", line);
+                return None;
+            }
+        };
         // 兼容固件输出的 -1（从未收到车载数据），负数归一化为 0
-        let last_odom_ms = parsed.get("last_odom_ms")?.as_i64().unwrap_or(0).max(0) as u64;
+        let last_odom_ms = parsed.get("last_odom_ms").and_then(|v| v.as_i64()).unwrap_or(0).max(0) as u64;
         Some(LinkStatus {
             dongle_ok,
             car_paired,
@@ -1056,11 +1085,15 @@ mod tests {
         assert!(SerialManager::parse_link_line(line).is_none());
     }
 
-    /// 测试链路状态 JSON 行解析 - 缺少 last_odom_ms 字段
+    /// 测试链路状态 JSON 行解析 - 缺少 last_odom_ms 字段时默认为 0
     #[test]
     fn test_parse_link_line_missing_last_odom_ms() {
         let line = r#"{"t":"link","dongle":"ok","car_paired":true}"#;
-        assert!(SerialManager::parse_link_line(line).is_none());
+        let status = SerialManager::parse_link_line(line)
+            .expect("缺少 last_odom_ms 时应默认为 0");
+        assert!(status.dongle_ok);
+        assert!(status.car_paired);
+        assert_eq!(status.last_odom_ms, 0);
     }
 
     /// 测试链路状态 JSON 行解析 - dongle 字段非 "ok" 时 dongle_ok 为 false

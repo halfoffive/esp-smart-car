@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 2026-06-24 — 修复链路探测超时：DTR 禁用 + 主动探测 + 诊断日志
+
+**问题**：生产模式下，串口连接成功后前端 StatusBar 链路状态持续显示"探测中"（dongleOk=false）。
+
+**根因**：Windows 打开串口时默认触发 DTR 信号 → ESP32-C6 复位重启（约 2-3 秒）→ 重启期间串口输出乱码 → 后端 JSON 解析全部失败；同时 `connect_serial` 不再发送 'P' 探测命令，完全依赖 Dongle 每 5 秒周期上报。
+
+**修复**：
+- `serial.rs` — `connect` 方法中打开串口后立即调用 `write_data_terminal_ready(false)` 禁用 DTR，阻止 ESP32-C6 被复位；同时调用 `clear(ClearBuffer::Input)` 清除读缓冲区，丢弃连接前残留的乱码数据
+- `api.rs` — `connect_serial` 成功后在独立 `tokio::spawn` 任务中发送 `CommandType::LINK_STATUS`（'P'）探测命令，添加 3 秒延迟确保 Dongle 完成启动后再发送
+- `serial.rs` — `parse_link_line` 增强诊断日志：JSON 解析失败时输出原始行内容，字段缺失时输出具体缺失字段名；`last_odom_ms` 缺失时默认为 0（而非返回 None）
+
 ### v2.0.0 — 整帧单包传输 + 多任务架构 + Binary WebSocket（视频性能革命）
 
 **问题**：web 端 1 FPS 卡顿、延时极高、花屏、模糊。根因为串口带宽瓶颈（921600bps ≈ 10KB/s），QVGA JPEG 单帧 8-12KB 传输需 0.8-1.2s；分包组装逻辑复杂导致花屏和性能损耗。
