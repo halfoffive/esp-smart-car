@@ -438,11 +438,27 @@ void videoTask(void* parameter) {
     const size_t cachedFrameSize = frame.frameSize;  // frameSize 是栈值，释放帧后仍可读
     releaseFrame(frame);
 
-    // 动态调整质量（渐进阻尼，每步 ±3，稳定在质量 12-35 区间）
+    // 动态调整质量（渐进阻尼，每步 ±10，稳定在 12-63 区间，适配 MTU 1400）
+    const uint8_t oldQuality = g_currentQuality;
     g_currentQuality = adjustQuality(cachedFrameSize, g_currentQuality);
     sensor_t* sensor = esp_camera_sensor_get();
     if (sensor != NULL) {
       sensor->set_quality(sensor, g_currentQuality);
+    } else {
+      // sensor 句柄为 NULL 时质量调整失效，每 100 帧警告一次
+      static bool s_sensorNullWarned = false;
+      if (!s_sensorNullWarned) {
+        Serial.println("[视频任务] esp_camera_sensor_get() 返回 NULL，质量调整失效");
+        s_sensorNullWarned = true;
+      }
+    }
+    // 诊断：质量变化时输出日志（前 5 次或质量跳变 >5 时）
+    static uint8_t s_lastLoggedQuality = oldQuality;
+    static uint8_t s_qualityLogCount = 0;
+    if (g_currentQuality != s_lastLoggedQuality && s_qualityLogCount < 10) {
+      Serial.printf("[视频任务] 质量: %u → %u（帧大小 %uB）\n", oldQuality, g_currentQuality, cachedFrameSize);
+      s_lastLoggedQuality = g_currentQuality;
+      s_qualityLogCount++;
     }
 
     // 每100帧打印一次统计
