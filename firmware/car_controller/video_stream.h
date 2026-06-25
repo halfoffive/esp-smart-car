@@ -58,8 +58,8 @@ inline uint8_t g_consecutiveFailures = 0;
 extern WiFiUDP g_udpVideo;
 /// 连续失败超过此阈值时重启摄像头
 constexpr uint8_t CAMERA_RESTART_THRESHOLD = 10;
-/// 当前 JPEG 压缩值（供 adjustQuality 渐进调整，初始与 camera_config.h 默认值对齐）
-inline uint8_t g_currentQuality = 25;
+/// 当前 JPEG 压缩值（供 adjustQuality 渐进调整，初始 40 适配 MTU 1400）
+inline uint8_t g_currentQuality = 40;
 
 // ============================================
 // 整帧传输协议常量
@@ -146,7 +146,7 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
 inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQuality) {
     constexpr uint32_t TARGET_MAX = FrameProtocol::MAX_FRAME_SIZE; // 帧上限 = 单包上限（≤1400，避开 IP 分片）
     constexpr uint32_t TARGET_MIN = 800;   // 帧下限（保证基本画质，QVGA 下约 0.8KB）
-    constexpr uint8_t STEP = 5;             // 每步调整量（快速收敛：25→63 需 8 步）
+    constexpr uint8_t STEP = 10;             // 每步调整量（快速收敛：40→63 需 3 步）
 
     if (frameSize > TARGET_MAX) {
         // 帧过大：提高压缩值（向 QUALITY_MAX 方向），每步 +STEP
@@ -181,9 +181,10 @@ inline bool sendVideoFrame(const FrameState& frame) {
     const uint8_t* data = frame.frameBuffer->buf;
     const size_t totalLen = frame.frameSize;
 
-    // 安全检查：帧不得超过单包上限
+    // 安全检查：帧超过单包上限时丢弃（调整质量后自动收敛，初启 2-3 帧正常）
     if (totalLen > FrameProtocol::MAX_FRAME_SIZE) {
-        Serial.printf("[视频流] 帧过大(%u > %u)，丢弃\n", totalLen, FrameProtocol::MAX_FRAME_SIZE);
+        Serial.printf("[视频流] 帧超限(%u > %u)，丢弃（质量自动调整中...）\n",
+                      totalLen, FrameProtocol::MAX_FRAME_SIZE);
         return false;
     }
 

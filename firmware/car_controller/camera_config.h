@@ -61,7 +61,7 @@ enum class Resolution : uint8_t {
  */
 enum class ImageQuality : uint8_t {
     QUALITY_LOW = 63,      // 低质量（高压缩；ESP32 驱动上限，复杂场景下帧不超限）
-    QUALITY_MEDIUM = 25,   // 中等质量（QVGA 320x240 下 ~1.5-2.2KB/帧，10FPS 稳定）
+    QUALITY_MEDIUM = 40,   // 中等质量（QVGA 320x240 下 ~1.0-1.4KB/帧，适配 MTU 1400）
     QUALITY_HIGH = 15,     // 高质量（低压缩）
     QUALITY_BEST = 12      // 最佳质量（最低压缩值；与 JPEG_QUALITY_MIN 对齐，防 FB-OVF）
 };
@@ -134,7 +134,7 @@ inline framesize_t resolutionToFramesize(const Resolution res) {
 inline CameraConfiguration createDefaultConfig() {
     return CameraConfiguration(
         Resolution::QVGA,       // 320x240，4倍像素提升画质清晰度
-        ImageQuality::QUALITY_MEDIUM,   // 压缩值 25（QVGA 下 ~8-12KB/帧，10FPS 稳定传输）
+        ImageQuality::QUALITY_MEDIUM,   // 压缩值 40（QVGA 下 ~1.0-1.4KB/帧，适配 MTU 1400）
         0,                     // 默认亮度
         0,                     // 默认对比度
         0,                     // 默认饱和度
