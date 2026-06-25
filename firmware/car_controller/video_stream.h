@@ -191,7 +191,7 @@ inline bool sendVideoFrame(const FrameState& frame) {
     // 构建整帧数据：帧头 + 大小(2字节小端) + 帧数据
     // 总大小 = 4(头) + 2(大小) + frameSize
     const size_t packetSize = 4 + 2 + totalLen;
-    uint8_t packet[4 + 2 + FrameProtocol::MAX_FRAME_SIZE];  // 栈上分配，避免动态分配
+    static uint8_t packet[4 + 2 + FrameProtocol::MAX_FRAME_SIZE];  // BSS 段，不走 FreeRTOS 任务栈
 
     // 写入帧头
     memcpy(packet, FrameProtocol::FRAME_HEADER, 4);
