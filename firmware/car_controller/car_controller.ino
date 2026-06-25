@@ -596,7 +596,9 @@ void setup() {
   Serial.println("[WiFi_STA] 正在连接热点（非阻塞，loop 中轮询）...");
   g_udpControl.begin(UdpConfig::CONTROL_PORT);
   g_udpTelemetry.begin(UdpConfig::TELEMETRY_PORT);
-  g_udpVideo.begin(UdpConfig::VIDEO_PORT);
+  if (!g_udpVideo.begin(UdpConfig::VIDEO_PORT)) {
+    Serial.printf("[UDP] 视频端口 %d 绑定失败！\n", UdpConfig::VIDEO_PORT);
+  }
 
   // 初始化摄像头（S3 单芯片架构：摄像头与电机/编码器/PID 共用同一 MCU）
   if (!initializeCamera(g_cameraConfig)) {

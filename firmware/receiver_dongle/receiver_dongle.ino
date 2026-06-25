@@ -567,7 +567,9 @@ void setup() {
     // 启动 UDP 服务器
     g_udpControl.begin(UdpConfig::CONTROL_PORT);
     g_udpTelemetry.begin(UdpConfig::TELEMETRY_PORT);
-    g_udpVideo.begin(UdpConfig::VIDEO_PORT);
+    if (!g_udpVideo.begin(UdpConfig::VIDEO_PORT)) {
+      Serial.printf("[UDP] 视频端口 %d 绑定失败！\n", UdpConfig::VIDEO_PORT);
+    }
     Serial.printf("[UDP] 控制端口 %d，遥测端口 %d，视频端口 %d 已启动\n",
                   UdpConfig::CONTROL_PORT, UdpConfig::TELEMETRY_PORT, UdpConfig::VIDEO_PORT);
     

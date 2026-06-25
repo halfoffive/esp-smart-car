@@ -202,7 +202,17 @@ inline bool sendVideoFrame(const FrameState& frame) {
     memcpy(packet + 6, data, totalLen);
 
     // 通过 WiFi UDP 整帧发送到接收器（使用独立 g_udpVideo 对象，避免与 g_udpTelemetry 并发竞态）
-    g_udpVideo.beginPacket(apIp, UdpConfig::VIDEO_PORT);
+    // 首帧诊断：输出目标 IP 和包大小，便于排查 UDP 路由问题
+    static bool s_firstFrameSent = false;
+    if (!s_firstFrameSent) {
+      Serial.printf("[UDP] 首帧发送 -> %s:%d，大小 %u 字节\n",
+                    apIp.toString().c_str(), UdpConfig::VIDEO_PORT, packetSize);
+      s_firstFrameSent = true;
+    }
+    if (!g_udpVideo.beginPacket(apIp, UdpConfig::VIDEO_PORT)) {
+      Serial.println("[UDP] 视频 beginPacket 失败");
+      return false;
+    }
     g_udpVideo.write(packet, packetSize);
     if (!g_udpVideo.endPacket()) {
         Serial.println("[UDP] 视频帧发送失败");
