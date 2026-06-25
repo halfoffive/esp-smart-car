@@ -60,7 +60,9 @@ const { connect: wsConnect, disconnect: wsDisconnect } = useWebSocket()
 
 onMounted(() => {
   startHealthCheck()
-  wsConnect()
+  wsConnect().catch((err: Error) => {
+    console.warn('[App] 初始 WebSocket 连接失败:', err.message)
+  })
 })
 
 onUnmounted(() => {

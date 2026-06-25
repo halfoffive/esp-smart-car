@@ -26,11 +26,21 @@ fn run_command(program: &str, args: &[&str], cwd: &Path) -> Result<String, Strin
 /// 检测包管理器是否可用（执行 --version 看退出码）
 fn detect_package_manager() -> Option<&'static str> {
     // 优先 bun（项目使用 bun）
-    if Command::new("bun").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+    if Command::new("bun")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
         return Some("bun");
     }
     // 回退 npm
-    if Command::new("npm").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+    if Command::new("npm")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
         return Some("npm");
     }
     None
@@ -52,7 +62,10 @@ fn main() {
     // ============================================================
     // SKIP_FRONTEND_BUILD 环境变量：跳过构建（CI / 离线场景）
     // ============================================================
-    if std::env::var("SKIP_FRONTEND_BUILD").map(|v| v == "1" || v == "true").unwrap_or(false) {
+    if std::env::var("SKIP_FRONTEND_BUILD")
+        .map(|v| v == "1" || v == "true")
+        .unwrap_or(false)
+    {
         eprintln!("[build.rs] SKIP_FRONTEND_BUILD=1，跳过前端构建");
         // 不调用 emit_rerun_signals —— 前端是预先手动构建的，不需要监听
         return;
@@ -79,7 +92,10 @@ fn main() {
         eprintln!("[build.rs] 安装依赖 ({} install)...", pm);
         match run_command(pm, &["install"], frontend_dir) {
             Ok(_) => eprintln!("[build.rs] 依赖安装完成"),
-            Err(e) => panic!("依赖安装失败:\n{}\n\n请手动执行: cd desktop/frontend && {} install", e, pm),
+            Err(e) => panic!(
+                "依赖安装失败:\n{}\n\n请手动执行: cd desktop/frontend && {} install",
+                e, pm
+            ),
         }
     }
 

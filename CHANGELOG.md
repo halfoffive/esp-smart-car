@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 2026-06-25 — 并行审计修复：视频帧传输链路 + 并发安全 + 前端错误可见性（8项修复）
+
+**背景**: 5 个子代理并行审计固件/后端/前端，发现 60 项独立问题。本次集中修复 3 项 P0 阻断性缺陷和 5 项 P1 高优先级问题。
+
+**P0 严重修复（固件 → 视频帧完全不可达根因）**:
+- `receiver_dongle.ino:436` — **uint16_t 写 4 字节的 UB**：`frameSize` 为 `uint16_t`（2字节），`Serial.write(&frameSize, 4)` 读到栈上相邻的 `header[] = {0xAA, 0x55}` 垃圾字节 → 后端 `serial.rs` 解析为 14 亿字节的帧大小 → 触发 `warn!("帧大小异常")` → `resync_stream` → 所有视频帧丢弃
+- `receiver_dongle.ino:508` — **UDP 接收 buffer 仍是 1024 字节**：v2.0.0 整帧协议发送 1506-5006 字节 UDP 包，但 buffer 从未从旧分包协议（512B/chunk）升级。所有 >1024 字节的帧静默丢弃（无日志），即几乎全部帧
+- 以上两 bug 联合作用解释了"连接时意外字符 + 无画面"的完整链路
+
+**P0 严重修复（前端）**:
+- `useWebSocket.ts:473` — **后端 `error` 消息被前端静默忽略**：后端发送 `{"type":"error","message":"..."}` 时，switch 的 `default:` 分支直接 break，用户完全看不到后端错误。新增 `case 'error'` 处理
+
+**P1 高优先级修复**:
+- `App.vue:63` — `wsConnect()` 返回 Promise 但未 `await`/`.catch()`，构建时无异常但运行时产生 unhandled promise rejection
+- `video_stream.h:205` + `car_controller.ino` — **g_udpTelemetry 跨 Core 0/1 无锁共享**：`sendVideoFrame()`（Core 0）和 `sendOdometryData()`（Core 1）共用同一 `WiFiUDP` 对象，`beginPacket()` 内部状态可能并发破坏。新增独立 `g_udpVideo` 对象
+- `lib.rs:171` — **current_speed 初始值回退到 128**：AGENTS.md 记录曾从 128 改为 5，但状态迁移至 `lib.rs` 时回退
+- `serial.rs:611-613` — **read_next 超时时未 flush_line**：`flush_pending_header` 回填待定字节后 `line_buf` 被丢弃，部分 JSON 行数据永久丢失
+- `useWebSocket.ts:382-384` + `VideoPlayer.vue:71` — **Blob URL 竞态闪烁**：旧 URL 在新帧渲染前被 revoke → `<img>` 短暂显示 broken image。将 URL 生命周期管理移至 VideoPlayer（渲染新帧后释放旧 URL）
+
+**验证**: `bun run build` 成功；`cargo clippy` 0 warnings；`cargo test` 69 测试全过（56 unit + 1 main + 12 integration）
+
 ### 2026-06-24 — 修复链路探测超时：DTR 禁用 + 主动探测 + 诊断日志
 
 **问题**：生产模式下，串口连接成功后前端 StatusBar 链路状态持续显示"探测中"（dongleOk=false）。

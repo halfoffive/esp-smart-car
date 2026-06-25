@@ -60,7 +60,9 @@ fn create_test_app(state: Arc<AppState>) -> Router {
 }
 
 /// 读取响应体并解析为 JSON Value
-async fn read_body_json(response: axum::response::Response<Body>) -> (StatusCode, serde_json::Value) {
+async fn read_body_json(
+    response: axum::response::Response<Body>,
+) -> (StatusCode, serde_json::Value) {
     let status = response.status();
     let bytes = response
         .into_body()
@@ -68,8 +70,7 @@ async fn read_body_json(response: axum::response::Response<Body>) -> (StatusCode
         .await
         .expect("读取响应体失败")
         .to_bytes();
-    let json: serde_json::Value =
-        serde_json::from_slice(&bytes).expect("解析响应 JSON 失败");
+    let json: serde_json::Value = serde_json::from_slice(&bytes).expect("解析响应 JSON 失败");
     (status, json)
 }
 
@@ -246,7 +247,12 @@ async fn test_command_speed_success() {
         .expect("请求 /api/command 失败");
 
     let (status, json) = read_body_json(cmd_resp).await;
-    assert_eq!(status, StatusCode::OK, "设置速度应成功: {}", json["message"]);
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "设置速度应成功: {}",
+        json["message"]
+    );
     assert_eq!(json["success"], true);
     let msg = json["message"].as_str().expect("message 应为字符串");
     assert!(
@@ -448,7 +454,10 @@ async fn test_auth_required() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(json["success"], false);
     let msg = json["message"].as_str().expect("message 应为字符串");
-    assert!(msg.contains("Unauthorized"), "401 消息应包含 Unauthorized：{msg}");
+    assert!(
+        msg.contains("Unauthorized"),
+        "401 消息应包含 Unauthorized：{msg}"
+    );
 }
 
 /// 测试认证启用时携带正确 Token 可通过
@@ -492,5 +501,8 @@ async fn test_auth_with_wrong_token() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(json["success"], false);
     let msg = json["message"].as_str().expect("message 应为字符串");
-    assert!(msg.contains("Unauthorized"), "401 消息应包含 Unauthorized：{msg}");
+    assert!(
+        msg.contains("Unauthorized"),
+        "401 消息应包含 Unauthorized：{msg}"
+    );
 }

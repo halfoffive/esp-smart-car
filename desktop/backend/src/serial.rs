@@ -199,10 +199,7 @@ impl SerialManager {
     /// 扫描可用串口，返回端口名列表
     pub fn list_ports() -> Vec<String> {
         match serialport::available_ports() {
-            Ok(available_ports) => available_ports
-                .into_iter()
-                .map(|p| p.port_name)
-                .collect(),
+            Ok(available_ports) => available_ports.into_iter().map(|p| p.port_name).collect(),
             Err(e) => {
                 warn!("扫描串口失败: {}", e);
                 Vec::new()
@@ -368,7 +365,11 @@ impl SerialManager {
             }
         };
         // 兼容固件输出的 -1（从未收到车载数据），负数归一化为 0
-        let last_odom_ms = parsed.get("last_odom_ms").and_then(|v| v.as_i64()).unwrap_or(0).max(0) as u64;
+        let last_odom_ms = parsed
+            .get("last_odom_ms")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            .max(0) as u64;
         Some(LinkStatus {
             dongle_ok,
             car_paired,
@@ -495,9 +496,8 @@ impl SerialManager {
         match port.read_exact(&mut frame_data) {
             Ok(()) => {
                 // 校验 JPEG SOI 和 EOI 标记，拦截截断帧
-                let has_soi = frame_size >= 2
-                    && frame_data[0] == JPEG_SOI[0]
-                    && frame_data[1] == JPEG_SOI[1];
+                let has_soi =
+                    frame_size >= 2 && frame_data[0] == JPEG_SOI[0] && frame_data[1] == JPEG_SOI[1];
                 let has_eoi = frame_size >= 2
                     && frame_data[frame_size - 2] == JPEG_EOI[0]
                     && frame_data[frame_size - 1] == JPEG_EOI[1];
@@ -566,8 +566,7 @@ impl SerialManager {
                 FrameParseState::WaitingHeader => {
                     if byte == FRAME_HEADER[0] {
                         // 仅在行边界识别视频帧头，防止 JSON 中的 0xAA 0x55 被误解析
-                        let at_boundary =
-                            line_buf.is_empty() || line_buf.last() == Some(&b'\n');
+                        let at_boundary = line_buf.is_empty() || line_buf.last() == Some(&b'\n');
                         if at_boundary {
                             state = FrameParseState::Header0;
                         } else {
@@ -608,8 +607,9 @@ impl SerialManager {
             }
         }
 
-        // 总超时：回填待定状态字节
+        // 总超时：回填待定状态字节并刷新行缓冲区，防止部分 JSON 行数据丢失
         Self::flush_pending_header(&mut state, &mut line_buf);
+        Self::flush_line(&mut line_buf, &mut results);
         Ok(results)
     }
 }
@@ -655,8 +655,7 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                     }
                 };
 
-                let result =
-                    SerialManager::read_next(&mut port, gen_arc, taken_generation);
+                let result = SerialManager::read_next(&mut port, gen_arc, taken_generation);
 
                 {
                     let mut manager = state_clone.serial_manager.lock_or_panic("serial_manager");
@@ -696,6 +695,10 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                                 latest_frame = Some(data);
                             }
                             SerialReadResult::OdometryLine(line) => {
+                                // 跳过人读日志行（如 [STATS]、[BLE]、[WiFi_AP]），仅解析 JSON 行
+                                if !line.starts_with('{') {
+                                    continue;
+                                }
                                 if let Some(ble_devs) = SerialManager::parse_ble_line(&line) {
                                     let mut devices =
                                         state.ble_devices.lock_or_recover("ble_devices");
@@ -704,8 +707,7 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                                 } else if let Some(link_status) =
                                     SerialManager::parse_link_line(&line)
                                 {
-                                    let mut link =
-                                        state.link_status.lock_or_recover("link_status");
+                                    let mut link = state.link_status.lock_or_recover("link_status");
                                     let changed = *link != link_status;
                                     if changed {
                                         info!("链路状态变化: {:?}", link_status);
@@ -738,8 +740,7 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                     if let Some(data) = latest_frame {
                         let size = data.len();
                         {
-                            let mut manager =
-                                state.serial_manager.lock_or_panic("serial_manager");
+                            let mut manager = state.serial_manager.lock_or_panic("serial_manager");
                             manager.frames_received += 1;
                             manager.frame_count = manager.frames_received as u32;
                         }
@@ -1089,8 +1090,7 @@ mod tests {
     #[test]
     fn test_parse_link_line_missing_last_odom_ms() {
         let line = r#"{"t":"link","dongle":"ok","car_paired":true}"#;
-        let status = SerialManager::parse_link_line(line)
-            .expect("缺少 last_odom_ms 时应默认为 0");
+        let status = SerialManager::parse_link_line(line).expect("缺少 last_odom_ms 时应默认为 0");
         assert!(status.dongle_ok);
         assert!(status.car_paired);
         assert_eq!(status.last_odom_ms, 0);

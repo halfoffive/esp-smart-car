@@ -104,11 +104,7 @@ impl WebSocketManager {
                 Ordering::Relaxed,
             ) {
                 Ok(_) => {
-                    info!(
-                        "WebSocket客户端断开: #{} (剩余: {})",
-                        id,
-                        current - 1
-                    );
+                    info!("WebSocket客户端断开: #{} (剩余: {})", id, current - 1);
                     break;
                 }
                 Err(actual) => current = actual,
@@ -353,7 +349,9 @@ async fn video_broadcast_task(
         if last_port_check.elapsed() >= PORT_CHECK_INTERVAL {
             last_port_check = Instant::now();
             let current_ports = {
-                let ports = video_state.available_ports.lock_or_recover("available_ports");
+                let ports = video_state
+                    .available_ports
+                    .lock_or_recover("available_ports");
                 ports.clone()
             };
             if current_ports != last_ports {
@@ -381,7 +379,7 @@ async fn video_broadcast_task(
                     .duration_since(UNIX_EPOCH)
                     .expect("系统时间不应早于 UNIX 纪元")
                     .as_millis() as u64;
-                let header_len = 16;  // 8B hash + 8B timestamp
+                let header_len = 16; // 8B hash + 8B timestamp
                 let mut bin_msg = Vec::with_capacity(header_len + raw_data.len());
                 bin_msg.extend_from_slice(&hash.to_le_bytes());
                 bin_msg.extend_from_slice(&ts.to_le_bytes());
@@ -639,9 +637,7 @@ fn send_ws_message(
 /// 在 spawn_blocking 中读取串口状态与计数器
 ///
 /// video_task 不直接锁 SerialManager，所有串口相关操作保留在 spawn_blocking 中。
-async fn read_serial_status(
-    video_state: &Arc<AppState>,
-) -> (String, u32, u64, u64, u64) {
+async fn read_serial_status(video_state: &Arc<AppState>) -> (String, u32, u64, u64, u64) {
     let state_clone = Arc::clone(video_state);
     match tokio::task::spawn_blocking(move || {
         let manager = state_clone.serial_manager.lock_or_panic("serial_manager");
@@ -781,7 +777,10 @@ async fn handle_message(
             let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
             let packet = build_wireless_packet(type_value, packet_data, packet_speed, seq);
 
-            if send_packet_blocking(state, packet, tx, "速度命令发送失败").await.is_err() {
+            if send_packet_blocking(state, packet, tx, "速度命令发送失败")
+                .await
+                .is_err()
+            {
                 return Ok(());
             }
             // 节流式命令转发日志：相同命令 1 秒内只记一次
@@ -799,7 +798,10 @@ async fn handle_message(
 
             let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
             let packet = build_wireless_packet(2, 0, speed, seq);
-            if send_packet_blocking(state, packet, tx, "速度命令发送失败").await.is_err() {
+            if send_packet_blocking(state, packet, tx, "速度命令发送失败")
+                .await
+                .is_err()
+            {
                 return Ok(());
             }
             state.current_speed.store(speed, Ordering::Relaxed);
@@ -1102,9 +1104,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_message_heartbeat() {
         let state = create_test_state();
-        let heartbeat = Arc::new(Mutex::new(
-            Instant::now() - Duration::from_secs(1),
-        ));
+        let heartbeat = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
         let (tx, mut rx) = mpsc::channel::<Message>(MPSC_CAPACITY);
 
         let msg = r#"{"type":"heartbeat"}"#;

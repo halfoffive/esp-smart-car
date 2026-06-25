@@ -159,6 +159,26 @@ Key connections:
 
 ## 近期修复记录
 
+### 2026-06-25 — 并行审计修复：视频帧传输链路 + 并发安全 + 前端错误可见性（8项修复）
+
+**背景**: 5 子代理并行审计，发现 60 项独立问题。集中修复 3 P0 + 5 P1。
+
+**P0 固件修复**:
+- `receiver_dongle.ino:436` — **uint16_t 写 4 字节 UB**：`frameSize` 为 `uint16_t`，`Serial.write(&frameSize, 4)` 读栈上相邻 `header[] = {0xAA, 0x55}` → 后端解析为 ~14 亿字节帧大小 → `resync_stream` → 全部帧丢弃。修复：扩展为 `uint32_t frameSize32` 后写入
+- `receiver_dongle.ino:508` — **UDP 接收 buffer 仍是 1024 字节**：v2.0.0 整帧协议发送 1506-5006 字节，但 buffer 未升级。修复：`uint8_t buf[1024]` → `uint8_t buf[ReceiverConfig::BUFFER_SIZE]`（32768 字节）
+
+**P0 前端修复**:
+- `useWebSocket.ts:473` — **后端 `error` 消息被忽略**：新增 `case 'error'` 处理，设置 `connectionError` 并输出警告
+
+**P1 修复**:
+- `App.vue:63` — `wsConnect()` 未处理 Promise rejection，添加 `.catch()`
+- `video_stream.h:205` + `car_controller.ino` — **g_udpTelemetry 跨 Core 0/1 无锁共享**：新增独立 `g_udpVideo` 对象
+- `lib.rs:171` — **current_speed 初始值回退到 128**：修正为 5
+- `serial.rs:611-613` — **read_next 超时丢数据**：补 `flush_line` 防止部分 JSON 行永久丢失
+- `useWebSocket.ts:382` + `VideoPlayer.vue:71` — **Blob URL 竞态闪烁**：URL 生命周期移至 VideoPlayer（渲染新帧后释放旧 URL）
+
+**验证**: `bun run build` 成功；`cargo clippy` 0 warnings；`cargo test` 69 测试全过
+
 ### 2026-06-23 — 整帧单包传输 + 多任务架构 + Binary WebSocket（视频性能革命）
 
 **问题**: web 端 1 FPS 卡顿、延时极高、花屏、模糊。

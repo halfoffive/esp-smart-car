@@ -195,7 +195,11 @@ impl axum::serve::Listener for TlsListener {
 /// 静态文件处理器（嵌入二进制）
 /// 先尝试匹配请求路径的文件，找不到则返回 index.html（SPA fallback）
 async fn static_handler(uri: Uri) -> Response<Body> {
-    fn build_response(status: StatusCode, body: Body, content_type: Option<&str>) -> Response<Body> {
+    fn build_response(
+        status: StatusCode,
+        body: Body,
+        content_type: Option<&str>,
+    ) -> Response<Body> {
         let mut builder = Response::builder().status(status);
         if let Some(ct) = content_type {
             builder = builder.header(header::CONTENT_TYPE, ct);
@@ -246,7 +250,7 @@ mod tests {
         let current_speed = state
             .current_speed
             .load(std::sync::atomic::Ordering::Relaxed);
-        assert_eq!(current_speed, 128);
+        assert_eq!(current_speed, 5);
         let video_frame = state.video_frame.lock_or_recover("video_frame");
         assert!(video_frame.is_none());
     }

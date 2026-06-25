@@ -119,9 +119,7 @@ pub struct BleDeviceDto {
 }
 
 /// 列出可用串口（使用 AppState 缓存的串口列表，避免每次请求都执行 spawn_blocking）
-pub async fn list_ports(
-    State(state): State<Arc<AppState>>,
-) -> (StatusCode, Json<PortsResponse>) {
+pub async fn list_ports(State(state): State<Arc<AppState>>) -> (StatusCode, Json<PortsResponse>) {
     // 使用 AppState 缓存的串口列表，避免每次请求都执行 spawn_blocking
     // available_ports 改为 std::sync::Mutex 后用 lock_or_recover 短时持锁复制
     let ports = state
@@ -205,7 +203,10 @@ pub async fn handle_command(
 
     // 单字符命令：长度 > 1 且不是 S: 格式时拒绝（避免误用多字节字符串作为命令）
     if request.command.len() > 1 {
-        warn!("多字节命令不支持（仅接受单字符或 S:<pwm>）: {}", request.command);
+        warn!(
+            "多字节命令不支持（仅接受单字符或 S:<pwm>）: {}",
+            request.command
+        );
         return (
             StatusCode::BAD_REQUEST,
             Json(ApiResponse {
@@ -378,7 +379,9 @@ pub async fn connect_serial(
     let connect_result = tokio::task::spawn_blocking(move || {
         let mut manager = state_clone.serial_manager.lock_or_panic("serial_manager");
         manager.disconnect();
-        manager.connect(&port_name_clone, baud_rate).map_err(|e| e.to_string())
+        manager
+            .connect(&port_name_clone, baud_rate)
+            .map_err(|e| e.to_string())
     })
     .await;
 
@@ -482,9 +485,7 @@ pub async fn disconnect_serial(
 }
 
 /// 获取 BLE 设备列表
-pub async fn get_ble_devices(
-    State(state): State<Arc<AppState>>,
-) -> Json<BleDevicesResponse> {
+pub async fn get_ble_devices(State(state): State<Arc<AppState>>) -> Json<BleDevicesResponse> {
     let devices = state.ble_devices.lock_or_recover("ble_devices");
     let device_list: Vec<BleDeviceDto> = devices
         .iter()
@@ -598,7 +599,7 @@ mod tests {
             baud_rate: None,
             frame_count: 0,
             bytes_sent: 0,
-            current_speed: 128,
+            current_speed: 5,
             ws_clients: 0,
             uptime: 42,
             version: "1.2.0".to_string(),
@@ -610,7 +611,7 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).expect("StatusResponse 序列化失败");
         assert!(json.contains("\"serial_status\":\"未连接\""));
-        assert!(json.contains("\"current_speed\":128"));
+        assert!(json.contains("\"current_speed\":5"));
         assert!(json.contains("\"version\":\"1.2.0\""));
     }
 
@@ -657,22 +658,14 @@ mod tests {
             command: "\n".to_string(),
         };
         let (status, _) = handle_command(State(state.clone()), Json(request)).await;
-        assert_eq!(
-            status,
-            StatusCode::BAD_REQUEST,
-            "换行符命令应返回 400"
-        );
+        assert_eq!(status, StatusCode::BAD_REQUEST, "换行符命令应返回 400");
 
         // 测试 Unicode 字符命令（不在合法单字符命令集中，应返回 400）
         let request = CommandRequest {
             command: "你".to_string(),
         };
         let (status, _) = handle_command(State(state.clone()), Json(request)).await;
-        assert_eq!(
-            status,
-            StatusCode::BAD_REQUEST,
-            "Unicode 命令应返回 400"
-        );
+        assert_eq!(status, StatusCode::BAD_REQUEST, "Unicode 命令应返回 400");
 
         // 测试空命令（应返回 400 Bad Request）
         let request = CommandRequest {

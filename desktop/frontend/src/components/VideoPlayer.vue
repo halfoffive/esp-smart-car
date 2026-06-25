@@ -70,7 +70,12 @@ const updateRenderFps = () => {
 
 const renderFrame = () => {
   rafId = null
+  const oldUrl = videoSrc.value
   videoSrc.value = pendingFrame.value
+  // 在新帧已设置到 DOM 后再释放旧 Blob URL，避免竞态闪烁
+  if (oldUrl && oldUrl !== pendingFrame.value && oldUrl.startsWith('blob:')) {
+    URL.revokeObjectURL(oldUrl)
+  }
   if (pendingFrame.value) {
     updateRenderFps()
   }
@@ -107,10 +112,13 @@ const handleVisibilityChange = () => {
   }
 }
 
-// 组件卸载时释放 Blob URL
+// 组件卸载时释放 Blob URL（包括当前显示的帧和待渲染的帧）
 const releaseBlobUrl = () => {
   if (videoSrc.value && videoSrc.value.startsWith('blob:')) {
     URL.revokeObjectURL(videoSrc.value)
+  }
+  if (pendingFrame.value && pendingFrame.value !== videoSrc.value && pendingFrame.value.startsWith('blob:')) {
+    URL.revokeObjectURL(pendingFrame.value)
   }
 }
 

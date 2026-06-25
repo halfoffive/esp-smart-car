@@ -411,16 +411,16 @@ inline bool handleVideoPacket(const uint8_t* data, int len) {
     }
 
     // 解析帧大小（小端 uint16）
-    const uint16_t frameSize = static_cast<uint16_t>(data[4]) |
-                               (static_cast<uint16_t>(data[5]) << 8);
+    const uint16_t parsedSize = static_cast<uint16_t>(data[4]) |
+                                (static_cast<uint16_t>(data[5]) << 8);
 
     // 校验帧大小边界
-    if (frameSize == 0 || frameSize > ReceiverConfig::BUFFER_SIZE) {
+    if (parsedSize == 0 || parsedSize > ReceiverConfig::BUFFER_SIZE) {
         return false;
     }
 
-    // 校验实际接收长度是否匹配（6字节头 + frameSize）
-    if (len < static_cast<int>(6 + frameSize)) {
+    // 校验实际接收长度是否匹配（6字节头 + parsedSize）
+    if (len < static_cast<int>(6 + parsedSize)) {
         return false;  // 数据不完整，丢弃
     }
 
@@ -432,15 +432,16 @@ inline bool handleVideoPacket(const uint8_t* data, int len) {
     g_videoFramesForwarded++;
     const uint8_t header[] = {0xAA, 0x55};
     Serial.write(header, 2);
-    // 帧大小按小端字节序写入（ESP32 为小端架构）
-    Serial.write(reinterpret_cast<const uint8_t*>(&frameSize), 4);
+    // 帧大小按小端字节序写入（显式扩展为 uint32_t，避免 uint16_t 写 4 字节的 UB）
+    const uint32_t frameSize32 = static_cast<uint32_t>(parsedSize);
+    Serial.write(reinterpret_cast<const uint8_t*>(&frameSize32), 4);
     g_serialBytesWritten += 6;
 
-    // 批量写出帧数据（非阻塞：USB-CDC 缓冲足够容纳 1.4KB 帧，无需分块轮询）
-    const size_t written = Serial.write(data + 6, frameSize);
+    // 批量写出帧数据（非阻塞：USB-CDC 缓冲足够容纳整帧，无需分块轮询）
+    const size_t written = Serial.write(data + 6, parsedSize);
     g_serialBytesWritten += written;
-    if (written < frameSize) {
-        Serial.printf("[视频] 批量写出不完整: %u/%u 字节\n", written, frameSize);
+    if (written < parsedSize) {
+        Serial.printf("[视频] 批量写出不完整: %u/%u 字节\n", written, parsedSize);
     }
 
     return true;
@@ -505,7 +506,7 @@ void handleVideoUdp() {
     int len = g_udpVideo.parsePacket();
     if (len <= 0) return;
 
-    uint8_t buf[1024];  // 扩容以容纳 512B 数据包（10B头+512B数据+1B校验和=523B）
+    uint8_t buf[ReceiverConfig::BUFFER_SIZE];  // 32KB，匹配整帧单包协议（最大 ~5KB）
     // 超大包丢弃而非截断：清空 UDP 当前包并返回
     if (len > static_cast<int>(sizeof(buf))) {
         while (g_udpVideo.available() > 0) {

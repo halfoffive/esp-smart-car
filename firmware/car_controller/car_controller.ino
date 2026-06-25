@@ -35,8 +35,10 @@
 constexpr const char* VERSION = "1.10.0";
 
 // UDP 套接字（video_stream.h 中通过 extern 声明，在同一 sketch 中定义即可）
+// 控制命令 + 遥测 + 视频各使用独立 WiFiUDP 对象，避免 Core0/Core1 并发访问竞态
 WiFiUDP g_udpControl;
 WiFiUDP g_udpTelemetry;
+WiFiUDP g_udpVideo;
 
 // ============================================
 // 调试配置（条件编译开关）
@@ -583,6 +585,7 @@ void setup() {
   Serial.println("[WiFi_STA] 正在连接热点（非阻塞，loop 中轮询）...");
   g_udpControl.begin(UdpConfig::CONTROL_PORT);
   g_udpTelemetry.begin(UdpConfig::TELEMETRY_PORT);
+  g_udpVideo.begin(UdpConfig::VIDEO_PORT);
 
   // 初始化摄像头（S3 单芯片架构：摄像头与电机/编码器/PID 共用同一 MCU）
   if (!initializeCamera(g_cameraConfig)) {

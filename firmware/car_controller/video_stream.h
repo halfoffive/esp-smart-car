@@ -54,8 +54,8 @@ inline StreamState g_streamState{};
 inline uint16_t g_frameId = 0;
 /// 连续帧捕获失败计数（用于错误恢复）
 inline uint8_t g_consecutiveFailures = 0;
-/// 全局遥测 UDP 对象，由 car_controller.ino 定义
-extern WiFiUDP g_udpTelemetry;
+/// 视频专用 UDP 对象，由 car_controller.ino 定义（独立于 g_udpTelemetry，避免 Core0/Core1 并发竞态）
+extern WiFiUDP g_udpVideo;
 /// 连续失败超过此阈值时重启摄像头
 constexpr uint8_t CAMERA_RESTART_THRESHOLD = 10;
 /// 当前 JPEG 压缩值（供 adjustQuality 渐进调整，初始与 camera_config.h 默认值对齐）
@@ -201,10 +201,10 @@ inline bool sendVideoFrame(const FrameState& frame) {
     // 写入帧数据
     memcpy(packet + 6, data, totalLen);
 
-    // 通过 WiFi UDP 整帧发送到接收器
-    g_udpTelemetry.beginPacket(apIp, UdpConfig::VIDEO_PORT);
-    g_udpTelemetry.write(packet, packetSize);
-    if (!g_udpTelemetry.endPacket()) {
+    // 通过 WiFi UDP 整帧发送到接收器（使用独立 g_udpVideo 对象，避免与 g_udpTelemetry 并发竞态）
+    g_udpVideo.beginPacket(apIp, UdpConfig::VIDEO_PORT);
+    g_udpVideo.write(packet, packetSize);
+    if (!g_udpVideo.endPacket()) {
         Serial.println("[UDP] 视频帧发送失败");
         return false;
     }

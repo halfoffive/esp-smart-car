@@ -141,7 +141,10 @@ impl AppState {
                     Arc::from(s)
                 })
                 .or_else(|| {
-                    info!("未设置 API_TOKEN，使用默认 Token（本地开发）: {}", DEFAULT_API_TOKEN);
+                    info!(
+                        "未设置 API_TOKEN，使用默认 Token（本地开发）: {}",
+                        DEFAULT_API_TOKEN
+                    );
                     Some(Arc::from(DEFAULT_API_TOKEN))
                 })
         };
@@ -168,7 +171,7 @@ impl AppState {
             video_frame: Arc::new(std::sync::Mutex::new(None)),
             use_webp,
 
-            current_speed: AtomicU8::new(128),
+            current_speed: AtomicU8::new(5),
             current_drive_mode: AtomicU8::new(0),
             packet_seq: AtomicU16::new(0),
             odometry: Arc::new(std::sync::Mutex::new(OdometryData::default())),

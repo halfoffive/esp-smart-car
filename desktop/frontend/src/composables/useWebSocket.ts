@@ -378,13 +378,9 @@ function createWebSocket() {
                 const blob = new Blob([jpegData], { type: 'image/jpeg' })
                 const url = URL.createObjectURL(blob)
 
-                // 释放旧 URL 避免内存泄漏
-                if (videoFrame.value && videoFrame.value.startsWith('blob:')) {
-                  URL.revokeObjectURL(videoFrame.value)
-                }
-
+                // 直接设置新 URL，不在此处释放旧 URL
+                // 旧 URL 由 VideoPlayer 组件在渲染新帧后释放，避免竞态闪烁
                 videoFrame.value = url
-                videoFps.value = videoFps.value  // force reactivity
                 // 更新 videoFps：每秒统计接收到的视频帧数
                 frameCount++
                 const now = Date.now()
@@ -467,6 +463,14 @@ function createWebSocket() {
                 // 接收串口列表推送
                 if (Array.isArray(msg.ports)) {
                   availablePorts.value = (msg.ports as unknown[]).filter((p): p is string => typeof p === 'string')
+                }
+                break
+
+              case 'error':
+                // 后端错误消息（如非法速度、未知命令等），向用户展示
+                if (typeof msg.message === 'string') {
+                  connectionError.value = msg.message
+                  console.warn('[WebSocket] 后端错误:', msg.message)
                 }
                 break
 
