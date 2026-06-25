@@ -23,8 +23,8 @@
  *   无需接收器连接外部网络。
  *
  * 作者：智能车项目团队
- * 版本：2.2.0（整帧单包协议：简化视频处理，移除分包组装逻辑）
- * 日期：2026-06-20
+ * 版本：2.2.1（修复 uint16_t 帧大小 UB + UDP buffer 扩容 + 静态缓冲防栈溢出）
+ * 日期：2026-06-25
  */
 
 #include "../libraries/wireless_protocol/src/wireless.h"
@@ -506,7 +506,7 @@ void handleVideoUdp() {
     int len = g_udpVideo.parsePacket();
     if (len <= 0) return;
 
-    uint8_t buf[ReceiverConfig::BUFFER_SIZE];  // 32KB，匹配整帧单包协议（最大 ~5KB）
+    static uint8_t buf[ReceiverConfig::BUFFER_SIZE];  // 32KB 静态缓冲（BSS 段，非栈），匹配整帧单包协议
     // 超大包丢弃而非截断：清空 UDP 当前包并返回
     if (len > static_cast<int>(sizeof(buf))) {
         while (g_udpVideo.available() > 0) {
