@@ -4,8 +4,8 @@
  * 支持动态质量调整和帧率控制
  * 
  * 作者：智能车项目团队
- * 版本：2.0.0（整帧单包传输 + 多任务支持）
- * 日期：2026-06-23
+ * 版本：2.0.1（MAX_FRAME_SIZE 5000→1400，适配 WiFi MTU 1460，避免 IP 分片丢失）
+ * 日期：2026-06-25
  */
 
 #ifndef VIDEO_STREAM_H
@@ -67,10 +67,12 @@ inline uint8_t g_currentQuality = 25;
 namespace FrameProtocol {
     /// 整帧传输帧头标记（4字节）
     constexpr uint8_t FRAME_HEADER[4] = {0xAA, 0x55, 0xAA, 0x55};
-    /// 最大帧大小限制（QVGA 复杂场景可达 3.2KB，留余量；lwIP UDP 分片自动处理）
-    constexpr size_t MAX_FRAME_SIZE = 5000;
+    /// 最大帧大小限制（≤1400B 确保单包不触发 IP 分片：WiFi MTU 1460 − IP头20 − UDP头8 − 协议头6 = 1426）
+    constexpr size_t MAX_FRAME_SIZE = 1400;
     /// 帧头后紧跟的帧大小字段字节数
     constexpr uint8_t SIZE_FIELD_BYTES = 2;
+    /// WiFi UDP 单包最大有效载荷（MTU 1460 − IP 20 − UDP 8 = 1432）
+    constexpr size_t MAX_UDP_PAYLOAD = 1432;
 }
 
 // ============================================
@@ -136,13 +138,14 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
 /**
  * 纯函数：渐进阻尼质量调整
  * 根据帧大小缓慢调整 JPEG 压缩值，避免质量二值振荡 → FB-OVF / 像素块
- * 目标：QVGA 320x240 下每帧控制在 1500-5000 字节，确保整帧单包传输
+ * 目标：QVGA 320x240 下每帧控制在 800-1400 字节，确保单包不触发 WiFi IP 分片
+ * （WiFi MTU 1460 − IP头20 − UDP头8 − 协议头6 = 1426B 有效载荷上限）
  * 
  * 注意：ESP32 摄像头驱动中压缩值越小 = 质量越高 = 帧越大
  */
 inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQuality) {
-    constexpr uint32_t TARGET_MAX = FrameProtocol::MAX_FRAME_SIZE; // 帧上限 = 单包上限
-    constexpr uint32_t TARGET_MIN = 1500;  // 帧下限（保证基本画质，QVGA 下约 1.5KB）
+    constexpr uint32_t TARGET_MAX = FrameProtocol::MAX_FRAME_SIZE; // 帧上限 = 单包上限（≤1400，避开 IP 分片）
+    constexpr uint32_t TARGET_MIN = 800;   // 帧下限（保证基本画质，QVGA 下约 0.8KB）
     constexpr uint8_t STEP = 5;             // 每步调整量（快速收敛：25→63 需 8 步）
 
     if (frameSize > TARGET_MAX) {
@@ -166,9 +169,9 @@ inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQual
 // ============================================
 
 /**
- * 发送完整视频帧
+ * 发送完整视频帧（MTU 安全：帧 ≤1400B，UDP 包 ≤1406B < WiFi MTU 1460）
  * 将 JPEG 帧整体封装为单包 UDP 数据，直接发送到接收器
- * 帧格式：[0xAA 0x55 0xAA 0x55][帧大小(2字节小端)][帧数据]
+ * 帧格式：[0xAA 0x55 0xAA 0x55][帧大小(2B LE)][JPEG 数据]
  * S3 单芯片架构下由独立 FreeRTOS 任务调用
  * 返回：true 发送成功，false 发送失败
  */
