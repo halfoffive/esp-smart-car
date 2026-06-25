@@ -370,7 +370,10 @@ function createWebSocket() {
                 ? event.data.arrayBuffer()
                 : Promise.resolve(event.data)
               buffer.then((data: ArrayBuffer) => {
-                if (data.byteLength < 16) return  // 最小头部 16 字节
+                if (data.byteLength < 16) {
+                  console.warn('[WebSocket] 视频帧过短，丢弃:', data.byteLength, 'bytes')
+                  return
+                }
                 // 二进制头部布局：frameHash(8B LE) + timestamp(8B LE) + JPEG数据
                 const jpegData = data.slice(16)
 
@@ -389,11 +392,11 @@ function createWebSocket() {
                   frameCount = 0
                   lastFpsUpdate = now
                 }
-              }).catch(() => {
-                // Blob 解析失败，丢弃
+              }).catch((err: unknown) => {
+                console.warn('[WebSocket] 视频帧 Blob 解析失败:', err)
               })
-            } catch {
-              // 二进制数据解析异常，丢弃
+            } catch (err) {
+              console.warn('[WebSocket] 二进制视频帧处理异常:', err)
             }
             return
           }

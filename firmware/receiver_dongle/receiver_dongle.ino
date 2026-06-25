@@ -520,6 +520,17 @@ void handleVideoUdp() {
         // 有效视频包也来自车载端，动态记录 IP
         g_carIp = g_udpVideo.remoteIP();
         g_lastCarDataTime = millis();
+    } else {
+        // 帧被拒：累计 5 秒输出一次诊断日志
+        static uint32_t s_lastRejectLog = 0;
+        static uint32_t s_rejectCount = 0;
+        s_rejectCount++;
+        if (millis() - s_lastRejectLog > 5000) {
+            Serial.printf("[视频] 过去 5 秒内丢弃 %u 个无效帧（长度=%d，buf[0..3]=%02X %02X %02X %02X）\n",
+                         s_rejectCount, len, buf[0], buf[1], buf[2], buf[3]);
+            s_rejectCount = 0;
+            s_lastRejectLog = millis();
+        }
     }
 }
 

@@ -373,10 +373,17 @@ void videoTask(void* parameter) {
 
   while (true) {
     // WiFi 守卫：未连接时跳过视频发送，避免底层 lwIP socket 野指针 → StoreProhibited
+    static bool s_videoWifiWasDown = false;
     if (WiFi.status() != WL_CONNECTED) {
+      // 单次日志：WiFi 断开时输出一次，避免刷屏
+      if (!s_videoWifiWasDown) {
+        Serial.println("[视频任务] WiFi 未连接，暂停视频发送（等待重连...）");
+        s_videoWifiWasDown = true;
+      }
       vTaskDelay(pdMS_TO_TICKS(100));
       continue;
     }
+    s_videoWifiWasDown = false;
 
     // 帧率控制：使用 wireless.h 中的统一常量
     const uint32_t currentTime = millis();
@@ -392,6 +399,10 @@ void videoTask(void* parameter) {
       g_streamState.droppedFrames++;
       // 连续失败恢复逻辑：超过阈值时先停车再重启摄像头硬件
       g_consecutiveFailures++;
+      // 前 3 次失败各输出一次日志，之后仅在 10 的倍数次输出（发现间歇性摄像头异常）
+      if (g_consecutiveFailures <= 3 || g_consecutiveFailures % 10 == 0) {
+        Serial.printf("[视频任务] 帧捕获失败（连续第 %d 次）\n", g_consecutiveFailures);
+      }
       if (g_consecutiveFailures >= CAMERA_RESTART_THRESHOLD) {
         Serial.printf("[视频流] 连续 %d 次帧捕获失败，重启摄像头...\n", g_consecutiveFailures);
         esp_camera_deinit();
