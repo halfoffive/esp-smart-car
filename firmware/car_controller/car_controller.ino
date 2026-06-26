@@ -349,10 +349,25 @@ void sendOdometryData() {
 
   // 通过 UDP 发送测速数据到接收器（AP），使用遥测端口
   IPAddress apIp(NetworkConfig::AP_IP[0], NetworkConfig::AP_IP[1], NetworkConfig::AP_IP[2], NetworkConfig::AP_IP[3]);
-  g_udpTelemetry.beginPacket(apIp, UdpConfig::TELEMETRY_PORT);
+  if (!g_udpTelemetry.beginPacket(apIp, UdpConfig::TELEMETRY_PORT)) {
+    // beginPacket 失败不输出日志（WiFi未连接时 sendOdometryData 的 WiFi 守卫已拦截，
+    // 此处仅因 lwIP 内部异常触发，每 10s 最多报告一次避免刷屏）
+    static uint32_t s_lastTelemetryBeginFailLog = 0;
+    if (millis() - s_lastTelemetryBeginFailLog > 10000) {
+      Serial.println("[UDP] 测速 beginPacket 失败");
+      s_lastTelemetryBeginFailLog = millis();
+    }
+    return;
+  }
   g_udpTelemetry.write(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
   if (!g_udpTelemetry.endPacket()) {
-    Serial.println("[UDP] 测速包发送失败");
+    static uint32_t s_lastTelemetryEndFailLog = 0;
+    if (millis() - s_lastTelemetryEndFailLog > 10000) {
+      Serial.print("[UDP] 测速包发送失败（endPacket），WiFi状态=");
+      Serial.println(WiFi.status() == WL_CONNECTED ? "已连接" : "未连接");
+      s_lastTelemetryEndFailLog = millis();
+    }
+  }
   }
 }
 

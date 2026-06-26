@@ -212,13 +212,32 @@ inline bool sendVideoFrame(const FrameState& frame) {
         const size_t packetSize = ChunkProtocol::HEADER_SIZE + dataSize;
 
         if (!g_udpVideo.beginPacket(apIp, UdpConfig::VIDEO_PORT)) {
-            // 首分片失败即中止整帧，后续无需尝试
+            static uint32_t s_lastBeginFailLog = 0;
+            if (millis() - s_lastBeginFailLog > 3000) {
+                Serial.printf("[UDP] 视频chunk beginPacket失败（frameId=%u chunk=%u/%u）\n",
+                              g_frameId, chunkIdx + 1, totalChunks);
+                s_lastBeginFailLog = millis();
+            }
             return false;
         }
         g_udpVideo.write(packet, packetSize);
         if (!g_udpVideo.endPacket()) {
+            static uint32_t s_lastEndFailLog = 0;
+            if (millis() - s_lastEndFailLog > 3000) {
+                Serial.printf("[UDP] 视频chunk endPacket失败（frameId=%u chunk=%u/%u）\n",
+                              g_frameId, chunkIdx + 1, totalChunks);
+                s_lastEndFailLog = millis();
+            }
             return false;
         }
+    }
+
+    // 每100帧输出一次统计（避免刷屏）
+    static uint32_t s_lastSentLog = 0;
+    if (g_frameId % 100 == 0 && g_frameId != s_lastSentLog) {
+        s_lastSentLog = g_frameId;
+        Serial.printf("[视频流] 帧%u 发送成功 (%u chunks, %uB)\n",
+                      g_frameId, totalChunks, static_cast<unsigned int>(totalLen));
     }
 
     return true;

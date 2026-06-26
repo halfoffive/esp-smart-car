@@ -81,13 +81,9 @@ impl VideoChunkReassembler {
             .retain(|_, buf| now.duration_since(buf.last_update) < CHUNK_TIMEOUT);
 
         while self.buffers.len() >= MAX_PENDING_FRAMES {
-            let oldest_key = self
-                .buffers
-                .iter()
-                .min_by_key(|(_, b)| b.last_update)
-                .map(|(k, _)| *k);
+            let oldest_key = self.buffers.iter().min_by_key(|(_, b)| b.last_update).map(|(k, _)| *k);
             if let Some(key) = oldest_key {
-                debug!("分片重组器缓冲区溢出，淘汰帧 {}", key);
+                warn!("分片重组器缓冲区溢出，淘汰帧 {}", key);
                 self.buffers.remove(&key);
             } else {
                 break;
@@ -616,7 +612,7 @@ impl SerialManager {
                     && frame_data[frame_size - 2] == JPEG_EOI[0]
                     && frame_data[frame_size - 1] == JPEG_EOI[1];
                 if has_soi && has_eoi {
-                    debug!("接收帧: {} 字节", frame_size);
+                    info!("接收帧: {} 字节", frame_size);
                     Ok(Some(frame_data))
                 } else {
                     warn!(
@@ -672,6 +668,10 @@ impl SerialManager {
             return Ok(None);
         }
         let data = payload[6..6 + data_size].to_vec();
+        debug!(
+            "分片读取: frameId={} chunk={}/{} dataSize={}",
+            frame_id, chunk_idx, total_chunks, data_size
+        );
         Ok(Some((frame_id, chunk_idx, total_chunks, data)))
     }
 
@@ -888,6 +888,11 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                                     data,
                                 ) {
                                     latest_frame = Some(complete_frame);
+                                    info!(
+                                        "分片重组完成: frameId={} size={}",
+                                        frame_id,
+                                        latest_frame.as_ref().map(|f| f.len()).unwrap_or(0)
+                                    );
                                 }
                             }
                             SerialReadResult::OdometryLine(line) => {
