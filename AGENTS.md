@@ -159,23 +159,27 @@ Key connections:
 
 ## 近期修复记录
 
-### 2026-06-26 — S3 视频帧 MTU 安全适配 + C6 build_opt.h 修复（2项修复）
+### 2026-06-26 — 分包传输协议：S3分包→C6转发→后端重组（QVGA 320×240 @ 10fps）
 
 **问题**: C6 串口日志 `[视频] 过去 5 秒内丢弃 150 个无效帧（长度=1460）`，全部视频帧丢弃，视频流完全中断。
 
-**根因**: S3 `video_stream.h` 的 JPEG 帧 + 6B 包头 = 1506~5006B，超过 WiFi MTU（~1460B UDP 载荷）→ IP 层自动分片 → C6 只收到首分片（恰好 1460B）→ `parsedSize+6 > 1460` → 丢弃。每 5 秒 150 帧 ≈ 30fps，全部无效。
+**根因**: 单包整帧方案：S3 QVGA JPEG 帧 + 6B 包头 = 1506~5006B 超过 WiFi MTU → IP 分片 → C6 仅收首分片(1460B) → `parsedSize+6 > 1460` → 丢弃。尝试缩小帧尺寸陷入两难：MTU 安全 ≤1400B 对 QVGA 不可达（质量 63 下仍 ≥2724B），QQVGA 画质差。
 
-**修复**:
-- `build_opt.h` — 移除 C 风格注释块，仅保留纯 `-D` 标志（中文版 Arduino core 3.3.8-cn 对 response file 注释解析有 bug，导致 `-DIP_REASSEMBLY=1` 未生效）
-- `video_stream.h` v2.1.0 — **帧尺寸 MTU 安全适配**：`MAX_FRAME_SIZE` 5000→1400，`TARGET_MIN` 1500→800，使 JPEG 帧 + 6B 包头 ≤ 1406B ≪ 1460B MTU，彻底避免 IP 分片
-- `receiver_dongle.ino` — reject 日志增加 `期望=%u`（显示 `parsedSize+6`），便于区分"长度不足" vs "帧头不匹配"等不同拒绝原因
+**修复: 全链路分包传输协议**：
 
-**预期**: C6 `[STATS]` 每 5 秒显示 frames ≈ 50（10fps），`[视频] 丢弃` 日志消失。即便 IP 分片重组失效也能正常工作（双保险）。
+- **S3 `video_stream.h` v3.0.0** — 新 `ChunkProtocol` 命名空间：Magic 0xCC，每 chunk ≤1393B JPEG + 7B 头 = 1400B（MTU 安全）；`sendVideoFrame()` 按 1393B 切分 QVGA JPEG 帧，逐 chunk UDP 循环发送；质量目标范围 1000-6000B
+- **S3 `camera_config.h` v1.4.0** — 分辨率恢复 QVGA（320×240）；垂直翻转 + 水平镜像 = 180° 旋转（设备倒置）
+- **C6 `receiver_dongle.ino` v3.0.0** — `handleVideoChunk()` 替代 `handleVideoPacket()`：匹配 0xCC Magic，解析 7B 头，串口转发格式 `[0xCC][totalBytes(4B LE)][frameId+chunkIdx+totalChunks+dataSize][data]`；新增 `g_videoChunksReceived` 计数器；`[STATS]` 增加 `chunks=` 字段
+- **后端 `serial.rs`** — 新增 `VideoChunkReassembler`：按 `frameId` HashMap 缓冲、chunkIdx bitmap 去重、1s 超时淘汰、最多 8 帧并发；`FrameParseState::ChunkHeader` 状态机；`SerialReadResult::VideoChunk` 变体；`run_serial_task` 集成重建器：单 chunk 帧直出，多 chunk 帧全部收齐后拼接输出完整 JPEG
+- **设备倒置**：`camera_config.h` 设置 `verticalFlip=true` + `horizontalMirror=true`，硬件层面 180° 旋转
 
-**修复后验证**: QVGA 320×240 在 JPEG 质量 63（最大压缩）下帧仍 ≥2724 字节，远超 1400B MTU 安全上限。追加 QQVGA 低分辨率适配：
-- `camera_config.h` v1.3.0 — `createDefaultConfig()` 分辨率 `QVGA`→`QQVGA`（160×120）
-- `video_stream.h` v2.1.1 — `TARGET_MIN` 800→400（QQVGA 合理帧下限）
-- QQVGA 质量 40 下帧约 300-700B，自然适配 MTU，`[帧超限]` 日志彻底消失
+**协议链**: S3(ChunkProtocol 0xCC) → WiFi UDP 9002 → C6(VideoChunkConfig 0xCC) → USB Serial 3Mbps → Backend(VideoChunkReassembler) → WebSocket Binary JPEG → Frontend
+
+**预期**: QVGA 320×240, 10fps, 每帧 2-5 chunks。C6 `[STATS]` chunks≈50-100, frames≈50/5s。`[视频] 丢弃` 日志消失。
+
+**验证**: cargo clippy 0W, cargo test 69/69 passed
+
+### 2026-06-26 — S3 视频帧 MTU 安全适配 + C6 build_opt.h 修复（已由分包协议替代）
 
 ### 2026-06-25 — 并行审计修复：视频帧传输链路 + 并发安全 + 前端错误可见性（8项修复）
 
