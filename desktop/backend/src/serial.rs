@@ -41,15 +41,119 @@ const JPEG_SOI: [u8; 2] = [0xFF, 0xD8];
 /// JPEG EOI 标记（帧结束）
 const JPEG_EOI: [u8; 2] = [0xFF, 0xD9];
 
+/// 分包协议 Magic 字节（匹配固件 ChunkProtocol::MAGIC）
+const CHUNK_MAGIC: u8 = 0xCC;
+/// 分片缓冲区超时（1 秒内未收齐所有分片则丢弃整帧）
+const CHUNK_TIMEOUT: Duration = Duration::from_secs(1);
+/// 最大同时缓冲的帧数（按 frameId 去重，超出时淘汰最旧帧）
+const MAX_PENDING_FRAMES: usize = 8;
+
+/// 视频分片缓冲区（按 frameId 聚合）
+struct ChunkBuffer {
+    total_chunks: u8,
+    chunks: Vec<Option<Vec<u8>>>,
+    received_count: u8,
+    last_update: std::time::Instant,
+}
+
+/// 视频分片重组器（后端侧：C6 转发的 chunk → 重组 → 完整 JPEG）
+struct VideoChunkReassembler {
+    buffers: std::collections::HashMap<u16, ChunkBuffer>,
+}
+
+impl VideoChunkReassembler {
+    fn new() -> Self {
+        Self {
+            buffers: std::collections::HashMap::new(),
+        }
+    }
+
+    fn feed_chunk(
+        &mut self,
+        frame_id: u16,
+        chunk_idx: u8,
+        total_chunks: u8,
+        data: Vec<u8>,
+    ) -> Option<Vec<u8>> {
+        let now = std::time::Instant::now();
+
+        self.buffers
+            .retain(|_, buf| now.duration_since(buf.last_update) < CHUNK_TIMEOUT);
+
+        while self.buffers.len() >= MAX_PENDING_FRAMES {
+            let oldest_key = self
+                .buffers
+                .iter()
+                .min_by_key(|(_, b)| b.last_update)
+                .map(|(k, _)| *k);
+            if let Some(key) = oldest_key {
+                debug!("分片重组器缓冲区溢出，淘汰帧 {}", key);
+                self.buffers.remove(&key);
+            } else {
+                break;
+            }
+        }
+
+        if total_chunks == 1 {
+            return Some(data);
+        }
+
+        let buf = self.buffers.entry(frame_id).or_insert_with(|| {
+            let mut chunks = Vec::with_capacity(total_chunks as usize);
+            chunks.resize_with(total_chunks as usize, || None);
+            ChunkBuffer {
+                total_chunks,
+                chunks,
+                received_count: 0,
+                last_update: now,
+            }
+        });
+
+        if total_chunks > buf.total_chunks {
+            buf.chunks.resize_with(total_chunks as usize, || None);
+            buf.total_chunks = total_chunks;
+        }
+
+        let idx = chunk_idx as usize;
+        if idx < buf.chunks.len() && buf.chunks[idx].is_none() {
+            buf.chunks[idx] = Some(data);
+            buf.received_count += 1;
+        }
+        buf.last_update = now;
+
+        if buf.received_count >= buf.total_chunks {
+            let mut complete_data = Vec::new();
+            for chunk in &buf.chunks {
+                if let Some(d) = chunk {
+                    complete_data.extend_from_slice(d);
+                } else {
+                    warn!(
+                        "帧 {} 分片缺失（received_count={}）",
+                        frame_id, buf.received_count
+                    );
+                    self.buffers.remove(&frame_id);
+                    return None;
+                }
+            }
+            self.buffers.remove(&frame_id);
+            return Some(complete_data);
+        }
+
+        None
+    }
+}
+
 /// 帧解析状态机
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameParseState {
-    /// 正常读取，累积行缓冲，等待 0xAA
+    /// 正常读取，累积行缓冲，等待 0xAA 或 0xCC
     WaitingHeader,
     /// 已读到一个 0xAA，等待下一字节确认帧头
     Header0,
     /// 已读到 0xAA 0xAA，第二个 0xAA 可能是新帧头起始
     Header1,
+    /// 已读到 0xCC chunk magic，等待读取分片数据
+    ChunkHeader,
     /// 帧头已确认，正在读取帧数据
     ReadingFrame,
 }
@@ -143,11 +247,21 @@ pub enum SerialConnectionState {
 pub enum SerialReadResult {
     /// 读取到视频帧
     VideoFrame(Vec<u8>),
+    /// 读取到视频分片（需由 VideoChunkReassembler 重组）
+    VideoChunk {
+        frame_id: u16,
+        chunk_idx: u8,
+        total_chunks: u8,
+        data: Vec<u8>,
+    },
     /// 读取到测速数据行
     OdometryLine(String),
     /// 无数据（超时）
     NoData,
 }
+
+/// read_chunk 返回类型：(frameId, chunkIdx, totalChunks, chunkData)
+type ChunkPayload = (u16, u8, u8, Vec<u8>);
 
 /// 串口管理器
 pub struct SerialManager {
@@ -521,7 +635,47 @@ impl SerialManager {
         }
     }
 
-    /// 统一读取方法：处理视频帧和测速 JSON 行
+    /// 读取视频分片（magic 0xCC 已确认后调用）
+    /// 格式：[0xCC][totalBytes(4B LE)][frameId(2B LE)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B LE)][data(NB)]
+    /// 返回 Ok(Some(chunk)) 表示有效分片，Ok(None) 表示格式异常
+    fn read_chunk(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<Option<ChunkPayload>> {
+        let mut total_bytes_buf = [0u8; 4];
+        port.read_exact(&mut total_bytes_buf)?;
+        let total_bytes = u32::from_le_bytes(total_bytes_buf) as usize;
+        if !(6..=MAX_FRAME_SIZE).contains(&total_bytes) {
+            warn!("分片总字节异常: {}，进入流对齐恢复", total_bytes);
+            Self::resync_stream(port)?;
+            return Ok(None);
+        }
+
+        let mut payload = vec![0u8; total_bytes];
+        match port.read_exact(&mut payload) {
+            Ok(()) => {}
+            Err(e) => {
+                warn!("读取分片数据失败: {}，进入流对齐恢复", e);
+                Self::resync_stream(port)?;
+                return Ok(None);
+            }
+        }
+
+        if payload.len() < 6 {
+            return Ok(None);
+        }
+        let frame_id = u16::from_le_bytes([payload[0], payload[1]]);
+        let chunk_idx = payload[2];
+        let total_chunks = payload[3];
+        let data_size = u16::from_le_bytes([payload[4], payload[5]]) as usize;
+        if total_chunks == 0 || chunk_idx >= total_chunks {
+            return Ok(None);
+        }
+        if 6 + data_size > payload.len() {
+            return Ok(None);
+        }
+        let data = payload[6..6 + data_size].to_vec();
+        Ok(Some((frame_id, chunk_idx, total_chunks, data)))
+    }
+
+    /// 统一读取方法：处理视频帧/分片/测速 JSON 行
     /// 通过原子 generation 检查连接周期，无需锁 serial_manager
     fn read_next(
         port: &mut BufReader<Box<dyn SerialPort>>,
@@ -564,11 +718,15 @@ impl SerialManager {
 
             match state {
                 FrameParseState::WaitingHeader => {
-                    if byte == FRAME_HEADER[0] {
-                        // 仅在行边界识别视频帧头，防止 JSON 中的 0xAA 0x55 被误解析
+                    if byte == FRAME_HEADER[0] || byte == CHUNK_MAGIC {
+                        // 仅在行边界识别视频帧头/分片，防止 JSON 中的 0xAA/0xCC 被误解析
                         let at_boundary = line_buf.is_empty() || line_buf.last() == Some(&b'\n');
                         if at_boundary {
-                            state = FrameParseState::Header0;
+                            if byte == CHUNK_MAGIC {
+                                state = FrameParseState::ChunkHeader;
+                            } else {
+                                state = FrameParseState::Header0;
+                            }
                         } else {
                             line_buf.push(byte);
                         }
@@ -597,6 +755,27 @@ impl SerialManager {
                                 }
                                 continue;
                             }
+                        }
+                    }
+                }
+                FrameParseState::ChunkHeader => {
+                    Self::flush_line(&mut line_buf, &mut results);
+                    state = FrameParseState::WaitingHeader;
+                    match Self::read_chunk(port)? {
+                        Some((frame_id, chunk_idx, total_chunks, data)) => {
+                            results.push(SerialReadResult::VideoChunk {
+                                frame_id,
+                                chunk_idx,
+                                total_chunks,
+                                data,
+                            });
+                            continue;
+                        }
+                        None => {
+                            if !results.is_empty() {
+                                return Ok(results);
+                            }
+                            continue;
                         }
                     }
                 }
@@ -634,6 +813,8 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
     let mut last_odom_left = 0.0f32;
     let mut last_odom_right = 0.0f32;
     let mut last_odom_heading = 0.0f32;
+
+    let mut chunk_reassembler = VideoChunkReassembler::new();
 
     loop {
         let is_connected = {
@@ -687,12 +868,27 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
 
             match result {
                 Ok(SerialTaskResult::Items(items)) => {
-                    // 只处理最新 VideoFrame，其余丢弃
+                    // 只处理最新 VideoFrame/重组后完整帧，其余丢弃
                     let mut latest_frame: Option<Vec<u8>> = None;
                     for item in items {
                         match item {
                             SerialReadResult::VideoFrame(data) => {
                                 latest_frame = Some(data);
+                            }
+                            SerialReadResult::VideoChunk {
+                                frame_id,
+                                chunk_idx,
+                                total_chunks,
+                                data,
+                            } => {
+                                if let Some(complete_frame) = chunk_reassembler.feed_chunk(
+                                    frame_id,
+                                    chunk_idx,
+                                    total_chunks,
+                                    data,
+                                ) {
+                                    latest_frame = Some(complete_frame);
+                                }
                             }
                             SerialReadResult::OdometryLine(line) => {
                                 // 跳过人读日志行（如 [STATS]、[BLE]、[WiFi_AP]），仅解析 JSON 行

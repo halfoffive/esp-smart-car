@@ -1,10 +1,10 @@
 /**
  * 视频流传输系统 - 函数式编程风格
- * 基于 ESP32-S3 CAM（Freenove FNK0085），视频帧通过 WiFi UDP 整帧直发到接收器
- * 支持动态质量调整和帧率控制
+ * 基于 ESP32-S3 CAM（Freenove FNK0085），视频帧通过 WiFi UDP 分包直发到接收器
+ * 支持动态质量调整、帧率控制和分包传输
  * 
  * 作者：智能车项目团队
- * 版本：2.1.1（QQVGA 低分辨率适配，TARGET_MIN 800→400）
+ * 版本：3.0.0（分包传输协议：S3 分包→C6 转发→后端重组，QVGA 320×240 @ 10fps）
  * 日期：2026-06-26
  */
 
@@ -62,15 +62,17 @@ constexpr uint8_t CAMERA_RESTART_THRESHOLD = 10;
 inline uint8_t g_currentQuality = 40;
 
 // ============================================
-// 整帧传输协议常量
+// 分包传输协议常量
 // ============================================
-namespace FrameProtocol {
-    /// 整帧传输帧头标记（4字节）
-    constexpr uint8_t FRAME_HEADER[4] = {0xAA, 0x55, 0xAA, 0x55};
-    /// 最大帧大小限制（MTU 安全：1400B JPEG + 6B 包头 = 1406B ≪ 1460B MTU，彻底避免 IP 分片）
-    constexpr size_t MAX_FRAME_SIZE = 1400;
-    /// 帧头后紧跟的帧大小字段字节数
-    constexpr uint8_t SIZE_FIELD_BYTES = 2;
+namespace ChunkProtocol {
+    /// 分包 Magic 字节（0xCC = "Chunk" 的 C）
+    constexpr uint8_t MAGIC = 0xCC;
+    /// 每分片包头大小：magic(1) + frameId(2) + chunkIdx(1) + totalChunks(1) + dataSize(2)
+    constexpr size_t HEADER_SIZE = 7;
+    /// 每分片最大 JPEG 数据量（总包 ≤ 1400B，MTU 安全）
+    constexpr size_t MAX_DATA_PER_CHUNK = 1393;
+    /// 每 UDP 包最大总大小（≤ WiFi MTU 1460B UDP 载荷）
+    constexpr size_t MTU_SAFE_PACKET = 1400;
 }
 
 // ============================================
@@ -136,13 +138,13 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
 /**
  * 纯函数：渐进阻尼质量调整
  * 根据帧大小缓慢调整 JPEG 压缩值，避免质量二值振荡 → FB-OVF / 像素块
- * 目标：QQVGA 160x120 下每帧控制在 400-1400 字节（MTU 安全，无需 IP 分片）
+ * 目标：QVGA 320x240 下每帧控制在 1000-6000 字节（分包后每 chunk ≤1393B，2-5 个 chunk/帧）
  * 
  * 注意：ESP32 摄像头驱动中压缩值越小 = 质量越高 = 帧越大
  */
 inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQuality) {
-    constexpr uint32_t TARGET_MAX = FrameProtocol::MAX_FRAME_SIZE; // 帧上限 = MTU 安全值（≤1400，彻底避开 IP 分片）
-    constexpr uint32_t TARGET_MIN = 400;   // 帧下限（QQVGA 下约 0.4KB，保证基本画质）
+    constexpr uint32_t TARGET_MAX = 6000;    // 帧上限（QVGA 高质量下约 6KB，多余分片开销可接受）
+    constexpr uint32_t TARGET_MIN = 1000;    // 帧下限（QVGA 下约 1KB，保证基本画质）
     constexpr uint8_t STEP = 10;             // 每步调整量（快速收敛：40→63 需 3 步）
 
     if (frameSize > TARGET_MAX) {
@@ -162,13 +164,14 @@ inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQual
 }
 
 // ============================================
-// 传输函数（整帧单包）
+// 传输函数（分包发送）
 // ============================================
 
 /**
- * 发送完整视频帧（C6 端 lwIP 已启用 IP 分片重组，大帧可正常接收）
- * 将 JPEG 帧整体封装为单包 UDP 数据，直接发送到接收器
- * 帧格式：[0xAA 0x55 0xAA 0x55][帧大小(2B LE)][JPEG 数据]
+ * 发送完整视频帧（分包传输，由后端重组）
+ * 将 JPEG 帧切分为多个 chunk，逐个 UDP 发送到接收器
+ * 每 chunk 格式：[0xCC][frameId(2B LE)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B LE)][JPEG分片]
+ * 总包大小 ≤ 1400B，MTU 安全
  * S3 单芯片架构下由独立 FreeRTOS 任务调用
  * 返回：true 发送成功，false 发送失败
  */
@@ -178,46 +181,44 @@ inline bool sendVideoFrame(const FrameState& frame) {
     const uint8_t* data = frame.frameBuffer->buf;
     const size_t totalLen = frame.frameSize;
 
-    // 安全检查：帧超过单包上限时丢弃（调整质量后自动收敛，初启 2-3 帧正常）
-    if (totalLen > FrameProtocol::MAX_FRAME_SIZE) {
-        Serial.printf("[视频流] 帧超限(%u > %u)，丢弃（质量自动调整中...）\n",
-                      totalLen, FrameProtocol::MAX_FRAME_SIZE);
-        return false;
-    }
+    // 计算分片数
+    const uint8_t totalChunks = static_cast<uint8_t>(
+        (totalLen + ChunkProtocol::MAX_DATA_PER_CHUNK - 1) / ChunkProtocol::MAX_DATA_PER_CHUNK
+    );
+    if (totalChunks == 0) return false;
 
     // 目标地址
     const IPAddress apIp(NetworkConfig::AP_IP[0], NetworkConfig::AP_IP[1],
                          NetworkConfig::AP_IP[2], NetworkConfig::AP_IP[3]);
 
-    // 构建整帧数据：帧头 + 大小(2字节小端) + 帧数据
-    // 总大小 = 4(头) + 2(大小) + frameSize
-    const size_t packetSize = 4 + 2 + totalLen;
-    static uint8_t packet[4 + 2 + FrameProtocol::MAX_FRAME_SIZE];  // BSS 段，不走 FreeRTOS 任务栈
+    // 逐分片发送
+    for (uint8_t chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+        const size_t offset = static_cast<size_t>(chunkIdx) * ChunkProtocol::MAX_DATA_PER_CHUNK;
+        const uint16_t dataSize = (chunkIdx == totalChunks - 1)
+            ? static_cast<uint16_t>(totalLen - offset)
+            : static_cast<uint16_t>(ChunkProtocol::MAX_DATA_PER_CHUNK);
 
-    // 写入帧头
-    memcpy(packet, FrameProtocol::FRAME_HEADER, 4);
-    // 写入帧大小（小端）
-    packet[4] = totalLen & 0xFF;
-    packet[5] = (totalLen >> 8) & 0xFF;
-    // 写入帧数据
-    memcpy(packet + 6, data, totalLen);
+        // 构建 UDP 包（BSS 段静态数组，不走 FreeRTOS 任务栈）
+        static uint8_t packet[ChunkProtocol::MTU_SAFE_PACKET];
+        packet[0] = ChunkProtocol::MAGIC;
+        packet[1] = static_cast<uint8_t>(g_frameId & 0xFF);
+        packet[2] = static_cast<uint8_t>((g_frameId >> 8) & 0xFF);
+        packet[3] = chunkIdx;
+        packet[4] = totalChunks;
+        packet[5] = static_cast<uint8_t>(dataSize & 0xFF);
+        packet[6] = static_cast<uint8_t>((dataSize >> 8) & 0xFF);
+        memcpy(packet + ChunkProtocol::HEADER_SIZE, data + offset, dataSize);
 
-    // 通过 WiFi UDP 整帧发送到接收器（使用独立 g_udpVideo 对象，避免与 g_udpTelemetry 并发竞态）
-    // 首帧诊断：输出目标 IP 和包大小，便于排查 UDP 路由问题
-    static bool s_firstFrameSent = false;
-    if (!s_firstFrameSent) {
-      Serial.printf("[UDP] 首帧发送 -> %s:%d，大小 %u 字节（MTU-安全 ≤1406B）\n",
-                    apIp.toString().c_str(), UdpConfig::VIDEO_PORT, packetSize);
-      s_firstFrameSent = true;
-    }
-    if (!g_udpVideo.beginPacket(apIp, UdpConfig::VIDEO_PORT)) {
-      Serial.println("[UDP] 视频 beginPacket 失败");
-      return false;
-    }
-    g_udpVideo.write(packet, packetSize);
-    if (!g_udpVideo.endPacket()) {
-        Serial.println("[UDP] 视频帧发送失败");
-        return false;
+        const size_t packetSize = ChunkProtocol::HEADER_SIZE + dataSize;
+
+        if (!g_udpVideo.beginPacket(apIp, UdpConfig::VIDEO_PORT)) {
+            // 首分片失败即中止整帧，后续无需尝试
+            return false;
+        }
+        g_udpVideo.write(packet, packetSize);
+        if (!g_udpVideo.endPacket()) {
+            return false;
+        }
     }
 
     return true;
@@ -229,7 +230,7 @@ inline bool sendVideoFrame(const FrameState& frame) {
 inline void startStreaming() {
     g_streamState = {};
     g_streamState.isStreaming = true;
-    Serial.println("[视频流] 开始传输（整帧单包模式）");
+    Serial.println("[视频流] 开始传输（分包模式：S3分包→C6转发→后端重组）");
 }
 
 /**

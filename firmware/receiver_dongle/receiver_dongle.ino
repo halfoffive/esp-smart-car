@@ -23,8 +23,8 @@
  *   无需接收器连接外部网络。
  *
  * 作者：智能车项目团队
- * 版本：2.2.1（修复 uint16_t 帧大小 UB + UDP buffer 扩容 + 静态缓冲防栈溢出）
- * 日期：2026-06-25
+ * 版本：3.0.0（分包传输协议：接收 S3 视频 chunk→转发到 Serial→后端重组）
+ * 日期：2026-06-26
  */
 
 #include "../libraries/wireless_protocol/src/wireless.h"
@@ -104,6 +104,7 @@ static IPAddress g_carIp;
 static uint32_t g_lastLinkStatus = 0;
 
 /// 视频/串口转发统计计数器
+static uint32_t g_videoChunksReceived = 0;
 static uint32_t g_videoPacketsReceived = 0;
 static uint32_t g_videoFramesForwarded = 0;
 static uint32_t g_serialBytesWritten = 0;
@@ -392,56 +393,54 @@ inline void sendLinkStatus() {
 }
 
 // ============================================
-// 视频处理
+// 视频分包处理
 // ============================================
 
+/// 分包协议常量（匹配 S3 端 ChunkProtocol）
+namespace VideoChunkConfig {
+    constexpr uint8_t MAGIC = 0xCC;        // 分片 Magic 字节
+    constexpr size_t HEADER_SIZE = 7;      // magic(1)+frameId(2)+chunkIdx(1)+totalChunks(1)+dataSize(2)
+}
+
 /**
- * 处理整帧视频包（新协议：整帧单包传输）
- * 帧格式：[0xAA 0x55 0xAA 0x55][帧大小(2字节小端)][帧数据]
- * 返回 true 表示成功处理一个完整视频帧。
+ * 处理分包视频 chunk
+ * chunk 格式：[0xCC][frameId(2B LE)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B LE)][JPEG分片数据]
+ * 串口转发格式：[0xCC][totalBytes(4B LE)][frameId(2B)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B)][data]
+ *              其中 totalBytes = 2+1+1+2+dataSize（frameId之后所有字段）
+ * 返回 true 表示成功处理
  */
-inline bool handleVideoPacket(const uint8_t* data, int len) {
-    // 整帧最小长度：4字节帧头 + 2字节大小 + 1字节数据 = 7字节
-    if (len < 7) return false;
+inline bool handleVideoChunk(const uint8_t* data, int len) {
+    if (len < static_cast<int>(VideoChunkConfig::HEADER_SIZE)) return false;
+    if (data[0] != VideoChunkConfig::MAGIC) return false;
 
-    // 校验帧头标记
-    if (data[0] != 0xAA || data[1] != 0x55 ||
-        data[2] != 0xAA || data[3] != 0x55) {
-        return false;  // 帧头不匹配，丢弃
+    const uint16_t frameId = static_cast<uint16_t>(data[1]) | (static_cast<uint16_t>(data[2]) << 8);
+    const uint8_t chunkIdx = data[3];
+    const uint8_t totalChunks = data[4];
+    const uint16_t dataSize = static_cast<uint16_t>(data[5]) | (static_cast<uint16_t>(data[6]) << 8);
+
+    if (dataSize == 0 || static_cast<int>(VideoChunkConfig::HEADER_SIZE + dataSize) > len) {
+        return false;
     }
-
-    // 解析帧大小（小端 uint16）
-    const uint16_t parsedSize = static_cast<uint16_t>(data[4]) |
-                                (static_cast<uint16_t>(data[5]) << 8);
-
-    // 校验帧大小边界
-    if (parsedSize == 0 || parsedSize > ReceiverConfig::BUFFER_SIZE) {
+    if (totalChunks == 0 || chunkIdx >= totalChunks) {
         return false;
     }
 
-    // 校验实际接收长度是否匹配（6字节头 + parsedSize）
-    if (len < static_cast<int>(6 + parsedSize)) {
-        return false;  // 数据不完整，丢弃
-    }
+    g_videoChunksReceived++;
 
-    // 统计接收到的视频帧
-    g_videoPacketsReceived++;
+    // 串口转发：[0xCC][totalBytes(4B LE)][frameId(2B)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B)][data]
+    const uint32_t totalBytes = 2 + 1 + 1 + 2 + dataSize;
+    Serial.write(VideoChunkConfig::MAGIC);
+    Serial.write(reinterpret_cast<const uint8_t*>(&totalBytes), 4);
+    Serial.write(data + 1, 2);                               // frameId
+    Serial.write(data + 3, 1);                               // chunkIdx
+    Serial.write(data + 4, 1);                               // totalChunks
+    Serial.write(data + 5, 2);                               // dataSize
+    Serial.write(data + VideoChunkConfig::HEADER_SIZE, dataSize);  // chunk data
+    g_serialBytesWritten += 1 + 4 + totalBytes;
 
-    // 通过USB串口发送完整帧
-    // 格式: [0xAA][0x55][帧大小(4字节，小端)][帧数据]
-    g_videoFramesForwarded++;
-    const uint8_t header[] = {0xAA, 0x55};
-    Serial.write(header, 2);
-    // 帧大小按小端字节序写入（显式扩展为 uint32_t，避免 uint16_t 写 4 字节的 UB）
-    const uint32_t frameSize32 = static_cast<uint32_t>(parsedSize);
-    Serial.write(reinterpret_cast<const uint8_t*>(&frameSize32), 4);
-    g_serialBytesWritten += 6;
-
-    // 批量写出帧数据（非阻塞：USB-CDC 缓冲足够容纳整帧，无需分块轮询）
-    const size_t written = Serial.write(data + 6, parsedSize);
-    g_serialBytesWritten += written;
-    if (written < parsedSize) {
-        Serial.printf("[视频] 批量写出不完整: %u/%u 字节\n", written, parsedSize);
+    // 每帧最后一个 chunk 到达时计为一次帧转发
+    if (chunkIdx == totalChunks - 1) {
+        g_videoFramesForwarded++;
     }
 
     return true;
@@ -500,14 +499,13 @@ void handleTelemetryPacket() {
 }
 
 /**
- * 处理来自摄像头的 UDP 视频数据（独立 VIDEO_PORT）
+ * 处理来自摄像头的 UDP 视频数据（独立 VIDEO_PORT，分包传输）
  */
 void handleVideoUdp() {
     int len = g_udpVideo.parsePacket();
     if (len <= 0) return;
 
-    static uint8_t buf[ReceiverConfig::BUFFER_SIZE];  // 32KB 静态缓冲（BSS 段，非栈），匹配整帧单包协议
-    // 超大包丢弃而非截断：清空 UDP 当前包并返回
+    static uint8_t buf[ReceiverConfig::BUFFER_SIZE];  // 32KB 静态缓冲
     if (len > static_cast<int>(sizeof(buf))) {
         while (g_udpVideo.available() > 0) {
             g_udpVideo.read(buf, sizeof(buf));
@@ -516,26 +514,23 @@ void handleVideoUdp() {
     }
     g_udpVideo.read(buf, len);
 
-    if (handleVideoPacket(buf, len)) {
-        // 有效视频包也来自车载端，动态记录 IP
+    // 仅接受分包 chunk（0xCC），忽略旧协议整帧（0xAA）
+    if (handleVideoChunk(buf, len)) {
         g_carIp = g_udpVideo.remoteIP();
         g_lastCarDataTime = millis();
-    } else {
-        // 帧被拒：累计 5 秒输出一次诊断日志
+    } else if (buf[0] == VideoChunkConfig::MAGIC) {
+        // magic 匹配但校验失败：累计 5 秒输出诊断
         static uint32_t s_lastRejectLog = 0;
         static uint32_t s_rejectCount = 0;
         s_rejectCount++;
         if (millis() - s_lastRejectLog > 5000) {
-            // 解析期望帧大小（用于诊断：长度不足 vs 其它原因）
-            const uint16_t parsedSize = static_cast<uint16_t>(buf[4]) |
-                                        (static_cast<uint16_t>(buf[5]) << 8);
-            Serial.printf("[视频] 过去 5 秒内丢弃 %u 个无效帧（长度=%d 期望=%u，buf[0..3]=%02X %02X %02X %02X）\n",
-                         s_rejectCount, len, static_cast<unsigned int>(6 + parsedSize),
-                         buf[0], buf[1], buf[2], buf[3]);
+            Serial.printf("[视频] 过去 5 秒内丢弃 %u 个无效 chunk（长度=%d，magic=0x%02X）\n",
+                         s_rejectCount, len, buf[0]);
             s_rejectCount = 0;
             s_lastRejectLog = millis();
         }
     }
+    // 非 0xCC 包静默丢弃（旧协议残留或噪声）
 }
 
 // ============================================
@@ -549,7 +544,7 @@ void setup() {
     
     Serial.println("\n================================");
     Serial.println("智能车接收器 - ESP32-C6");
-    Serial.println("版本: 2.1.0");
+    Serial.println("版本: 3.0.0");
     Serial.println("================================\n");
     
     // AP-only 模式：本设备作为 Soft-AP，等待车载端 STA 接入
@@ -645,8 +640,9 @@ void loop() {
     // 4.5 周期性输出视频转发统计（每 5 秒）
     if (currentTime - g_lastCounterLogTime > ReceiverConfig::LINK_STATUS_INTERVAL) {
         g_lastCounterLogTime = currentTime;
-        Serial.printf("[STATS] packets=%u frames=%u bytes=%u\n",
-                      g_videoPacketsReceived, g_videoFramesForwarded, g_serialBytesWritten);
+        Serial.printf("[STATS] chunks=%u packets=%u frames=%u bytes=%u\n",
+                      g_videoChunksReceived, g_videoPacketsReceived, g_videoFramesForwarded, g_serialBytesWritten);
+        g_videoChunksReceived = 0;
         g_videoPacketsReceived = 0;
         g_videoFramesForwarded = 0;
         g_serialBytesWritten = 0;
