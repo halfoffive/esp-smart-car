@@ -526,8 +526,12 @@ void handleVideoUdp() {
         static uint32_t s_rejectCount = 0;
         s_rejectCount++;
         if (millis() - s_lastRejectLog > 5000) {
-            Serial.printf("[视频] 过去 5 秒内丢弃 %u 个无效帧（长度=%d，buf[0..3]=%02X %02X %02X %02X）\n",
-                         s_rejectCount, len, buf[0], buf[1], buf[2], buf[3]);
+            // 解析期望帧大小（用于诊断：长度不足 vs 其它原因）
+            const uint16_t parsedSize = static_cast<uint16_t>(buf[4]) |
+                                        (static_cast<uint16_t>(buf[5]) << 8);
+            Serial.printf("[视频] 过去 5 秒内丢弃 %u 个无效帧（长度=%d 期望=%u，buf[0..3]=%02X %02X %02X %02X）\n",
+                         s_rejectCount, len, static_cast<unsigned int>(6 + parsedSize),
+                         buf[0], buf[1], buf[2], buf[3]);
             s_rejectCount = 0;
             s_lastRejectLog = millis();
         }

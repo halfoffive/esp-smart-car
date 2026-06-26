@@ -4,8 +4,8 @@
  * 支持动态质量调整和帧率控制
  * 
  * 作者：智能车项目团队
- * 版本：2.0.2（C6 端启用 IP 分片重组，MAX_FRAME_SIZE 恢复 5000）
- * 日期：2026-06-25
+ * 版本：2.1.0（MTU 安全适配：MAX_FRAME_SIZE 1400，彻底避免 IP 分片）
+ * 日期：2026-06-26
  */
 
 #ifndef VIDEO_STREAM_H
@@ -67,8 +67,8 @@ inline uint8_t g_currentQuality = 40;
 namespace FrameProtocol {
     /// 整帧传输帧头标记（4字节）
     constexpr uint8_t FRAME_HEADER[4] = {0xAA, 0x55, 0xAA, 0x55};
-    /// 最大帧大小限制（C6 端已启用 lwIP IP 分片重组，大帧可正常接收）
-    constexpr size_t MAX_FRAME_SIZE = 5000;
+    /// 最大帧大小限制（MTU 安全：1400B JPEG + 6B 包头 = 1406B ≪ 1460B MTU，彻底避免 IP 分片）
+    constexpr size_t MAX_FRAME_SIZE = 1400;
     /// 帧头后紧跟的帧大小字段字节数
     constexpr uint8_t SIZE_FIELD_BYTES = 2;
 }
@@ -136,13 +136,13 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
 /**
  * 纯函数：渐进阻尼质量调整
  * 根据帧大小缓慢调整 JPEG 压缩值，避免质量二值振荡 → FB-OVF / 像素块
- * 目标：QVGA 320x240 下每帧控制在 1500-5000 字节（C6 lwIP IP 分片重组兜底）
+ * 目标：QVGA 320x240 下每帧控制在 800-1400 字节（MTU 安全，无需 IP 分片）
  * 
  * 注意：ESP32 摄像头驱动中压缩值越小 = 质量越高 = 帧越大
  */
 inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQuality) {
-    constexpr uint32_t TARGET_MAX = FrameProtocol::MAX_FRAME_SIZE; // 帧上限 = 单包上限（≤1400，避开 IP 分片）
-    constexpr uint32_t TARGET_MIN = 1500;  // 帧下限（保证基本画质，QVGA 下约 1.5KB）
+    constexpr uint32_t TARGET_MAX = FrameProtocol::MAX_FRAME_SIZE; // 帧上限 = MTU 安全值（≤1400，彻底避开 IP 分片）
+    constexpr uint32_t TARGET_MIN = 800;   // 帧下限（保证基本画质，QVGA 下约 0.8KB）
     constexpr uint8_t STEP = 10;             // 每步调整量（快速收敛：40→63 需 3 步）
 
     if (frameSize > TARGET_MAX) {
@@ -206,7 +206,7 @@ inline bool sendVideoFrame(const FrameState& frame) {
     // 首帧诊断：输出目标 IP 和包大小，便于排查 UDP 路由问题
     static bool s_firstFrameSent = false;
     if (!s_firstFrameSent) {
-      Serial.printf("[UDP] 首帧发送 -> %s:%d，大小 %u 字节\n",
+      Serial.printf("[UDP] 首帧发送 -> %s:%d，大小 %u 字节（MTU-安全 ≤1406B）\n",
                     apIp.toString().c_str(), UdpConfig::VIDEO_PORT, packetSize);
       s_firstFrameSent = true;
     }
