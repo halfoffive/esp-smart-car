@@ -368,7 +368,6 @@ void sendOdometryData() {
       s_lastTelemetryEndFailLog = millis();
     }
   }
-  }
 }
 
 // ============================================
