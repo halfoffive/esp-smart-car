@@ -4,7 +4,7 @@
  * 支持动态质量调整和帧率控制
  * 
  * 作者：智能车项目团队
- * 版本：2.1.0（MTU 安全适配：MAX_FRAME_SIZE 1400，彻底避免 IP 分片）
+ * 版本：2.1.1（QQVGA 低分辨率适配，TARGET_MIN 800→400）
  * 日期：2026-06-26
  */
 
@@ -136,13 +136,13 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
 /**
  * 纯函数：渐进阻尼质量调整
  * 根据帧大小缓慢调整 JPEG 压缩值，避免质量二值振荡 → FB-OVF / 像素块
- * 目标：QVGA 320x240 下每帧控制在 800-1400 字节（MTU 安全，无需 IP 分片）
+ * 目标：QQVGA 160x120 下每帧控制在 400-1400 字节（MTU 安全，无需 IP 分片）
  * 
  * 注意：ESP32 摄像头驱动中压缩值越小 = 质量越高 = 帧越大
  */
 inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQuality) {
     constexpr uint32_t TARGET_MAX = FrameProtocol::MAX_FRAME_SIZE; // 帧上限 = MTU 安全值（≤1400，彻底避开 IP 分片）
-    constexpr uint32_t TARGET_MIN = 800;   // 帧下限（保证基本画质，QVGA 下约 0.8KB）
+    constexpr uint32_t TARGET_MIN = 400;   // 帧下限（QQVGA 下约 0.4KB，保证基本画质）
     constexpr uint8_t STEP = 10;             // 每步调整量（快速收敛：40→63 需 3 步）
 
     if (frameSize > TARGET_MAX) {

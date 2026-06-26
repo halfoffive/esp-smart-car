@@ -3,7 +3,7 @@
  * 基于函数式编程思想
  * 支持 OV2640 摄像头模块
  * 作者：智能车项目团队
- * 版本：1.2.0
+ * 版本：1.3.0（QQVGA 低分辨率适配，帧≤700B 彻底避免 IP 分片）
  */
 
 #ifndef CAMERA_CONFIG_H
@@ -133,8 +133,8 @@ inline framesize_t resolutionToFramesize(const Resolution res) {
  */
 inline CameraConfiguration createDefaultConfig() {
     return CameraConfiguration(
-        Resolution::QVGA,       // 320x240，4倍像素提升画质清晰度
-        ImageQuality::QUALITY_MEDIUM,   // 压缩值 40（QVGA 下 ~1.0-1.4KB/帧，适配 MTU 1400）
+        Resolution::QQVGA,      // 160x120，帧约300-700B，MTU安全无需IP分片
+        ImageQuality::QUALITY_MEDIUM,   // 压缩值 40（QQVGA 下 ~300-700B/帧，质量自动收敛到12-25）
         0,                     // 默认亮度
         0,                     // 默认对比度
         0,                     // 默认饱和度
