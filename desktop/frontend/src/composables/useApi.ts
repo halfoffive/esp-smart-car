@@ -75,7 +75,22 @@ export function useApi() {
 
     // 检查 HTTP 状态码，避免对非 JSON 响应体调用 json() 导致 SyntaxError
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      let errorDetail = ''
+      try {
+        const errorText = await response.text()
+        if (errorText.trim()) {
+          try {
+            const errorJson = JSON.parse(errorText)
+            errorDetail = errorJson.message || errorJson.error || errorText.slice(0, 200)
+          } catch {
+            errorDetail = errorText.slice(0, 200)
+          }
+        }
+      } catch {
+        // 忽略读取错误体时的异常
+      }
+      const errorMessage = `HTTP ${response.status}: ${response.statusText}${errorDetail ? ` - ${errorDetail}` : ''}`
+      throw new Error(errorMessage)
     }
 
     // JSON 解析错误处理：避免后端返回非 JSON 时直接抛出 SyntaxError

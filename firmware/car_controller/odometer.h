@@ -14,7 +14,7 @@
  * - 编码器: 光电编码器（光栅码盘 + 光敏元件），每圈20个脉冲
  * 
  * 作者：智能车项目团队
- * 版本：1.4.0（修复 P2-02 编码器方向、P2-05 自动校准直行判断）
+ * 版本：1.5.0（FW-H5 CHANGE边沿触发、STOP保留方向）
  * 日期：2026-06-20
  */
 
@@ -130,6 +130,10 @@ namespace OdometerState {
     // 时间
     extern uint32_t g_lastSampleTime;
 
+    // FW-H5: 保存上一次方向符号，STOP时保留
+    extern int8_t g_lastLeftSign;
+    extern int8_t g_lastRightSign;
+
     // 校准
     extern SpeedCalibration g_calibration;
 }
@@ -190,12 +194,16 @@ inline void initializeOdometer() {
     OdometerState::g_heading = 0.0f;
     OdometerState::g_totalDistanceMm = 0.0f;
     OdometerState::g_lastSampleTime = millis();
+    // FW-H5: 初始化上次方向符号
+    OdometerState::g_lastLeftSign = 0;
+    OdometerState::g_lastRightSign = 0;
     OdometerState::g_calibration = OdometerConfig::DEFAULT_CALIBRATION;
 
+    // FW-H5: 使用 CHANGE 边沿触发（上升+下降沿都计数），分辨率翻倍
     attachInterrupt(digitalPinToInterrupt(OdometerConfig::LEFT_ENCODER_PIN),
-                    onLeftEncoderPulse, FALLING);
+                    onLeftEncoderPulse, CHANGE);
     attachInterrupt(digitalPinToInterrupt(OdometerConfig::RIGHT_ENCODER_PIN),
-                    onRightEncoderPulse, FALLING);
+                    onRightEncoderPulse, CHANGE);
 
     Serial.println("[测速模块] 初始化完成（编码器中断已挂载）");
 }
@@ -292,11 +300,22 @@ inline void updateOdometer(MotorDirection leftDir, MotorDirection rightDir) {
     OdometerState::g_lastLeftPulses = leftPulses;
     OdometerState::g_lastRightPulses = rightPulses;
 
-    // 根据电机方向确定脉冲符号
-    const int8_t leftSign = (leftDir == MotorDirection::FORWARD) ? 1
-                          : (leftDir == MotorDirection::BACKWARD) ? -1 : 0;
-    const int8_t rightSign = (rightDir == MotorDirection::FORWARD) ? 1
-                           : (rightDir == MotorDirection::BACKWARD) ? -1 : 0;
+    // FW-H5: 根据电机方向确定脉冲符号，STOP时保留上一次方向符号
+    int8_t leftSign = OdometerState::g_lastLeftSign;
+    int8_t rightSign = OdometerState::g_lastRightSign;
+    if (leftDir == MotorDirection::FORWARD) {
+        leftSign = 1;
+    } else if (leftDir == MotorDirection::BACKWARD) {
+        leftSign = -1;
+    }
+    if (rightDir == MotorDirection::FORWARD) {
+        rightSign = 1;
+    } else if (rightDir == MotorDirection::BACKWARD) {
+        rightSign = -1;
+    }
+    // 保存当前方向符号供下次STOP时使用
+    OdometerState::g_lastLeftSign = leftSign;
+    OdometerState::g_lastRightSign = rightSign;
 
     // 计算速度（应用校准系数与方向符号）
     const float leftSpeed = calculateSpeedMmps(leftDelta, elapsed)
@@ -404,24 +423,57 @@ inline void setSpeedCalibration(float leftCorrection, float rightCorrection) {
  * 调用条件：车在平地上同向直行一段距离后调用
  * 输入：左电机方向，右电机方向
  * 输出：校准参数
+ * FW-M7: 改为1秒内每100ms采样一次共10次，取平均速度计算修正系数，减少单次采样噪声
  */
 inline SpeedCalibration autoCalibrate(MotorDirection leftDir, MotorDirection rightDir) {
     constexpr float MIN_SPEED_THRESHOLD = 1.0f;
+    constexpr int NUM_SAMPLES = 10;
+    constexpr uint32_t SAMPLE_INTERVAL_MS = 100;
 
     // 必须同向直行（同时前进或同时后退），转弯/停止时不允许校准
     const bool isStraight = ((leftDir == MotorDirection::FORWARD && rightDir == MotorDirection::FORWARD) ||
                              (leftDir == MotorDirection::BACKWARD && rightDir == MotorDirection::BACKWARD));
-    if (!isStraight ||
-        fabs(OdometerState::g_leftSpeedMmps) < MIN_SPEED_THRESHOLD ||
-        fabs(OdometerState::g_rightSpeedMmps) < MIN_SPEED_THRESHOLD) {
-        Serial.println("[测速模块] 自动校准失败：未直行或速度过低");
+    if (!isStraight) {
+        Serial.println("[测速模块] 自动校准失败：未直行");
         return OdometerConfig::DEFAULT_CALIBRATION;
     }
 
-    // 计算速比（使用绝对值，避免同向后退时符号影响）
-    const float leftSpeed = fabs(OdometerState::g_leftSpeedMmps);
-    const float rightSpeed = fabs(OdometerState::g_rightSpeedMmps);
+    // FW-M7: 多次采样平均
+    float leftSpeedSum = 0.0f;
+    float rightSpeedSum = 0.0f;
+    int validSamples = 0;
+
+    Serial.println("[测速模块] 开始自动校准（10次采样，1秒）...");
+    for (int i = 0; i < NUM_SAMPLES; i++) {
+        // 触发一次测速更新（使用当前方向）
+        // 注意：这里不直接调用updateOdometer以避免与主循环的100ms定时器冲突
+        // 直接读取当前已更新的速度值（主循环每100ms更新一次）
+        const float leftSpeed = fabs(OdometerState::g_leftSpeedMmps);
+        const float rightSpeed = fabs(OdometerState::g_rightSpeedMmps);
+
+        if (leftSpeed >= MIN_SPEED_THRESHOLD && rightSpeed >= MIN_SPEED_THRESHOLD) {
+            leftSpeedSum += leftSpeed;
+            rightSpeedSum += rightSpeed;
+            validSamples++;
+        }
+
+        if (i < NUM_SAMPLES - 1) {
+            delay(SAMPLE_INTERVAL_MS);
+        }
+    }
+
+    if (validSamples < NUM_SAMPLES / 2) {
+        Serial.printf("[测速模块] 自动校准失败：有效样本不足(%d/%d)\n", validSamples, NUM_SAMPLES);
+        return OdometerConfig::DEFAULT_CALIBRATION;
+    }
+
+    // 使用平均速度计算
+    const float leftSpeed = leftSpeedSum / validSamples;
+    const float rightSpeed = rightSpeedSum / validSamples;
     const float avgSpeed = (leftSpeed + rightSpeed) / 2.0f;
+
+    Serial.printf("[测速模块] 校准采样完成：有效样本=%d, 左轮平均=%.1fmm/s, 右轮平均=%.1fmm/s\n",
+                  validSamples, leftSpeed, rightSpeed);
 
     // 修正系数：使轮速趋向平均值（同时检查除数为零）
     const float leftCorrection = (avgSpeed > 0.1f && leftSpeed > 0.1f) ? avgSpeed / leftSpeed : 1.0f;

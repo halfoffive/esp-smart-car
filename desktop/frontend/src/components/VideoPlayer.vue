@@ -3,7 +3,7 @@
     <div class="panel-header flex items-center justify-between py-2">
       <span class="text-sm">实时视频</span>
       <div class="flex items-center gap-2">
-        <span v-if="videoFps > 0" class="text-xs text-primary-400 font-mono">
+        <span v-if="videoFps > 0 || renderFps > 0" class="text-xs text-primary-400 font-mono">
           {{ videoFps }} FPS / {{ renderFps }} Render FPS
         </span>
       </div>
@@ -55,29 +55,18 @@ const pendingFrame = ref<string | null>(null)
 let rafId: number | null = null
 
 const renderedFrames = ref(0)
-const lastRenderCountTime = ref(Date.now())
 const renderFps = ref(0)
-
-const updateRenderFps = () => {
-  renderedFrames.value++
-  const now = Date.now()
-  if (now - lastRenderCountTime.value >= 1000) {
-    renderFps.value = renderedFrames.value
-    renderedFrames.value = 0
-    lastRenderCountTime.value = now
-  }
-}
+let renderFpsInterval: ReturnType<typeof setInterval> | null = null
 
 const renderFrame = () => {
   rafId = null
   const oldUrl = videoSrc.value
   videoSrc.value = pendingFrame.value
-  // 在新帧已设置到 DOM 后再释放旧 Blob URL，避免竞态闪烁
   if (oldUrl && oldUrl !== pendingFrame.value && oldUrl.startsWith('blob:')) {
     URL.revokeObjectURL(oldUrl)
   }
   if (pendingFrame.value) {
-    updateRenderFps()
+    renderedFrames.value++
   }
 }
 
@@ -89,7 +78,6 @@ const scheduleRender = () => {
 
 const updateVideo = () => {
   if (!videoFrame.value || (!videoFrame.value.startsWith('data:image/') && !videoFrame.value.startsWith('blob:'))) {
-    // 清空前释放当前持有的 Blob URL，避免泄漏
     if (videoSrc.value && videoSrc.value.startsWith('blob:')) {
       URL.revokeObjectURL(videoSrc.value)
     }
@@ -104,7 +92,6 @@ const updateVideo = () => {
     }
     return
   }
-  // 覆盖 pendingFrame 前释放旧的 Blob URL（同一 RAF 间隔内中间帧被覆盖时避免泄漏）
   if (pendingFrame.value && pendingFrame.value !== videoSrc.value && pendingFrame.value.startsWith('blob:')) {
     URL.revokeObjectURL(pendingFrame.value)
   }
@@ -123,7 +110,6 @@ const handleVisibilityChange = () => {
   }
 }
 
-// 组件卸载时释放 Blob URL（包括当前显示的帧和待渲染的帧）
 const releaseBlobUrl = () => {
   if (videoSrc.value && videoSrc.value.startsWith('blob:')) {
     URL.revokeObjectURL(videoSrc.value)
@@ -137,6 +123,10 @@ const unwatch = watch(videoFrame, updateVideo)
 
 onMounted(() => {
   document.addEventListener('visibilitychange', handleVisibilityChange)
+  renderFpsInterval = setInterval(() => {
+    renderFps.value = renderedFrames.value
+    renderedFrames.value = 0
+  }, 1000)
   updateVideo()
 })
 
@@ -145,6 +135,10 @@ onUnmounted(() => {
   if (rafId !== null) {
     cancelAnimationFrame(rafId)
     rafId = null
+  }
+  if (renderFpsInterval !== null) {
+    clearInterval(renderFpsInterval)
+    renderFpsInterval = null
   }
   releaseBlobUrl()
   unwatch()

@@ -12,14 +12,15 @@
  * 发送：{"type": "video", "format": "jpeg", "data": "base64...", "timestamp": 123456789}
  * 接收：{"type": "command", "data": "W"}
  */
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::collections::HashSet;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::{Query, State},
-    http::StatusCode,
+    http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
@@ -56,15 +57,13 @@ const MPSC_FULL_DISCONNECT_THRESHOLD: usize = 10;
 const EVENT_WAIT_TIMEOUT: Duration = Duration::from_millis(1);
 
 /// WebSocket管理器
-///
-/// 仅使用原子类型维护计数，无需 Mutex，支持并发访问。
 pub struct WebSocketManager {
     /// 下一个客户端ID
-    next_id: AtomicU64,
-    /// 当前已连接客户端数
-    count: AtomicUsize,
+    next_id: u64,
+    /// 活跃客户端ID集合
+    client_ids: HashSet<u64>,
     /// 已成功通过 WebSocket 发送的视频帧数
-    frames_broadcasted: AtomicU64,
+    frames_broadcasted: u64,
 }
 
 impl Default for WebSocketManager {
@@ -76,52 +75,39 @@ impl Default for WebSocketManager {
 impl WebSocketManager {
     pub fn new() -> Self {
         Self {
-            next_id: AtomicU64::new(1),
-            count: AtomicUsize::new(0),
-            frames_broadcasted: AtomicU64::new(0),
+            next_id: 1,
+            client_ids: HashSet::new(),
+            frames_broadcasted: 0,
         }
     }
 
-    pub fn add_client(&self) -> u64 {
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let count = self.count.fetch_add(1, Ordering::Relaxed) + 1;
-
-        info!("WebSocket客户端连接: #{} (总计: {})", id, count);
+    pub fn add_client(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.client_ids.insert(id);
+        info!("WebSocket客户端连接: #{} (总计: {})", id, self.client_ids.len());
         id
     }
 
-    pub fn remove_client(&self, id: u64) {
-        let mut current = self.count.load(Ordering::Relaxed);
-        loop {
-            if current == 0 {
-                warn!("WebSocket客户端断开时计数已为 0");
-                break;
-            }
-            match self.count.compare_exchange_weak(
-                current,
-                current - 1,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            ) {
-                Ok(_) => {
-                    info!("WebSocket客户端断开: #{} (剩余: {})", id, current - 1);
-                    break;
-                }
-                Err(actual) => current = actual,
-            }
+    pub fn remove_client(&mut self, id: u64) {
+        if self.client_ids.remove(&id) {
+            info!("WebSocket客户端断开: #{} (剩余: {})", id, self.client_ids.len());
+        } else {
+            warn!("WebSocket客户端断开: #{} 未在活跃集合中", id);
         }
     }
 
     pub fn client_count(&self) -> usize {
-        self.count.load(Ordering::Relaxed)
+        self.client_ids.len()
     }
 
-    pub fn increment_frames_broadcasted(&self) -> u64 {
-        self.frames_broadcasted.fetch_add(1, Ordering::Relaxed) + 1
+    pub fn increment_frames_broadcasted(&mut self) -> u64 {
+        self.frames_broadcasted += 1;
+        self.frames_broadcasted
     }
 
     pub fn frames_broadcasted(&self) -> u64 {
-        self.frames_broadcasted.load(Ordering::Relaxed)
+        self.frames_broadcasted
     }
 }
 
@@ -134,12 +120,17 @@ pub struct WsQuery {
 /// WebSocket处理器
 pub async fn ws_handler(
     ws: WebSocketUpgrade,
+    headers: HeaderMap,
     Query(query): Query<WsQuery>,
     State(state): State<Arc<AppState>>,
 ) -> impl IntoResponse {
-    // 若启用认证，校验 URL 查询参数中的 token
     if let Some(ref expected) = state.api_token {
-        let provided = query.token.as_deref().unwrap_or("");
+        let provided = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|h| h.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))
+            .or_else(|| query.token.as_deref())
+            .unwrap_or("");
         if !constant_time_eq(expected.as_ref().as_bytes(), provided.as_bytes()) {
             warn!("WebSocket 认证失败：token 不匹配");
             let body = json!({"error": "Unauthorized"}).to_string();
@@ -164,7 +155,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // 注册客户端
     let client_id = {
-        let manager = state.ws_manager.lock_or_recover("ws_manager");
+        let mut manager = state.ws_manager.lock_or_recover("ws_manager");
         manager.add_client()
     };
 
@@ -198,7 +189,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
         drop(tx);
         let _ = forward_task.await;
         {
-            let manager = state.ws_manager.lock_or_recover("ws_manager");
+            let mut manager = state.ws_manager.lock_or_recover("ws_manager");
             manager.remove_client(client_id);
         }
         return;
@@ -258,9 +249,13 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                             warn!("发送Pong失败: {}", e);
                             break;
                         }
+                        let mut guard = client_heartbeat.lock_or_recover("client_heartbeat");
+                        *guard = Instant::now();
                         event_notify.notify_one();
                     }
                     Some(Ok(Message::Pong(_))) => {
+                        let mut guard = client_heartbeat.lock_or_recover("client_heartbeat");
+                        *guard = Instant::now();
                         event_notify.notify_one();
                     }
                     Some(Err(e)) => {
@@ -300,7 +295,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
     // 注销客户端
     {
-        let manager = state.ws_manager.lock_or_recover("ws_manager");
+        let mut manager = state.ws_manager.lock_or_recover("ws_manager");
         manager.remove_client(client_id);
     }
 }
@@ -333,15 +328,30 @@ async fn video_broadcast_task(
 
         // 心跳超时检测：客户端 90 秒未发送心跳，判定为死连接
         {
-            let last_hb = video_heartbeat.lock().expect("客户端心跳锁不应中毒");
-            if last_hb.elapsed() > Duration::from_secs(HEARTBEAT_TIMEOUT_SECS) {
+            let mut should_disconnect = false;
+            let mut lock_busy = false;
+            {
+                match video_heartbeat.try_lock() {
+                    Ok(last_hb) => {
+                        if last_hb.elapsed() > Duration::from_secs(HEARTBEAT_TIMEOUT_SECS) {
+                            should_disconnect = true;
+                        }
+                    }
+                    Err(_) => {
+                        lock_busy = true;
+                    }
+                }
+            }
+            if should_disconnect {
                 warn!(
                     "客户端 #{} 心跳超时（{}秒），主动断开连接",
-                    client_id,
-                    last_hb.elapsed().as_secs()
+                    client_id, HEARTBEAT_TIMEOUT_SECS
                 );
                 video_cancel.cancel();
                 break;
+            }
+            if lock_busy {
+                tokio::task::yield_now().await;
             }
         }
 
@@ -377,7 +387,7 @@ async fn video_broadcast_task(
                 // 构建二进制视频消息：[frame_hash(8字节 LE)][timestamp(8字节 LE)][JPEG数据]
                 let ts = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .expect("系统时间不应早于 UNIX 纪元")
+                    .unwrap_or_default()
                     .as_millis() as u64;
                 let header_len = 16; // 8B hash + 8B timestamp
                 let mut bin_msg = Vec::with_capacity(header_len + raw_data.len());
@@ -400,7 +410,7 @@ async fn video_broadcast_task(
                 frame_sent = true;
 
                 {
-                    let manager = video_state.ws_manager.lock_or_recover("ws_manager");
+                    let mut manager = video_state.ws_manager.lock_or_recover("ws_manager");
                     manager.increment_frames_broadcasted();
                 }
             }
@@ -419,7 +429,7 @@ async fn video_broadcast_task(
                     "distance": odom.total_distance_mm,
                     "timestamp": SystemTime::now()
                         .duration_since(UNIX_EPOCH)
-                        .expect("系统时间不应早于 UNIX 纪元")
+                        .unwrap_or_default()
                         .as_millis() as i64
                 })
             }; // odom 锁在此处释放
@@ -562,7 +572,7 @@ async fn video_broadcast_task(
                     "ports": ports,
                     "timestamp": SystemTime::now()
                         .duration_since(UNIX_EPOCH)
-                        .expect("系统时间不应早于 UNIX 纪元")
+                        .unwrap_or_default()
                         .as_millis() as i64
                 });
                 if !send_ws_message(
@@ -637,7 +647,7 @@ fn send_ws_message(
 /// 在 spawn_blocking 中读取串口状态与计数器
 ///
 /// video_task 不直接锁 SerialManager，所有串口相关操作保留在 spawn_blocking 中。
-async fn read_serial_status(video_state: &Arc<AppState>) -> (String, u32, u64, u64, u64) {
+async fn read_serial_status(video_state: &Arc<AppState>) -> (String, u64, u64, u64, u64) {
     let state_clone = Arc::clone(video_state);
     match tokio::task::spawn_blocking(move || {
         let manager = state_clone.serial_manager.lock_or_panic("serial_manager");
@@ -752,7 +762,32 @@ async fn handle_message(
 
     match msg_type {
         "command" => {
-            // 根据首字符生成对应 WirelessPacket
+            if let Some(pwm_str) = data.strip_prefix("S:") {
+                match pwm_str.trim().parse::<u8>() {
+                    Ok(speed) => {
+                        let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
+                        let packet = build_wireless_packet(2, 0, speed, seq);
+                        if send_packet_blocking(state, packet, tx, "命令发送失败")
+                            .await
+                            .is_err()
+                        {
+                            return Ok(());
+                        }
+                        state.log_command_forward(b'S');
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        send_error(tx, &format!("PWM 值无效: {}", pwm_str)).await;
+                        return Ok(());
+                    }
+                }
+            }
+
+            if data.len() > 1 {
+                send_error(tx, "仅接受单字符命令或 'S:<pwm>' 格式").await;
+                return Ok(());
+            }
+
             let cmd_byte = match data.bytes().next() {
                 Some(b) => b,
                 None => {
@@ -777,13 +812,12 @@ async fn handle_message(
             let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
             let packet = build_wireless_packet(type_value, packet_data, packet_speed, seq);
 
-            if send_packet_blocking(state, packet, tx, "速度命令发送失败")
+            if send_packet_blocking(state, packet, tx, "命令发送失败")
                 .await
                 .is_err()
             {
                 return Ok(());
             }
-            // 节流式命令转发日志：相同命令 1 秒内只记一次
             state.log_command_forward(cmd_byte);
         }
         "speed" => {
@@ -798,7 +832,7 @@ async fn handle_message(
 
             let seq = state.packet_seq.fetch_add(1, Ordering::Relaxed);
             let packet = build_wireless_packet(2, 0, speed, seq);
-            if send_packet_blocking(state, packet, tx, "速度命令发送失败")
+            if send_packet_blocking(state, packet, tx, "命令发送失败")
                 .await
                 .is_err()
             {
@@ -808,9 +842,19 @@ async fn handle_message(
             info!("设置速度: {}", speed);
         }
         "heartbeat" => {
-            // 按客户端更新心跳时间戳
-            if let Ok(mut last) = heartbeat.lock() {
-                *last = Instant::now();
+            let updated = {
+                if let Ok(mut last) = heartbeat.try_lock() {
+                    *last = Instant::now();
+                    true
+                } else {
+                    false
+                }
+            };
+            if !updated {
+                tokio::task::yield_now().await;
+                if let Ok(mut last) = heartbeat.try_lock() {
+                    *last = Instant::now();
+                }
             }
         }
         "drive_mode" => {
@@ -873,7 +917,7 @@ mod tests {
     /// 测试添加客户端递增 ID 和计数
     #[test]
     fn test_add_client() {
-        let manager = WebSocketManager::new();
+        let mut manager = WebSocketManager::new();
         let id1 = manager.add_client();
         let id2 = manager.add_client();
         assert_eq!(id1, 1);
@@ -884,26 +928,26 @@ mod tests {
     /// 测试移除客户端减少计数
     #[test]
     fn test_remove_client() {
-        let manager = WebSocketManager::new();
+        let mut manager = WebSocketManager::new();
         let id1 = manager.add_client();
         let _id2 = manager.add_client();
         manager.remove_client(id1);
         assert_eq!(manager.client_count(), 1);
     }
 
-    /// 测试移除客户端递减计数器（简化版管理器仅维护计数，不追踪 ID 是否存在）
+    /// 测试移除客户端递减计数器
     #[test]
-    fn test_remove_client_decrements_counter() {
-        let manager = WebSocketManager::new();
+    fn test_remove_nonexistent_client() {
+        let mut manager = WebSocketManager::new();
         manager.add_client();
         manager.remove_client(999);
-        assert_eq!(manager.client_count(), 0);
+        assert_eq!(manager.client_count(), 1);
     }
 
-    /// 测试 frames_broadcasted 原子计数
+    /// 测试 frames_broadcasted 计数
     #[test]
-    fn test_frames_broadcasted_atomic() {
-        let manager = WebSocketManager::new();
+    fn test_frames_broadcasted_count() {
+        let mut manager = WebSocketManager::new();
         assert_eq!(manager.increment_frames_broadcasted(), 1);
         assert_eq!(manager.increment_frames_broadcasted(), 2);
         assert_eq!(manager.frames_broadcasted(), 2);
@@ -945,7 +989,7 @@ mod tests {
         assert!(
             messages
                 .iter()
-                .any(|m| matches!(m, Message::Text(t) if t.contains("速度命令发送失败"))),
+                .any(|m| matches!(m, Message::Text(t) if t.contains("命令发送失败"))),
             "无串口连接时应收到 error 消息"
         );
     }
@@ -981,7 +1025,7 @@ mod tests {
         assert!(
             messages
                 .iter()
-                .any(|m| matches!(m, Message::Text(t) if t.contains("速度命令发送失败"))),
+                .any(|m| matches!(m, Message::Text(t) if t.contains("命令发送失败"))),
             "无串口连接时应收到 error 消息"
         );
     }
@@ -1127,51 +1171,53 @@ mod tests {
         assert!(rx.recv().await.is_none(), "心跳不应发送消息");
     }
 
-    /// 测试多客户端并发添加到 WebSocketManager，验证原子计数正确性
+    /// 测试多客户端并发添加到 WebSocketManager，通过 Mutex 保护的正确性
     #[tokio::test]
     async fn test_multiple_clients_concurrent() {
-        let manager = Arc::new(WebSocketManager::new());
+        let manager = Arc::new(Mutex::new(WebSocketManager::new()));
         let mut handles = Vec::new();
 
-        // 并发添加 10 个客户端
         for _ in 0..10 {
             let mgr = manager.clone();
-            let handle = tokio::spawn(async move { mgr.add_client() });
+            let handle = tokio::spawn(async move {
+                let mut guard = mgr.lock().expect("manager lock");
+                guard.add_client()
+            });
             handles.push(handle);
         }
 
-        // 等待所有任务完成，收集客户端 ID
         let mut ids = Vec::new();
         for handle in handles {
             let id = handle.await.expect("并发添加客户端任务不应 panic");
             ids.push(id);
         }
 
-        // 验证所有 ID 唯一
         ids.sort();
         ids.dedup();
         assert_eq!(ids.len(), 10, "10 个并发客户端应分配到 10 个唯一 ID");
 
-        // 验证客户端总数正确
-        assert_eq!(manager.client_count(), 10, "并发添加后客户端总数应为 10");
+        let count = manager.lock().expect("manager lock").client_count();
+        assert_eq!(count, 10, "并发添加后客户端总数应为 10");
     }
 
     /// 测试并发添加和移除客户端的正确性
     #[tokio::test]
     async fn test_concurrent_add_and_remove() {
-        let manager = Arc::new(WebSocketManager::new());
+        let manager = Arc::new(Mutex::new(WebSocketManager::new()));
 
-        // 先添加 5 个客户端
         let mut ids = Vec::new();
         for _ in 0..5 {
-            ids.push(manager.add_client());
+            let mut guard = manager.lock().expect("manager lock");
+            ids.push(guard.add_client());
         }
 
-        // 并发移除前 3 个客户端
         let mut handles = Vec::new();
         for &id in &ids[..3] {
             let mgr = manager.clone();
-            let handle = tokio::spawn(async move { mgr.remove_client(id) });
+            let handle = tokio::spawn(async move {
+                let mut guard = mgr.lock().expect("manager lock");
+                guard.remove_client(id)
+            });
             handles.push(handle);
         }
 
@@ -1179,8 +1225,8 @@ mod tests {
             handle.await.expect("并发移除客户端任务不应 panic");
         }
 
-        // 验证剩余客户端数
-        assert_eq!(manager.client_count(), 2, "移除 3 个后应剩余 2 个客户端");
+        let count = manager.lock().expect("manager lock").client_count();
+        assert_eq!(count, 2, "移除 3 个后应剩余 2 个客户端");
     }
 
     /// 测试 handle_message 处理 ble_scan 消息（无串口连接时返回错误消息但不关闭连接）

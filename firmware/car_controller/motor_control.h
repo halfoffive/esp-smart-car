@@ -2,7 +2,7 @@
  * 智能车控制系统 - 函数式编程风格
  * 基于 ESP32-S3（Freenove FNK0085），使用 L298N 驱动左右两侧电机（每侧并联 2 个电机）
  * 作者：智能车项目团队
- * 版本：1.4.0（修复 P3-03 电机死区补偿）
+ * 版本：1.5.0（FW-H1 死区补偿改为加性补偿）
  * 日期：2026-06-20
  */
 
@@ -140,13 +140,11 @@ inline void applyMotorState(const MotorState& motor) {
 
     // 只有在非停止状态下才输出PWM
     if (motor.direction != MotorDirection::STOP) {
-        // 死区平滑过渡：将 [DEADBAND_PWM, 255] 线性映射到 [0, 255]，
-        // 避免命令速度在死区阈值附近出现 15->16 的突变启动。
+        // FW-H1: 死区加性补偿 - speed > 0 时加 DEADBAND_PWM 后限幅到 255，确保低速启动有力
         uint8_t effectiveSpeed = 0;
-        if (motor.speed > MotorConfig::DEADBAND_PWM) {
-            const uint16_t mapped = static_cast<uint16_t>(motor.speed - MotorConfig::DEADBAND_PWM) * 255U
-                                    / (255U - MotorConfig::DEADBAND_PWM);
-            effectiveSpeed = static_cast<uint8_t>((mapped > 255U) ? 255U : mapped);
+        if (motor.speed > 0) {
+            const uint16_t compensated = static_cast<uint16_t>(motor.speed) + MotorConfig::DEADBAND_PWM;
+            effectiveSpeed = static_cast<uint8_t>((compensated > 255U) ? 255U : compensated);
         }
         analogWrite(motor.pinEn, effectiveSpeed);
     } else {
@@ -200,7 +198,7 @@ inline bool commandToVehicleMotion(const char cmd, const uint8_t speed, VehicleM
         case 'A': case 'a':
             out = VehicleMotion(
                 MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
-                           MotorDirection::BACKWARD, (speed + 1) / 2),  // 左侧慢速后退（奇数保持对称）
+                           MotorDirection::BACKWARD, (speed + 1) / 2),  // FW-L6: A/D差速为固定1/2速比，内侧轮减速实现平滑转向，(speed+1)/2确保奇数对称
                 MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
                            MotorDirection::FORWARD, speed)              // 右侧正常前进
             );
@@ -210,7 +208,7 @@ inline bool commandToVehicleMotion(const char cmd, const uint8_t speed, VehicleM
                 MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
                            MotorDirection::FORWARD, speed),             // 左侧正常前进
                 MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
-                           MotorDirection::BACKWARD, (speed + 1) / 2)   // 右侧慢速后退（奇数保持对称）
+                           MotorDirection::BACKWARD, (speed + 1) / 2)   // FW-L6: 内侧轮固定减速至1/2，实现平滑差速转向
             );
             return true;
         case 'Q': case 'q':

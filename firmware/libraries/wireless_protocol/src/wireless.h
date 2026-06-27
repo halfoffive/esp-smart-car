@@ -3,7 +3,7 @@
  * 基于 ESP32，使用 WiFi/UDP 进行低延迟通信
  * 支持命令传输、状态反馈和视频流分包
  * 作者：智能车项目团队
- * 版本：2.1.0（修复 P0-01：Wi-Fi 凭据移出本文件至 wifi_credentials.h）
+ * 版本：2.2.0（FW-H6 回绕安全seq比较、FW-M1 totalDistMm改为uint32_t、FW-M5 __has_include、FW-L3 对齐、FW-L4 删除VideoPacket）
  *
  * 说明：本文件为 Arduino 库，供 car_controller、camera_module、receiver_dongle 共享。
  * 避免复制到各 sketch 目录，减少维护负担。
@@ -13,7 +13,15 @@
 #define WIRELESS_H
 
 #include <Arduino.h>
+
+// FW-M5: 使用 __has_include 提供 wifi_credentials.h 的默认回退
+#if __has_include("wifi_credentials.h")
 #include "wifi_credentials.h"
+#else
+// 默认占位凭据（实际部署请创建 wifi_credentials.h 覆盖）
+#define WIFI_AP_SSID "SMART_CAR"
+#define WIFI_AP_PASSWORD "12345678"
+#endif
 
 // ============================================
 // 纯数据类型定义
@@ -41,50 +49,40 @@ enum class CommandType : uint8_t {
 /**
  * 无线数据包结构体
  * 固定大小，确保传输效率
+ * FW-L3: 字段按对齐要求排列 - uint8_t放一起，uint16_t偶地址对齐，checksum在末尾
  */
 struct __attribute__((packed)) WirelessPacket {
     uint8_t magic;        // 魔术字（0xA5）用于帧同步
     uint8_t version;      // 协议版本
-    CommandType type;     // 命令类型
+    CommandType type;     // 命令类型（底层uint8_t）
     uint8_t data;         // 数据字节（如WASD命令或角度/模式值）
     uint8_t speed;        // 速度值：直接表示 PWM 占空比，范围 0-255
-    // 注意：seq 字段未按 16 位边界对齐；ESP32 可处理，但可移植性降低
-    uint16_t seq;         // 序列号
-    uint8_t checksum;     // 校验和
+    uint8_t _pad;         // 填充字节，使seq对齐到偶地址
+    uint16_t seq;         // 序列号（偏移6，偶地址对齐）
+    uint8_t checksum;     // 校验和（末尾，偏移8）
 };
 
 /**
  * 测速数据上报结构体
  * 用于向PC端发送左右轮速度数据
  * 方向：车载端 -> 接收器 -> PC
+ * FW-L3: 字段对齐 - uint8_t放一起，uint16_t偶地址，uint32_t四字节对齐，checksum在末尾
+ * FW-M1: totalDistMm 从 uint16_t 改为 uint32_t，支持更长里程
  */
 struct __attribute__((packed)) OdometryPacket {
     uint8_t magic;            // 魔术字(0xA5)
     uint8_t version;          // 协议版本
-    CommandType type;         // ODOMETRY
-    // 注意：以下 int16/uint16 字段在 packed 结构体中未按 16 位边界对齐；ESP32 可处理，但可移植性降低
-    int16_t leftSpeedMmps;    // 左轮速度(mm/s)，有符号
+    CommandType type;         // ODOMETRY（底层uint8_t）
+    uint8_t _pad0;            // 填充使uint16_t字段对齐到偶地址4
+    int16_t leftSpeedMmps;    // 左轮速度(mm/s)，有符号（偏移4，偶地址对齐）
     int16_t rightSpeedMmps;   // 右轮速度(mm/s)，有符号
     int16_t headingX100;      // 航向角(弧度*100)，有符号
-    uint16_t totalDistMm;     // 总行走距离(mm)
-    uint8_t checksum;         // 校验和
+    uint8_t _pad1[2];         // 填充使totalDistMm四字节对齐（偏移12）
+    uint32_t totalDistMm;     // 总行走距离(mm)，uint32_t支持更长里程
+    uint8_t checksum;         // 校验和（末尾，偏移16）
 };
 
-/**
- * 视频数据包
- * 用于分包传输大帧
- */
-struct __attribute__((packed)) VideoPacket {
-    uint8_t magic;        // 魔术字 0xA6
-    uint8_t version;      // 版本
-    // 注意：以下 uint16 字段在 packed 结构体中未按 16 位边界对齐；ESP32 可处理，但可移植性降低
-    uint16_t frameId;     // 帧序号
-    uint16_t packetId;    // 包序号
-    uint16_t totalPackets; // 总包数
-    uint16_t dataLen;     // 数据长度
-    uint8_t data[512];    // 数据（最大512字节，减少分包数降低UDP开销）
-    uint8_t checksum;     // 校验和
-};
+// FW-L4: 删除未使用的 VideoPacket 结构体（死代码，视频使用独立 ChunkProtocol）
 
 // ============================================
 // 常量定义
@@ -97,7 +95,7 @@ namespace WirelessConfig {
 namespace StreamConfig {
     constexpr uint8_t VIDEO_MAGIC = 0xA6;       // 视频帧魔术字
     constexpr uint8_t PROTOCOL_VERSION = 1;   // 协议版本
-    constexpr uint16_t MAX_PACKET_SIZE = 512; // 每包最大数据量（与 VideoPacket.data[512] 对齐）
+    // FW-L4: VideoPacket 已删除，视频流使用独立的 ChunkProtocol（见 video_stream.h）
     constexpr uint16_t TARGET_FPS = 10;       // 目标帧率（10 FPS，QVGA 320x240 下充裕发送窗口）
     constexpr uint32_t FRAME_INTERVAL = 1000 / TARGET_FPS; // 帧间隔
     constexpr uint8_t JPEG_QUALITY_MIN = 12;  // 最小压缩值=最高质量
@@ -123,6 +121,15 @@ namespace NetworkConfig {
 // ============================================
 // 纯函数：数据包操作
 // ============================================
+
+/**
+ * FW-H6: 回绕安全的序列号比较
+ * 判断 newSeq 是否严格新于 lastSeq（处理 uint16_t 序列号回绕）
+ * 返回：true 表示 newSeq 更新，应接受；false 表示旧包/重复包，应丢弃
+ */
+inline bool isSeqNewer(uint16_t newSeq, uint16_t lastSeq) {
+    return static_cast<int16_t>(newSeq - lastSeq) > 0;
+}
 
 /**
  * 纯函数：计算校验和

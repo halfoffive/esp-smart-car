@@ -26,6 +26,16 @@ use std::sync::atomic::{AtomicU16, AtomicU8};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tracing::{error, info, warn};
 
+const DEFAULT_TOKEN_WARNING: &str = r#"
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!!                                                          !!
+!!  安全警告：正在使用默认 API Token！                        !!
+!!  生产环境请务必通过环境变量 API_TOKEN 设置强 Token。         !!
+!!  当前默认 Token 是公开的，任何人知道后都可控制你的车。       !!
+!!                                                          !!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+"#;
+
 /// Mutex 中毒恢复扩展 trait
 ///
 /// AGENTS.md 规范要求禁止使用 unwrap/expect。对于非关键状态（如缓存、日志节流）,
@@ -88,9 +98,6 @@ pub struct AppState {
     pub ws_manager: Arc<std::sync::Mutex<websocket::WebSocketManager>>,
     /// 共享视频帧（Base64、格式、哈希统一保护，避免三锁读到不一致状态）
     pub video_frame: Arc<std::sync::Mutex<Option<SharedVideoFrame>>>,
-    /// 是否启用 WebP 转码（默认 false，通过 USE_WEBP=true 开启）
-    pub use_webp: bool,
-
     /// 当前速度 PWM 值（0-255，使用 AtomicU8 无锁原子操作）
     pub current_speed: AtomicU8,
     /// 当前行走模式（0=普通，1=直线修正，2=航向锁定）
@@ -158,18 +165,18 @@ impl AppState {
     }
 
     fn with_token(api_token: Option<Arc<str>>) -> Self {
-        let use_webp = std::env::var("USE_WEBP")
-            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        let using_default_token = api_token
+            .as_ref()
+            .map(|t| t.as_ref() == DEFAULT_API_TOKEN)
             .unwrap_or(false);
-        if use_webp {
-            info!("WebP 视频压缩已启用（USE_WEBP=true）");
+        if using_default_token {
+            warn!("{}", DEFAULT_TOKEN_WARNING);
         }
 
         Self {
             serial_manager: Arc::new(std::sync::Mutex::new(serial::SerialManager::new())),
             ws_manager: Arc::new(std::sync::Mutex::new(websocket::WebSocketManager::new())),
             video_frame: Arc::new(std::sync::Mutex::new(None)),
-            use_webp,
 
             current_speed: AtomicU8::new(5),
             current_drive_mode: AtomicU8::new(0),

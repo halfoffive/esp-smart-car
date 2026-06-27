@@ -57,9 +57,7 @@ function createBackendHealth(): BackendHealthInstance {
     const timeoutId = setTimeout(() => controller.abort(), PROBE_TIMEOUT)
     try {
       const token = (import.meta.env.VITE_API_TOKEN as string | undefined) || DEFAULT_API_TOKEN
-      const headers: Record<string, string> = token
-        ? { Authorization: `Bearer ${token}` }
-        : {}
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}` }
       const response = await fetch('/api/status', {
         headers,
         signal: controller.signal,

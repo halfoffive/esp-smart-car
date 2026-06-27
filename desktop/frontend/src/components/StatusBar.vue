@@ -101,7 +101,15 @@ const linkStatusStyle = computed(() => {
       dotClass: 'bg-blue-400',
     }
   }
-  if (linkStatus.value.lastOdomMs === 0 || linkStatus.value.lastOdomMs > 10000) {
+  if (linkStatus.value.lastOdomMs === 0) {
+    return {
+      text: '等待数据...',
+      title: '车载已配对，等待数据中...',
+      textClass: 'text-yellow-400',
+      dotClass: 'bg-yellow-400 animate-pulse',
+    }
+  }
+  if (linkStatus.value.lastOdomMs > 10000) {
     return {
       text: '车载已配对',
       title: `车载已配对但离线（${linkStatus.value.lastOdomMs}ms 无数据）`,

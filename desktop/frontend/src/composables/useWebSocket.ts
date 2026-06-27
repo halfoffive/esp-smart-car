@@ -259,14 +259,7 @@ function createWebSocket() {
       return Promise.reject(new Error('连接正在进行中，请勿重复调用'))
     }
 
-    // 认证校验：优先使用环境变量，否则使用默认 Token
     const token = (import.meta.env.VITE_API_TOKEN as string | undefined) || DEFAULT_API_TOKEN
-    if (!token) {
-      isConnecting.value = false
-      const error = 'VITE_API_TOKEN 未配置，请在 .env 文件中设置后刷新页面'
-      connectionError.value = error
-      return Promise.reject(new Error(error))
-    }
 
     isConnecting.value = true
     connectionError.value = null
@@ -365,13 +358,19 @@ function createWebSocket() {
         }
 
         socket.onmessage = (event) => {
+          startHeartbeatResponseTimer()
+
           // 二进制消息：视频帧（Blob 或 ArrayBuffer）
           if (event.data instanceof Blob || event.data instanceof ArrayBuffer) {
+            const myGen = connectGeneration
             try {
               const buffer = event.data instanceof Blob
                 ? event.data.arrayBuffer()
                 : Promise.resolve(event.data)
               buffer.then((data: ArrayBuffer) => {
+                if (connectGeneration !== myGen) {
+                  return
+                }
                 if (data.byteLength < 16) {
                   console.warn('[WebSocket] 视频帧过短，丢弃:', data.byteLength, 'bytes')
                   return
@@ -508,8 +507,6 @@ function createWebSocket() {
           // 首次连接失败时（尚未 resolve），reject Promise
           if (!resolved && !rejected) {
             finalizeReject(event.wasClean ? 'WebSocket 连接已关闭' : 'WebSocket 连接失败')
-            // 重连失败时不 return，继续执行下方的自动重连逻辑
-            if (!isRetry) return
           }
 
           // 自动重连（仅在非主动断开且未超过最大重试次数时）

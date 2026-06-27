@@ -49,8 +49,8 @@ const { odometry } = useWebSocket()
 const MAX_SPEED_MMS = 500
 const WHEEL_DIAMETER_MM = 65
 
-const leftSpeedCm = computed(() => (odometry.value.leftSpeed / 10).toFixed(1))
-const rightSpeedCm = computed(() => (odometry.value.rightSpeed / 10).toFixed(1))
+const leftSpeedCm = computed(() => String((odometry.value.leftSpeed / 10).toFixed(1)))
+const rightSpeedCm = computed(() => String((odometry.value.rightSpeed / 10).toFixed(1)))
 
 const currentSpeedBarPercent = computed(() => {
   const maxWheelSpeed = Math.max(Math.abs(odometry.value.leftSpeed), Math.abs(odometry.value.rightSpeed))
@@ -64,8 +64,8 @@ const mmpsToRpm = (mmps: number): number => {
 
 const MAX_RPM = mmpsToRpm(MAX_SPEED_MMS)
 
-const leftRpm = computed(() => mmpsToRpm(odometry.value.leftSpeed).toFixed(0))
-const rightRpm = computed(() => mmpsToRpm(odometry.value.rightSpeed).toFixed(0))
+const leftRpm = computed(() => String(mmpsToRpm(odometry.value.leftSpeed).toFixed(0)))
+const rightRpm = computed(() => String(mmpsToRpm(odometry.value.rightSpeed).toFixed(0)))
 
 // 轮子转速条百分比（取左右轮绝对值较大者）
 const wheelRpmBarPercent = computed(() => {
