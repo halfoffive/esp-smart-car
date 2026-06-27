@@ -75,7 +75,7 @@ uint8_t g_currentSpeed = 128;
 /**
  * 最后接受的控制包序列号（用于反重放，u16 回绕窗口）
  */
-uint16_t g_lastAcceptedSeq = 0;
+uint16_t g_lastAcceptedSeq = 0xFFFF;  // 初值 0xFFFF：首包 seq=0 时 (0-0xFFFF) 在 u16 回绕下为 +1 > 0 被放行，避免初值 0 误判首包为旧包丢弃
 
 /**
  * 最后命令接收时间
@@ -457,7 +457,10 @@ void videoTask(void* parameter) {
     g_currentQuality = adjustQuality(cachedFrameSize, g_currentQuality);
     sensor_t* sensor = esp_camera_sensor_get();
     if (sensor != NULL) {
-      sensor->set_quality(sensor, g_currentQuality);
+      // 仅当质量变化时才写 SCCB：OV2640 SCCB 写 ~1ms/帧且与摄像头 DMA 总线竞争，避免每帧无条件 I2C 开销
+      if (g_currentQuality != oldQuality) {
+        sensor->set_quality(sensor, g_currentQuality);
+      }
     } else {
       // sensor 句柄为 NULL 时质量调整失效，每 100 帧警告一次
       static bool s_sensorNullWarned = false;
@@ -546,6 +549,7 @@ void handleUdpControlPacket() {
         break;
       case CommandType::CALIBRATE:
         handleCalibrateCommand();
+        g_lastCmdTime = millis();  // 刷新命令时间戳，防止校准期间只发 CALIBRATE 不发 MOVE 触发 1s 超时停车打断校准
         break;
       case CommandType::DRIVE_MODE:
         handleDriveModeCommand(packet.data);

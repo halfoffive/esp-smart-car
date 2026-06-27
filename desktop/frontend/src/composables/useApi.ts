@@ -85,7 +85,7 @@ export function useApi() {
     }
 
     try {
-      return JSON.parse(text) as T
+      return JSON.parse(text) as unknown as T
     } catch (parseError) {
       throw new Error(
         `JSON 解析失败: ${parseError instanceof Error ? parseError.message : String(parseError)}，原始响应: ${text.slice(0, 200)}`

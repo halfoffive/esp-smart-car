@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 2026-06-27 — 多子代理全面排查修复（v3.0.1 未发布）
+
+- 多子代理全面排查修复（5 并行子代理审计 + P0/P1 修复）
+- **P0 后端视频解析断裂修复**：`serial.rs` `read_next` 状态机 ChunkHeader 中间态 off-by-one 丢弃 totalBytes[0] → 每个分片解析失败 → resync 超时 → 串口任务崩溃循环，视频完全不可用。修复：0xCC 单字节 magic 直接调用 read_chunk，删除 ChunkHeader 中间态；resync_stream 同时扫描 0xAA 0x55 与 0xCC 边界；read_frame/read_chunk 拆分 body 函数避免 resync 后字节错位
+- **P0 文档同步**：README/AGENTS.md「整帧单包传输（0xAA 0x55 0xAA 0x55）」→ v3.0.0 ChunkProtocol 0xCC 分包协议描述
+- P1 固件：`video_stream.h` adjustQuality 目标 1000-6000B → 2500-10000B（QVGA 复杂场景不过度压缩）；`car_controller.ino` set_quality 加未变化守卫避免每帧 I2C、CALIBRATE 刷新 g_lastCmdTime、反重放首包 seq=0 丢弃修复
+- P1 C6：`receiver_dongle.ino` 视频转发 Serial.write 合并+超时流控；删除 32KB 死缓冲 g_videoBuffer
+- P1 前端：`useWebSocket.ts` HMR dispose + binaryType='arraybuffer'；`VideoPlayer.vue` Blob URL 泄漏修复
+- P2 后端：feed_chunk 增加 JPEG SOI/EOI 校验与重组总大小校验
+- P1 文档：端口 9002 遗漏、USB-CDC 波特率 921600→3000000、WiFi 凭据硬编码移除
+- 验证：cargo clippy 0W；cargo test 全过；bun run build 成功
+
 ### 2026-06-25 — 并行审计修复：视频帧传输链路 + 并发安全 + 前端错误可见性（8项修复）
 
 **背景**: 5 个子代理并行审计固件/后端/前端，发现 60 项独立问题。本次集中修复 3 项 P0 阻断性缺陷和 5 项 P1 高优先级问题。

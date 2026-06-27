@@ -192,9 +192,10 @@ ESP32-C6 接收器
 │   └── 地线: GND
 │
 └── 无线通信: WiFi UDP (2.4GHz)
-    ├── SoftAP: SSID ESP-SmartCar，密码 SmartCar2024，静态 IP 192.168.4.1
+    ├── SoftAP: SSID/密码见本地 firmware/libraries/wireless_protocol/src/wifi_credentials.h（模板见 wifi_credentials.example.h），静态 IP 192.168.4.1
     ├── 控制端口 9000: 接收电脑命令并转发给车载 S3
-    └── 遥测端口 9001: 接收 S3 数据（视频帧、测速、状态）并转发给电脑
+    ├── 遥测端口 9001: 接收 S3 测速、链路状态并转发给电脑
+    └── 视频端口 9002: 接收 S3 视频帧分片并转发给电脑
 ```
 
 ### 链路状态上报协议
@@ -333,7 +334,7 @@ ESP32-C6 接收器
 - [ ] 所有 GND 连通
 - [ ] 电机方向正确
 - [ ] 摄像头图像清晰
-- [ ] WiFi UDP 通信正常（车载 S3 ↔ 接收器 C6，IP 192.168.4.1/4.2，端口 9000/9001）
+- [ ] WiFi UDP 通信正常（车载 S3 ↔ 接收器 C6，IP 192.168.4.1/4.2，端口 9000/9001/9002）
 - [ ] C6 热点 `ESP-SmartCar` 可被 S3 正常连接
 - [ ] BLE 扫描正常（C6 接收器本地功能，不用于发现小车）
 - [ ] 编码器脉冲正常（GPIO 1/2 FALLING 触发）
