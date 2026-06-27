@@ -89,6 +89,13 @@ const scheduleRender = () => {
 
 const updateVideo = () => {
   if (!videoFrame.value || (!videoFrame.value.startsWith('data:image/') && !videoFrame.value.startsWith('blob:'))) {
+    // 清空前释放当前持有的 Blob URL，避免泄漏
+    if (videoSrc.value && videoSrc.value.startsWith('blob:')) {
+      URL.revokeObjectURL(videoSrc.value)
+    }
+    if (pendingFrame.value && pendingFrame.value !== videoSrc.value && pendingFrame.value.startsWith('blob:')) {
+      URL.revokeObjectURL(pendingFrame.value)
+    }
     pendingFrame.value = null
     videoSrc.value = null
     if (rafId !== null) {
@@ -96,6 +103,10 @@ const updateVideo = () => {
       rafId = null
     }
     return
+  }
+  // 覆盖 pendingFrame 前释放旧的 Blob URL（同一 RAF 间隔内中间帧被覆盖时避免泄漏）
+  if (pendingFrame.value && pendingFrame.value !== videoSrc.value && pendingFrame.value.startsWith('blob:')) {
+    URL.revokeObjectURL(pendingFrame.value)
   }
   pendingFrame.value = videoFrame.value
   scheduleRender()

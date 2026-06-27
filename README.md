@@ -121,12 +121,12 @@ esp-smart-car/
 
 #### 视频帧格式
 ```
-S3 → C6 (UDP port 9002)：[0xAA 0x55 0xAA 0x55][帧大小 2字节小端][JPEG数据 N字节]
-C6 → 电脑 (USB-CDC)：[0xAA 0x55][帧大小 4字节小端][JPEG数据 N字节]
+S3 → C6 (UDP port 9002)：[0xCC][frameId(2B LE)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B LE)][JPEG分片]，每 chunk ≤1400B（MTU 安全），每帧 2-5 chunks
+C6 → 电脑 (USB-CDC)：[0xCC][totalBytes(4B LE)][frameId(2B LE)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B LE)][data]，totalBytes=6+dataSize
 Backend → Frontend (WebSocket Binary)：[帧哈希 8字节小端][时间戳 8字节小端][JPEG数据 N字节]
 ```
 
-S3 将视频帧整帧单包通过 UDP 视频端口 `9002` 发送到 C6 接收器（整帧传输，不拆包），C6 直接通过 USB-CDC 串口转发给电脑后端。后端通过 WebSocket Binary 消息广播到前端，前端使用 Blob URL 渲染。
+S3 将 QVGA JPEG 帧按 ChunkProtocol 0xCC 分包（每 chunk ≤1400B，MTU 安全）通过 UDP 视频端口 `9002` 发送到 C6 接收器，C6 通过 USB-CDC 串口转发分片给电脑后端，后端 VideoChunkReassembler 按 frameId 重组为完整 JPEG 后通过 WebSocket Binary 消息广播到前端，前端使用 Blob URL 渲染。
 
 ### 命令类型
 
@@ -139,8 +139,8 @@ S3 将视频帧整帧单包通过 UDP 视频端口 `9002` 发送到 C6 接收器
 | Q | 原地左转 | - |
 | E | 原地右转 | - |
 | 空格 | 停止 | - |
-| S/速度 | 速度设置 | 0-255 PWM |
-| T | 行走模式切换 | 1字节模式值(0/1/2) |
+| 速度 | 速度设置（通过独立 `{"type":"speed"}` 消息下发，非 'S' 命令；'S' 实际映射为后退 MOVE） | 0-255 PWM |
+| 行走模式 | 行走模式切换（通过独立 `{"type":"drive_mode"}` 消息下发，'T' 非用户输入命令） | 1字节模式值(0/1/2) |
 | B | BLE 扫描 | 本地接收器命令，不转发到小车 |
 | P | 链路状态探测 | 本地接收器命令，不转发到小车 |
 
@@ -254,7 +254,7 @@ cargo clippy       # 静态分析检查
 - 检查 C6 接收器是否正确创建热点（SSID/密码以本地 `wifi_credentials.h` 为准，模板见 `firmware/libraries/wireless_protocol/src/wifi_credentials.example.h`）
 - 确认 S3 已成功作为 STA 接入，静态 IP 为 `192.168.4.2`
 - 检查电脑是否同时为 C6 提供了足够 USB 供电
-- 确认 UDP 端口 `9000`/`9001` 未被防火墙或电脑网络策略拦截
+- 确认 UDP 端口 `9000`/`9001`/`9002` 未被防火墙或电脑网络策略拦截
 - 检查距离和 2.4GHz 干扰
 
 ### 链路状态异常
@@ -269,8 +269,8 @@ cargo clippy       # 静态分析检查
 - 检查后端 exe 是否运行、端口 8080 是否占用
 
 ### 视频传输卡顿
-- **v2.0.0 已从分包传输改为整帧单包传输**：单帧卡顿问题已根治，花屏风险消除
-- 若仍有问题：调整 `video_stream.h` 中 `adjustQuality` 目标帧大小（800-1400 字节），平衡画质与延迟
+- **v3.0.0 采用 ChunkProtocol 0xCC 分包传输（S3 分包→C6 转发→后端重组）**：每 chunk ≤1400B（MTU 安全），每帧 2-5 chunks，后端 VideoChunkReassembler 按 frameId 重组
+- 若仍有问题：调整 `video_stream.h` 中 `adjustQuality` 目标帧大小（2500-10000 字节），平衡画质与延迟
 - 检查 WiFi 信号质量（距离、干扰）以及 UDP 端口 9002 是否丢包
 - `desktop/backend/serial.rs` 中 `run_serial_task` 每 10 秒输出视频摘要（FPS + 字节数），观察吞吐
 - 前端状态栏显示 "X FPS / Y Render FPS"，若 Render FPS 明显低于 FPS，说明前端解码/渲染是瓶颈

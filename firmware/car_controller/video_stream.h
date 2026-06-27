@@ -138,13 +138,13 @@ inline uint16_t calculateFPS(const uint32_t lastFrameTime, const uint32_t curren
 /**
  * 纯函数：渐进阻尼质量调整
  * 根据帧大小缓慢调整 JPEG 压缩值，避免质量二值振荡 → FB-OVF / 像素块
- * 目标：QVGA 320x240 下每帧控制在 1000-6000 字节（分包后每 chunk ≤1393B，2-5 个 chunk/帧）
+ * 目标：QVGA 320x240 下每帧控制在 2500-10000 字节（分包后每 chunk ≤1393B，2-8 个 chunk/帧）
  * 
  * 注意：ESP32 摄像头驱动中压缩值越小 = 质量越高 = 帧越大
  */
 inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQuality) {
-    constexpr uint32_t TARGET_MAX = 6000;    // 帧上限（QVGA 高质量下约 6KB，多余分片开销可接受）
-    constexpr uint32_t TARGET_MIN = 1000;    // 帧下限（QVGA 下约 1KB，保证基本画质）
+    constexpr uint32_t TARGET_MAX = 10000;   // 帧上限（QVGA 复杂场景约 10KB，8 chunks，2Mbps WiFi 下发送 ~40ms 仍满足 100ms 端到端）
+    constexpr uint32_t TARGET_MIN = 2500;    // 帧下限（QVGA 简单场景约 2.5KB，2 chunks，保证基本画质）
     constexpr uint8_t STEP = 10;             // 每步调整量（快速收敛：40→63 需 3 步）
 
     if (frameSize > TARGET_MAX) {
@@ -173,6 +173,8 @@ inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQual
  * 每 chunk 格式：[0xCC][frameId(2B LE)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B LE)][JPEG分片]
  * 总包大小 ≤ 1400B，MTU 安全
  * S3 单芯片架构下由独立 FreeRTOS 任务调用
+ * 协议约束：发送方不保证原子性——任一 chunk 的 beginPacket/endPacket 失败即 return false 并停止发送剩余 chunk，
+ *           接收端必须按 frameId 严格重组，frameId 跳变时丢弃旧帧不完整分片。
  * 返回：true 发送成功，false 发送失败
  */
 inline bool sendVideoFrame(const FrameState& frame) {

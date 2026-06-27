@@ -339,6 +339,8 @@ function createWebSocket() {
 
       try {
         const socket = new WebSocket(buildWsUrl(token))
+        // 设置 binaryType 为 arraybuffer，避免 Blob 异步转换的微任务开销
+        socket.binaryType = 'arraybuffer'
 
         // 连接超时处理
         connectTimeoutTimer = setTimeout(() => {
@@ -634,6 +636,13 @@ function createWebSocket() {
     }
   }
 
+  // HMR 清理：模块热重载时断开旧连接并清理定时器，避免孤儿连接
+  if (import.meta.hot) {
+    import.meta.hot.dispose(() => {
+      instance?.disconnect()
+    })
+  }
+
   return {
     isConnected,
     isConnecting,
@@ -652,7 +661,7 @@ function createWebSocket() {
   }
 }
 
-/** 单例实例（闭包内，HMR 重载时自动重置） */
+/** 单例实例（HMR dispose 在 createWebSocket 中注册） */
 let instance: ReturnType<typeof createWebSocket> | null = null
 
 /** 获取或创建单例实例 */

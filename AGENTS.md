@@ -24,7 +24,7 @@ esp-smart-car/
 | Task | Location | Notes |
 |------|----------|-------|
 | Add motor control logic | `firmware/car_controller/motor_control.h` | Functional programming style |
-| Modify wireless protocol | `firmware/libraries/wireless_protocol/src/wireless.h` | WiFi/UDP application-layer packet format; C6 AP / S3 STA; ports 9000/9001 |
+| Modify wireless protocol | `firmware/libraries/wireless_protocol/src/wireless.h` | WiFi/UDP application-layer packet format; C6 AP / S3 STA; ports 9000/9001/9002 |
 | Add camera config | `firmware/car_controller/camera_config.h` | OV2640 configuration |
 | Add video streaming | `firmware/car_controller/video_stream.h` | Frame packetization (WiFi UDP direct) |
 | Add serial communication | `desktop/backend/src/serial.rs` | USB serial port |
@@ -84,7 +84,7 @@ esp-smart-car/
 
 - **Functional C++**: Value semantics preferred, state changes via function returns; `static` globals allowed only when confined to a single translation unit (e.g. `video_stream.h`, `wireless.h`)
 - **Binary protocol**: Custom 8-byte `WirelessPacket` format used for both WiFi/UDP and PC → receiver_dongle USB serial communication
-- **Frame transmission**: Video frames sent as single UDP packets (whole-frame, no chunking); format: [0xAA 0x55 0xAA 0x55][size(2B LE)][JPEG]; target 800-1400 bytes per frame; telemetry (odometry/link status) uses port 9001; control commands use port 9000; video uses port 9002
+- **Frame transmission**: Video frames sent as 0xCC ChunkProtocol chunks (S3 splits → C6 forwards → backend reassembles); S3→C6 UDP 9002 format: [0xCC][frameId(2B LE)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B LE)][JPEG chunk], ≤1400B per chunk (MTU-safe), 2-5 chunks per frame; C6→PC USB-CDC format: [0xCC][totalBytes(4B LE)][frameId(2B LE)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B LE)][data]; backend VideoChunkReassembler reassembles by frameId; target 2500-10000 bytes per frame; telemetry (odometry/link status) uses port 9001; control commands use port 9000; video uses port 9002
 - **Differential steering**: Left/right motor speed differential for turning
 - **S3 单芯片架构**: ESP32-S3 (Freenove FNK0085) 同时承担摄像头采集 + 电机控制 + 编码器测速 + PID + WiFi STA UDP 收发；S3 不再进行 BLE 广播
 - **Speed control**: Motor PWM is controlled directly as 0-255 via the `WirelessPacket.speed` field; keyboard keys 1-9 are convenience shortcuts mapped to PWM values
@@ -139,13 +139,13 @@ Key connections:
 
 - **Power isolation**: Motor power and logic power must be separate
 - **Ground common**: All devices must share common ground
-- **USB-CDC/JTAG**: ESP32-C6 的 `Serial` 通过内置 USB Serial/JTAG 控制器输出为 USB-CDC 虚拟串口，并非真实 UART；`921600` 仅为兼容传统串口 API 的波特率参数，实际吞吐由 USB Full Speed 控制器决定
+- **USB-CDC/JTAG**: ESP32-C6 的 `Serial` 通过内置 USB Serial/JTAG 控制器输出为 USB-CDC 虚拟串口，并非真实 UART；`3000000`（3M）仅为兼容传统串口 API 的波特率参数，实际吞吐由 USB Full Speed 控制器决定
 - **S3 单芯片架构**: 车载 ESP32-S3 (Freenove FNK0085) 同时承担摄像头采集 + 电机控制 + 编码器测速 + PID + WiFi STA UDP 收发；S3 不再进行 BLE 广播
 - **WiFi 链路**: C6 作为固定 AP（SSID/密码由 `firmware/libraries/wireless_protocol/src/wifi_credentials.h` 定义，模板见 `wifi_credentials.example.h`；固定 IP 192.168.4.1），S3 作为 STA 默认静态 IP 192.168.4.2，亦可通过 DHCP 获取并由 receiver_dongle 动态记录
 - **UDP 端口**: 控制命令走 9000（C6→S3），遥测/链路状态走 9001（S3→C6），视频流走 9002（S3→C6），应用层继续使用 WirelessPacket/OdometryPacket/VideoPacket
 - **动态车载 IP**: receiver_dongle 从 telemetry/video 包的 `remoteIP()` 动态记录车载端 IP，未记录时回退到固定 `CAR_IP`（192.168.4.2）
-- **Video buffer**: 32768 bytes for frame reassembly
-- **帧计数器**: `SerialManager` 维护 `frames_received`/`frames_decoded`/`frames_broadcasted` 计数器，并通过每秒 `status` WebSocket 消息暴露；固件 `receiver_dongle.ino` 每 5 秒输出 `[STATS] packets=... frames=... bytes=...` 日志
+- **Video buffer**: VideoChunkReassembler 最多 8 帧并发重组，每帧缓冲 32768 bytes
+- **帧计数器**: `SerialManager` 维护 `frames_received`/`frames_decoded`/`frames_broadcasted` 计数器，并通过每秒 `status` WebSocket 消息暴露；固件 `receiver_dongle.ino` 每 5 秒输出 `[STATS] chunks=%u packets=%u frames=%u bytes=%u` 日志
 - **Timeout protection**: 1-second auto-stop if no commands received
 - **Speed control**: `WirelessPacket.speed` carries motor PWM directly as 0-255; keyboard keys 1-9 are shortcuts mapped to PWM values
 - **BLE scan**: Receiver handles `CommandType::BLE_SCAN = 10` locally for generic peripheral scanning

@@ -48,6 +48,16 @@ const CHUNK_TIMEOUT: Duration = Duration::from_secs(1);
 /// 最大同时缓冲的帧数（按 frameId 去重，超出时淘汰最旧帧）
 const MAX_PENDING_FRAMES: usize = 8;
 
+/// 校验 JPEG SOI(FF D8)/EOI(FF D9) 标记，拦截截断或损坏的帧
+fn validate_jpeg(data: &[u8]) -> bool {
+    let n = data.len();
+    n >= 2
+        && data[0] == JPEG_SOI[0]
+        && data[1] == JPEG_SOI[1]
+        && data[n - 2] == JPEG_EOI[0]
+        && data[n - 1] == JPEG_EOI[1]
+}
+
 /// 视频分片缓冲区（按 frameId 聚合）
 struct ChunkBuffer {
     total_chunks: u8,
@@ -91,6 +101,11 @@ impl VideoChunkReassembler {
         }
 
         if total_chunks == 1 {
+            // 单分片直出：校验 JPEG SOI/EOI，失败则丢弃
+            if !validate_jpeg(&data) {
+                warn!("单分片帧 {} JPEG 标记异常，丢弃", frame_id);
+                return None;
+            }
             return Some(data);
         }
 
@@ -118,20 +133,41 @@ impl VideoChunkReassembler {
         buf.last_update = now;
 
         if buf.received_count >= buf.total_chunks {
-            let mut complete_data = Vec::new();
+            // 拼接前累加各分片长度，超过 MAX_FRAME_SIZE 则丢弃整帧
+            let mut total_len = 0usize;
             for chunk in &buf.chunks {
-                if let Some(d) = chunk {
-                    complete_data.extend_from_slice(d);
-                } else {
-                    warn!(
-                        "帧 {} 分片缺失（received_count={}）",
-                        frame_id, buf.received_count
-                    );
-                    self.buffers.remove(&frame_id);
-                    return None;
+                match chunk {
+                    Some(d) => total_len += d.len(),
+                    None => {
+                        warn!(
+                            "帧 {} 分片缺失（received_count={}）",
+                            frame_id, buf.received_count
+                        );
+                        self.buffers.remove(&frame_id);
+                        return None;
+                    }
                 }
             }
+            if total_len > MAX_FRAME_SIZE {
+                warn!(
+                    "帧 {} 重组总大小 {} 超过上限 {}，丢弃",
+                    frame_id,
+                    total_len,
+                    MAX_FRAME_SIZE
+                );
+                self.buffers.remove(&frame_id);
+                return None;
+            }
+            let mut complete_data = Vec::with_capacity(total_len);
+            for d in buf.chunks.iter().flatten() {
+                complete_data.extend_from_slice(d);
+            }
             self.buffers.remove(&frame_id);
+            // 重组完成后校验 JPEG SOI/EOI，失败则丢弃
+            if !validate_jpeg(&complete_data) {
+                warn!("帧 {} 重组后 JPEG 标记异常，丢弃", frame_id);
+                return None;
+            }
             return Some(complete_data);
         }
 
@@ -148,10 +184,28 @@ enum FrameParseState {
     Header0,
     /// 已读到 0xAA 0xAA，第二个 0xAA 可能是新帧头起始
     Header1,
-    /// 已读到 0xCC chunk magic，等待读取分片数据
-    ChunkHeader,
     /// 帧头已确认，正在读取帧数据
     ReadingFrame,
+}
+
+/// 流对齐恢复时识别到的 magic 类型（magic 已消费）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResyncFound {
+    /// 整帧头 0xAA 0x55
+    Frame,
+    /// 分片 magic 0xCC
+    Chunk,
+}
+
+/// 帧体/分片体读取结果
+enum BodyRead {
+    /// 成功读取有效数据
+    Item(SerialReadResult),
+    /// 软失败：字段/标记校验失败，但 totalBytes 已完整消费、流仍对齐，
+    /// 调用方无需 resync，直接返回 None 让 read_next 继续正常解析
+    SoftInvalid,
+    /// 硬失败：size 校验或 read 失败，流已错位，调用方需 resync 后重试
+    HardInvalid,
 }
 
 /// 处理一帧视频数据：直接保存原始 JPEG 数据，不做转码或 Base64 编码
@@ -255,9 +309,6 @@ pub enum SerialReadResult {
     /// 无数据（超时）
     NoData,
 }
-
-/// read_chunk 返回类型：(frameId, chunkIdx, totalChunks, chunkData)
-type ChunkPayload = (u16, u8, u8, Vec<u8>);
 
 /// 串口管理器
 pub struct SerialManager {
@@ -568,111 +619,148 @@ impl SerialManager {
         }
     }
 
-    /// 流对齐恢复：扫描窗口内任意位置的 0xAA 0x55
-    fn resync_stream(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<()> {
+    /// 流对齐恢复：扫描字节流，识别 0xAA 0x55 整帧头或 0xCC 分片 magic
+    /// 返回 Ok(Some(_)) 表示找到 magic 且已消费；Ok(None) 表示超时未找到（不返回 Err，避免任务崩溃）
+    fn resync_stream(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<Option<ResyncFound>> {
         let start = std::time::Instant::now();
+        // prev_byte 初始为 0，视为行边界（兼容首个字节即 magic 的情况）
         let mut prev_byte = 0u8;
         while start.elapsed() < RESYNC_TIMEOUT {
             match Self::read_byte_timeout(port)? {
                 None => continue,
                 Some(b) => {
+                    // 整帧头：0xAA 0x55（两字节均已消费）
                     if prev_byte == FRAME_HEADER[0] && b == FRAME_HEADER[1] {
-                        debug!("流对齐恢复成功");
-                        return Ok(());
+                        debug!("流对齐恢复成功（整帧头 0xAA 0x55）");
+                        return Ok(Some(ResyncFound::Frame));
+                    }
+                    // 分片 magic：0xCC（需在行边界，即前一字节为 0 或 '\n'）
+                    if b == CHUNK_MAGIC && (prev_byte == 0 || prev_byte == b'\n') {
+                        debug!("流对齐恢复成功（分片 magic 0xCC）");
+                        return Ok(Some(ResyncFound::Chunk));
                     }
                     prev_byte = b;
                 }
             }
         }
         warn!(
-            "流对齐恢复超时（{}秒内未找到帧头）",
+            "流对齐恢复超时（{}秒内未找到帧头/分片 magic）",
             RESYNC_TIMEOUT.as_secs()
         );
-        Err(anyhow::anyhow!("流对齐恢复超时"))
+        Ok(None)
     }
 
-    /// 读取视频帧（帧头已确认后读取帧大小和数据）
-    /// 返回 Ok(Some(data)) 表示有效帧，Ok(None) 表示无效帧（已触发流对齐恢复）
-    fn read_frame(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<Option<Vec<u8>>> {
+    /// 读取视频帧主体（magic 0xAA 0x55 已由调用方消费）
+    /// 读 size(4B LE) + data，校验 JPEG SOI/EOI
+    fn read_frame_body(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<BodyRead> {
         let mut size_bytes = [0u8; 4];
         port.read_exact(&mut size_bytes)?;
         let frame_size = u32::from_le_bytes(size_bytes) as usize;
         if frame_size > MAX_FRAME_SIZE || frame_size == 0 {
             warn!("帧大小异常: {} 字节，进入流对齐恢复", frame_size);
-            Self::resync_stream(port)?;
-            return Ok(None);
+            return Ok(BodyRead::HardInvalid);
         }
         let mut frame_data = vec![0u8; frame_size];
         match port.read_exact(&mut frame_data) {
             Ok(()) => {
-                // 校验 JPEG SOI 和 EOI 标记，拦截截断帧
-                let has_soi =
-                    frame_size >= 2 && frame_data[0] == JPEG_SOI[0] && frame_data[1] == JPEG_SOI[1];
-                let has_eoi = frame_size >= 2
-                    && frame_data[frame_size - 2] == JPEG_EOI[0]
-                    && frame_data[frame_size - 1] == JPEG_EOI[1];
-                if has_soi && has_eoi {
+                if validate_jpeg(&frame_data) {
                     info!("接收帧: {} 字节", frame_size);
-                    Ok(Some(frame_data))
+                    Ok(BodyRead::Item(SerialReadResult::VideoFrame(frame_data)))
                 } else {
-                    warn!(
-                        "帧数据 JPEG 标记异常（SOI={} EOI={}），触发流对齐恢复",
-                        has_soi, has_eoi
-                    );
-                    Self::resync_stream(port)?;
-                    Ok(None)
+                    warn!("帧数据 JPEG 标记异常，触发流对齐恢复");
+                    Ok(BodyRead::HardInvalid)
                 }
             }
             Err(e) => {
                 warn!("读取帧数据失败: {}，进入流对齐恢复", e);
-                Self::resync_stream(port)?;
-                Ok(None)
+                Ok(BodyRead::HardInvalid)
             }
         }
     }
 
-    /// 读取视频分片（magic 0xCC 已确认后调用）
-    /// 格式：[0xCC][totalBytes(4B LE)][frameId(2B LE)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B LE)][data(NB)]
-    /// 返回 Ok(Some(chunk)) 表示有效分片，Ok(None) 表示格式异常
-    fn read_chunk(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<Option<ChunkPayload>> {
+    /// 读取视频分片主体（magic 0xCC 已由调用方消费）
+    /// 格式：[totalBytes(4B LE)][frameId(2B LE)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B LE)][data(NB)]
+    fn read_chunk_body(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<BodyRead> {
         let mut total_bytes_buf = [0u8; 4];
         port.read_exact(&mut total_bytes_buf)?;
         let total_bytes = u32::from_le_bytes(total_bytes_buf) as usize;
         if !(6..=MAX_FRAME_SIZE).contains(&total_bytes) {
             warn!("分片总字节异常: {}，进入流对齐恢复", total_bytes);
-            Self::resync_stream(port)?;
-            return Ok(None);
+            return Ok(BodyRead::HardInvalid);
         }
 
         let mut payload = vec![0u8; total_bytes];
-        match port.read_exact(&mut payload) {
-            Ok(()) => {}
-            Err(e) => {
-                warn!("读取分片数据失败: {}，进入流对齐恢复", e);
-                Self::resync_stream(port)?;
-                return Ok(None);
-            }
+        if let Err(e) = port.read_exact(&mut payload) {
+            warn!("读取分片数据失败: {}，进入流对齐恢复", e);
+            return Ok(BodyRead::HardInvalid);
         }
 
-        if payload.len() < 6 {
-            return Ok(None);
-        }
+        // payload 至少 6 字节（total_bytes 已校验 >= 6）
         let frame_id = u16::from_le_bytes([payload[0], payload[1]]);
         let chunk_idx = payload[2];
         let total_chunks = payload[3];
         let data_size = u16::from_le_bytes([payload[4], payload[5]]) as usize;
         if total_chunks == 0 || chunk_idx >= total_chunks {
-            return Ok(None);
+            warn!(
+                "分片字段异常: frameId={} chunk={}/{}",
+                frame_id, chunk_idx, total_chunks
+            );
+            // 字段异常但 totalBytes 已完整消费，流仍对齐 → 软失败
+            return Ok(BodyRead::SoftInvalid);
         }
         if 6 + data_size > payload.len() {
-            return Ok(None);
+            warn!(
+                "分片 dataSize 越界: frameId={} dataSize={} payloadLen={}",
+                frame_id,
+                data_size,
+                payload.len()
+            );
+            return Ok(BodyRead::SoftInvalid);
         }
         let data = payload[6..6 + data_size].to_vec();
         debug!(
             "分片读取: frameId={} chunk={}/{} dataSize={}",
             frame_id, chunk_idx, total_chunks, data_size
         );
-        Ok(Some((frame_id, chunk_idx, total_chunks, data)))
+        Ok(BodyRead::Item(SerialReadResult::VideoChunk {
+            frame_id,
+            chunk_idx,
+            total_chunks,
+            data,
+        }))
+    }
+
+    /// 通用 resync 循环：magic 已由调用方消费，先尝试对应 body；
+    /// 软失败直接返回 None（流仍对齐）；硬失败 resync 找下一个 magic 后重试，直到拿到有效数据或超时
+    fn read_with_resync(
+        port: &mut BufReader<Box<dyn SerialPort>>,
+        initial: ResyncFound,
+    ) -> Result<Option<SerialReadResult>> {
+        let mut found = initial;
+        loop {
+            let body = match found {
+                ResyncFound::Frame => Self::read_frame_body(port)?,
+                ResyncFound::Chunk => Self::read_chunk_body(port)?,
+            };
+            match body {
+                BodyRead::Item(item) => return Ok(Some(item)),
+                BodyRead::SoftInvalid => return Ok(None),
+                BodyRead::HardInvalid => match Self::resync_stream(port)? {
+                    None => return Ok(None),
+                    Some(f) => found = f,
+                },
+            }
+        }
+    }
+
+    /// 读取视频帧（0xAA 0x55 已消费）：内部走 resync 循环
+    fn read_frame(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<Option<SerialReadResult>> {
+        Self::read_with_resync(port, ResyncFound::Frame)
+    }
+
+    /// 读取视频分片（0xCC 已消费）：内部走 resync 循环
+    fn read_chunk(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<Option<SerialReadResult>> {
+        Self::read_with_resync(port, ResyncFound::Chunk)
     }
 
     /// 统一读取方法：处理视频帧/分片/测速 JSON 行
@@ -723,7 +811,21 @@ impl SerialManager {
                         let at_boundary = line_buf.is_empty() || line_buf.last() == Some(&b'\n');
                         if at_boundary {
                             if byte == CHUNK_MAGIC {
-                                state = FrameParseState::ChunkHeader;
+                                // 0xCC 是单字节 magic，立即读取分片（无需 ChunkHeader 中间态，
+                                // 否则下一字节 totalBytes[0] 会被当作状态机输入而丢失）
+                                Self::flush_line(&mut line_buf, &mut results);
+                                match Self::read_chunk(port)? {
+                                    Some(item) => {
+                                        results.push(item);
+                                        continue;
+                                    }
+                                    None => {
+                                        if !results.is_empty() {
+                                            return Ok(results);
+                                        }
+                                        continue;
+                                    }
+                                }
                             } else {
                                 state = FrameParseState::Header0;
                             }
@@ -745,8 +847,8 @@ impl SerialManager {
                         Self::flush_line(&mut line_buf, &mut results);
                         state = FrameParseState::WaitingHeader;
                         match Self::read_frame(port)? {
-                            Some(frame_data) => {
-                                results.push(SerialReadResult::VideoFrame(frame_data));
+                            Some(item) => {
+                                results.push(item);
                                 continue;
                             }
                             None => {
@@ -755,27 +857,6 @@ impl SerialManager {
                                 }
                                 continue;
                             }
-                        }
-                    }
-                }
-                FrameParseState::ChunkHeader => {
-                    Self::flush_line(&mut line_buf, &mut results);
-                    state = FrameParseState::WaitingHeader;
-                    match Self::read_chunk(port)? {
-                        Some((frame_id, chunk_idx, total_chunks, data)) => {
-                            results.push(SerialReadResult::VideoChunk {
-                                frame_id,
-                                chunk_idx,
-                                total_chunks,
-                                data,
-                            });
-                            continue;
-                        }
-                        None => {
-                            if !results.is_empty() {
-                                return Ok(results);
-                            }
-                            continue;
                         }
                     }
                 }

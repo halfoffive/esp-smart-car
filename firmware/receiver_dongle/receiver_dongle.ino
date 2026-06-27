@@ -48,22 +48,6 @@ namespace ReceiverConfig {
 // ============================================
 
 /**
- * 视频帧缓冲区（使用静态数组，避免 new/delete 内存泄漏）
- */
-struct VideoFrameBuffer {
-    uint8_t data[ReceiverConfig::BUFFER_SIZE]; // 静态数组，无需动态分配
-    size_t size;             // 当前大小
-    size_t capacity;         // 容量
-    uint16_t frameId;        // 帧序号
-    uint16_t packetsReceived; // 已接收包数
-    uint16_t totalPackets;   // 总包数
-    bool isComplete;         // 是否完整
-    
-    VideoFrameBuffer() : size(0), capacity(ReceiverConfig::BUFFER_SIZE),
-                         frameId(0), packetsReceived(0), totalPackets(0), isComplete(false) {}
-};
-
-/**
  * BLE 设备信息
  */
 struct BleDeviceInfo {
@@ -86,7 +70,6 @@ struct BleScanResult {
 // ============================================
 // 全局状态
 // ============================================
-VideoFrameBuffer g_videoBuffer;
 
 /// BLE 扫描是否正在进行（可能在 BLE 回调中修改，使用 volatile）
 volatile bool g_bleScanning = false;
@@ -107,6 +90,7 @@ static uint32_t g_lastLinkStatus = 0;
 static uint32_t g_videoChunksReceived = 0;
 static uint32_t g_videoPacketsReceived = 0;
 static uint32_t g_videoFramesForwarded = 0;
+static uint32_t g_videoChunksDropped = 0;  // 串口写出超时/失败丢弃的分片数
 static uint32_t g_serialBytesWritten = 0;
 static uint32_t g_lastCounterLogTime = 0;
 
@@ -428,15 +412,27 @@ inline bool handleVideoChunk(const uint8_t* data, int len) {
     g_videoChunksReceived++;
 
     // 串口转发：[0xCC][totalBytes(4B LE)][frameId(2B)][chunkIdx(1B)][totalChunks(1B)][dataSize(2B)][data]
+    // 合并为单 buffer 单次 write，减少系统调用次数；USB-CDC 阻塞超时由 setup() 中 setTxTimeoutMs 控制，
+    // 超时返回的字节数小于预期时计为丢片，避免 loop() 长时间阻塞导致 UDP socket 缓冲堆积丢包。
     const uint32_t totalBytes = 2 + 1 + 1 + 2 + dataSize;
-    Serial.write(VideoChunkConfig::MAGIC);
-    Serial.write(reinterpret_cast<const uint8_t*>(&totalBytes), 4);
-    Serial.write(data + 1, 2);                               // frameId
-    Serial.write(data + 3, 1);                               // chunkIdx
-    Serial.write(data + 4, 1);                               // totalChunks
-    Serial.write(data + 5, 2);                               // dataSize
-    Serial.write(data + VideoChunkConfig::HEADER_SIZE, dataSize);  // chunk data
-    g_serialBytesWritten += 1 + 4 + totalBytes;
+
+    // 单 chunk 数据上限：UDP MTU 1500B - IP/UDP 头 28B ≈ 1472B，预留余量取 1500B
+    static uint8_t outBuf[1 + 4 + 2 + 1 + 1 + 2 + 1500];
+    size_t pos = 0;
+    outBuf[pos++] = VideoChunkConfig::MAGIC;
+    memcpy(outBuf + pos, &totalBytes, 4); pos += 4;
+    memcpy(outBuf + pos, data + 1, 2); pos += 2;   // frameId
+    outBuf[pos++] = data[3];                        // chunkIdx
+    outBuf[pos++] = data[4];                        // totalChunks
+    memcpy(outBuf + pos, data + 5, 2); pos += 2;    // dataSize
+    memcpy(outBuf + pos, data + VideoChunkConfig::HEADER_SIZE, dataSize); pos += dataSize;
+
+    // 单次 write；USB-CDC 主机端不取走数据触发超时时返回值小于 pos，计数并继续，不阻塞 loop()
+    const size_t written = Serial.write(outBuf, pos);
+    g_serialBytesWritten += written;
+    if (written < pos) {
+        g_videoChunksDropped++;
+    }
 
     // 每帧最后一个 chunk 到达时计为一次帧转发
     if (chunkIdx == totalChunks - 1) {
@@ -505,7 +501,9 @@ void handleVideoUdp() {
     int len = g_udpVideo.parsePacket();
     if (len <= 0) return;
 
-    static uint8_t buf[ReceiverConfig::BUFFER_SIZE];  // 32KB 静态缓冲
+    g_videoPacketsReceived++;  // 真实统计收到的视频 UDP 分片数（含后续校验失败的）
+
+    static uint8_t buf[1400];  // 单 chunk 最大 ~1400B，无需 32KB
     if (len > static_cast<int>(sizeof(buf))) {
         while (g_udpVideo.available() > 0) {
             g_udpVideo.read(buf, sizeof(buf));
@@ -540,6 +538,9 @@ void handleVideoUdp() {
 void setup() {
     // 初始化高速串口
     Serial.begin(ReceiverConfig::SERIAL_BAUD);
+    // USB-CDC 写超时：主机端不主动取数据时避免 write 无限阻塞 loop()，
+    // 触发丢片计数而非 UDP socket 缓冲堆积→丢包→帧残缺→延时尖峰
+    Serial.setTxTimeoutMs(ReceiverConfig::MAX_SERIAL_WRITE_WAIT_MS);
     delay(1000);
     
     Serial.println("\n================================");
@@ -582,8 +583,6 @@ void setup() {
     
     // 初始化 BLE（扫描前只需初始化一次）
     BLEDevice::init("智能车");
-
-    // 视频缓冲区 g_videoBuffer 为全局静态对象，构造函数已完成初始化
 
     Serial.println("[初始化] 接收器就绪，等待命令...");
     Serial.println("[命令格式] 串口输入已统一为二进制 WirelessPacket");
@@ -640,11 +639,13 @@ void loop() {
     // 4.5 周期性输出视频转发统计（每 5 秒）
     if (currentTime - g_lastCounterLogTime > ReceiverConfig::LINK_STATUS_INTERVAL) {
         g_lastCounterLogTime = currentTime;
-        Serial.printf("[STATS] chunks=%u packets=%u frames=%u bytes=%u\n",
-                      g_videoChunksReceived, g_videoPacketsReceived, g_videoFramesForwarded, g_serialBytesWritten);
+        Serial.printf("[STATS] chunks=%u packets=%u frames=%u dropped=%u bytes=%u\n",
+                      g_videoChunksReceived, g_videoPacketsReceived, g_videoFramesForwarded,
+                      g_videoChunksDropped, g_serialBytesWritten);
         g_videoChunksReceived = 0;
         g_videoPacketsReceived = 0;
         g_videoFramesForwarded = 0;
+        g_videoChunksDropped = 0;
         g_serialBytesWritten = 0;
     }
 
