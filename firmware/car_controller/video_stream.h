@@ -16,6 +16,11 @@
 #include "esp_camera.h"
 #include "../libraries/wireless_protocol/src/wireless.h"  // 复用无线通信协议（Arduino 库）
 
+// FW-L2: 视频流调试日志开关，生产环境设为0
+#ifndef DEBUG_VIDEO
+#define DEBUG_VIDEO 0
+#endif
+
 // ============================================
 // 纯数据类型定义
 // ============================================
@@ -176,6 +181,9 @@ inline uint8_t adjustQuality(const uint32_t frameSize, const uint8_t currentQual
  * 协议约束：发送方不保证原子性——任一 chunk 的 beginPacket/endPacket 失败即 return false 并停止发送剩余 chunk，
  *           接收端必须按 frameId 严格重组，frameId 跳变时丢弃旧帧不完整分片。
  * 返回：true 发送成功，false 发送失败
+ *
+ * FW-M9: 视频分包添加CRC校验涉及协议变更（需要C6接收器、后端重组代码同步修改），
+ *        改动复杂且当前UDP校验和已提供一定完整性保护，暂不实现。
  */
 inline bool sendVideoFrame(const FrameState& frame) {
     if (!frame.isValid) return false;
@@ -234,6 +242,8 @@ inline bool sendVideoFrame(const FrameState& frame) {
         }
     }
 
+    // FW-L2: 每100帧统计日志仅在DEBUG_VIDEO开启时输出
+#if DEBUG_VIDEO
     // 每100帧输出一次统计（避免刷屏）
     static uint32_t s_lastSentLog = 0;
     if (g_frameId % 100 == 0 && g_frameId != s_lastSentLog) {
@@ -241,6 +251,7 @@ inline bool sendVideoFrame(const FrameState& frame) {
         Serial.printf("[视频流] 帧%u 发送成功 (%u chunks, %uB)\n",
                       g_frameId, totalChunks, static_cast<unsigned int>(totalLen));
     }
+#endif
 
     return true;
 }

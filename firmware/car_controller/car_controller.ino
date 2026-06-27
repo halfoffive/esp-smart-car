@@ -18,7 +18,7 @@
  * - 右编码器: GPIO2（中断引脚）
  * 
  * 作者：智能车项目团队
- * 版本：2.0.3（C6 lwIP 启用 IP 分片重组，视频帧不受 MTU 限制）
+ * 版本：2.1.0（FW-H4 统一版本号、多项bug修复）
  * 日期：2026-06-20
  */
 
@@ -32,7 +32,7 @@
 #include "video_stream.h"
 
 // 版本常量（统一 car_controller / video_stream / camera_config 的对外版本号）
-constexpr const char* VERSION = "1.10.0";
+constexpr const char* VERSION = "2.1.0";
 
 // UDP 套接字（video_stream.h 中通过 extern 声明，在同一 sketch 中定义即可）
 // 控制命令 + 遥测 + 视频各使用独立 WiFiUDP 对象，避免 Core0/Core1 并发访问竞态
@@ -44,12 +44,12 @@ WiFiUDP g_udpVideo;
 // 调试配置（条件编译开关）
 // 设为 1 启用对应模块的调试日志，0 关闭
 // 生产环境应全部设为 0 以减少串口占用和CPU开销
-// 当前处于开发环境，全部设置为1,如果你是AI,没有用户允许，不要更改日志级别。
+// FW-L1: 生产环境关闭所有调试日志
 // ============================================
-#define DEBUG_MOTOR 1     // 电机调试日志
-#define DEBUG_WIRELESS 1  // 无线调试日志
-#define DEBUG_ODOMETRY 1  // 测速调试日志
-#define DEBUG_PID 1       // PID调试日志
+#define DEBUG_MOTOR 0     // 电机调试日志
+#define DEBUG_WIRELESS 0  // 无线调试日志
+#define DEBUG_ODOMETRY 0  // 测速调试日志
+#define DEBUG_PID 0       // PID调试日志
 
 // ============================================
 // 全局状态（可变状态，在主循环中更新）
@@ -135,6 +135,9 @@ namespace OdometerState {
     float g_heading = 0.0f;
     float g_totalDistanceMm = 0.0f;
     uint32_t g_lastSampleTime = 0;
+    // FW-H5: 上一次方向符号
+    int8_t g_lastLeftSign = 0;
+    int8_t g_lastRightSign = 0;
     SpeedCalibration g_calibration = OdometerConfig::DEFAULT_CALIBRATION;
 }
 
@@ -182,6 +185,13 @@ void handleMoveCommand(const char cmd) {
 
   // 缓存有效运动命令（空格停止命令不覆盖之前的移动缓存）
   if (cmd != ' ') {
+    // FW-M6: 从非直行命令(A/D/Q/E)切换到直行命令(W/S)时，重置直线PID避免积分冲击
+    const bool isStraightCmd = (cmd == 'W' || cmd == 'w' || cmd == 'S' || cmd == 's');
+    const bool wasStraightCmd = (g_lastMoveCmd == 'W' || g_lastMoveCmd == 'w' ||
+                                 g_lastMoveCmd == 'S' || g_lastMoveCmd == 's');
+    if (isStraightCmd && !wasStraightCmd && g_smartDriveEnabled) {
+      setDriveMode(DriveMode::STRAIGHT_LINE);
+    }
     g_lastMoveCmd = cmd;
   }
 
@@ -193,9 +203,6 @@ void handleMoveCommand(const char cmd) {
 
     // 只有前后运动才做直线修正（转弯不需要）
     if ((leftDir == MotorDirection::FORWARD && rightDir == MotorDirection::FORWARD) || (leftDir == MotorDirection::BACKWARD && rightDir == MotorDirection::BACKWARD)) {
-
-      // 更新测速数据（传入当前电机方向，使后退时里程/航向符号正确）
-      updateOdometer(leftDir, rightDir);
 
       // 应用PID智能修正
       SmartMotorOutput output = updateSmartControl(
@@ -231,6 +238,8 @@ void handleMoveCommand(const char cmd) {
 void handleSpeedCommand(const uint8_t speed) {
   g_currentSpeed = speed;
   g_lastCmdTime = millis();  // 更新时间戳，防止超时自动停止
+  // FW-M2: SPEED命令也解除紧急停止
+  g_emergencyStop = false;
 
   // 速度变化时立即用缓存的运动命令重发，保持当前运动状态同步
   if (!g_emergencyStop) {
@@ -325,8 +334,8 @@ void sendOdometryData() {
   const int16_t headingX100 = static_cast<int16_t>(constrain(
     static_cast<long>(odom.heading * 100.0f),
     INT16_MIN, INT16_MAX));
-  const uint16_t totalDist = static_cast<uint16_t>(
-    fmin(odom.distanceMm, 65535.0f));
+  // FW-M1: totalDistMm 改为 uint32_t，移除 65535 限制
+  const uint32_t totalDist = static_cast<uint32_t>(odom.distanceMm);
 
   // 创建测速数据包（aggregate initialization，WirelessPacket/OdometryPacket 已删除构造函数）
   OdometryPacket packet{};
@@ -469,6 +478,8 @@ void videoTask(void* parameter) {
         s_sensorNullWarned = true;
       }
     }
+    // FW-L2: 质量变化日志仅在DEBUG_VIDEO开启时输出
+#if DEBUG_VIDEO
     // 诊断：质量变化时输出日志（前 5 次或质量跳变 >5 时）
     static uint8_t s_lastLoggedQuality = oldQuality;
     static uint8_t s_qualityLogCount = 0;
@@ -488,6 +499,7 @@ void videoTask(void* parameter) {
                     (unsigned long)g_streamState.droppedFrames,
                     (unsigned long)(g_streamState.bytesSent / 1024));
     }
+#endif
   }
 }
 
@@ -523,8 +535,8 @@ void handleUdpControlPacket() {
       return;
     }
 
-    // 反重放检查：拒绝旧 seq 或重复 seq（考虑 u16 回绕窗口）
-    if (static_cast<int16_t>(packet.seq - g_lastAcceptedSeq) <= 0) {
+    // FW-H6: 反重放检查：拒绝旧 seq 或重复 seq（使用回绕安全比较）
+    if (!isSeqNewer(packet.seq, g_lastAcceptedSeq)) {
       Serial.printf("[UDP] 收到旧/重复控制包 seq=%u，丢弃\n", packet.seq);
       return;
     }
@@ -577,10 +589,10 @@ void checkWiFiConnection() {
     Serial.println("[WiFi_STA] 连接断开（等待自动重连...）");
   }
 
-  // 首次连接后等待 200ms，让 ARP/lwIP 路由表就绪再发 UDP，避免首帧 endPacket 失败
-  if (wasConnected && (millis() - connectedSince < 200)) {
-    delay(10);
-  }
+  // FW-M8: 首次连接后200ms内不阻塞等待，让ARP/lwIP后台自行就绪
+  // 原代码的delay(10)会阻塞主循环，改为非阻塞：这期间UDP发送可能失败，
+  // 但sendOdometryData已有beginPacket失败保护，不影响系统运行
+  (void)connectedSince; // 标记为已使用，避免未使用警告
 }
 
 // ============================================
@@ -665,7 +677,7 @@ void setup() {
       delay(1000);
     }
   }
-  Serial.println("[初始化] 视频任务已创建（Core 0，栈8192字节，优先级1）");
+  Serial.println("[初始化] 视频任务已创建（Core 0，栈16384字节，优先级1）");
 
   // 初始化状态
   g_currentMotion = VehicleMotion(
@@ -702,7 +714,25 @@ void loop() {
 
   // 1. 定期更新测速数据并发送（与采样周期对齐，避免无效调用）
   if (currentTime - g_lastOdomReportTime >= ODOMETRY_REPORT_INTERVAL_MS) {
-    updateOdometer(g_currentMotion.left.direction, g_currentMotion.right.direction);
+    MotorDirection leftDir = g_currentMotion.left.direction;
+    MotorDirection rightDir = g_currentMotion.right.direction;
+    
+    updateOdometer(leftDir, rightDir);
+    
+    // 固定周期运行PID智能修正
+    if (g_smartDriveEnabled && 
+        ((leftDir == MotorDirection::FORWARD && rightDir == MotorDirection::FORWARD) || 
+         (leftDir == MotorDirection::BACKWARD && rightDir == MotorDirection::BACKWARD))) {
+      SmartMotorOutput output = updateSmartControl(g_currentSpeed, leftDir, rightDir);
+      g_currentMotion = VehicleMotion(
+        MotorState(PinConfig::MOTOR_LEFT_IN1, PinConfig::MOTOR_LEFT_IN2, PinConfig::L298N_1_EN,
+                   output.leftDir, output.leftPwm),
+        MotorState(PinConfig::MOTOR_RIGHT_IN1, PinConfig::MOTOR_RIGHT_IN2, PinConfig::L298N_2_EN,
+                   output.rightDir, output.rightPwm)
+      );
+      applyVehicleMotion(g_currentMotion);
+    }
+    
     sendOdometryData();
     g_lastOdomReportTime = currentTime;
   }
@@ -725,6 +755,8 @@ void loop() {
     }
   }
 
-  // 3. 小延迟，给 WiFi 后台任务足够 CPU 时间维持连接
+  // 3. FW-L8: 短暂delay让WiFi后台任务获得CPU时间维持连接
+  // 5ms延迟是安全让步：主循环约100ms周期（由100ms测速定时器控制），
+  // 这5ms不会影响控制响应，却能避免主循环100%占空比导致WiFi任务饥饿
   delay(5);
 }

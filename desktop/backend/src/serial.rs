@@ -120,13 +120,27 @@ impl VideoChunkReassembler {
             }
         });
 
-        if total_chunks > buf.total_chunks {
+        if buf.total_chunks != total_chunks {
+            warn!(
+                "帧 {} total_chunks 不一致（缓冲={}, 新={}），丢弃旧缓冲重新开始",
+                frame_id, buf.total_chunks, total_chunks
+            );
+            buf.chunks.clear();
             buf.chunks.resize_with(total_chunks as usize, || None);
             buf.total_chunks = total_chunks;
+            buf.received_count = 0;
         }
 
         let idx = chunk_idx as usize;
-        if idx < buf.chunks.len() && buf.chunks[idx].is_none() {
+        if idx >= buf.chunks.len() {
+            warn!(
+                "分片索引越界: frame_id={}, chunk_idx={}, total_chunks={}",
+                frame_id, chunk_idx, total_chunks
+            );
+            buf.last_update = now;
+            return None;
+        }
+        if buf.chunks[idx].is_none() {
             buf.chunks[idx] = Some(data);
             buf.received_count += 1;
         }
@@ -318,9 +332,9 @@ pub struct SerialManager {
     write_port: std::sync::Mutex<Option<Box<dyn SerialPort>>>,
     /// 连接状态
     pub state: SerialConnectionState,
-    /// 已接收的视频帧数（u32 镜像，供 api.rs/websocket.rs 兼容访问）
-    pub frame_count: u32,
-    /// 已接收的视频帧数（主计数器）
+    /// 已接收的视频帧数（主计数器，u64）
+    pub frame_count: u64,
+    /// 已接收的视频帧数
     pub frames_received: u64,
     /// 已成功解码的视频帧数
     pub frames_decoded: u64,
@@ -332,6 +346,10 @@ pub struct SerialManager {
     pub command_count: u64,
     /// 连接代际计数器（AtomicU64，read_next 无需锁 manager 即可读取）
     pub port_generation: Arc<AtomicU64>,
+    /// 上次成功连接的端口名（用于自动重连）
+    pub last_connected_port: Option<String>,
+    /// 上次成功连接的波特率（用于自动重连）
+    pub last_connected_baud: u32,
 }
 
 impl Default for SerialManager {
@@ -354,6 +372,8 @@ impl SerialManager {
             bytes_sent: 0,
             command_count: 0,
             port_generation: Arc::new(AtomicU64::new(0)),
+            last_connected_port: None,
+            last_connected_baud: DEFAULT_BAUD_RATE,
         }
     }
 
@@ -388,18 +408,14 @@ impl SerialManager {
             }
         };
 
-        // 禁用 DTR：Windows 打开串口时默认触发 DTR，导致 ESP32-C6 复位重启，
-        // 重启期间（约 2-3 秒）串口输出乱码，JSON 解析全部失败。
         if let Err(e) = port.write_data_terminal_ready(false) {
             warn!("禁用 DTR 失败（非致命）: {}", e);
         }
 
-        // 清除读缓冲区：丢弃连接前残留的乱码数据（如 DTR 复位期间的输出）
         if let Err(e) = port.clear(serialport::ClearBuffer::Input) {
             warn!("清除读缓冲区失败（非致命）: {}", e);
         }
 
-        // 克隆写句柄：读写使用不同句柄，写句柄由 Mutex 串行化访问
         let write_port = match port.try_clone() {
             Ok(wp) => wp,
             Err(e) => {
@@ -411,6 +427,15 @@ impl SerialManager {
         *self.write_port.lock_or_panic("write_port") = Some(write_port);
         self.port = Some(BufReader::new(port));
         self.port_generation.fetch_add(1, Ordering::Relaxed);
+
+        self.frames_received = 0;
+        self.frame_count = 0;
+        self.frames_decoded = 0;
+        self.bytes_sent = 0;
+        self.command_count = 0;
+        self.last_connected_port = Some(port_name.to_string());
+        self.last_connected_baud = baud_rate;
+
         self.state = SerialConnectionState::Connected {
             port_name: port_name.to_string(),
             baud_rate,
@@ -480,9 +505,25 @@ impl SerialManager {
         let devices_array = parsed.get("devices")?.as_array()?;
         let mut devices = Vec::new();
         for dev in devices_array {
-            let name = dev.get("name")?.as_str()?.to_string();
-            let mac = dev.get("mac")?.as_str()?.to_string();
-            let rssi = dev.get("rssi")?.as_i64()? as i16;
+            let name = match dev.get("name")?.as_str() {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            let mac = match dev.get("mac")?.as_str() {
+                Some(m) => m.to_string(),
+                None => continue,
+            };
+            let rssi_i64 = match dev.get("rssi")?.as_i64() {
+                Some(r) => r,
+                None => continue,
+            };
+            let rssi = match i16::try_from(rssi_i64) {
+                Ok(r) => r,
+                Err(_) => {
+                    warn!("BLE 设备 {} RSSI 值 {} 超出 i16 范围，跳过", name, rssi_i64);
+                    continue;
+                }
+            };
             let wifi_mac = dev
                 .get("wifi_mac")
                 .and_then(|v| v.as_str())
@@ -541,12 +582,15 @@ impl SerialManager {
 
     /// 读取一个字节，超时返回 None
     fn read_byte_timeout(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<Option<u8>> {
-        let mut byte = [0u8; 1];
-        match port.read(&mut byte) {
-            Ok(0) => Err(anyhow::anyhow!("串口已断开（EOF）")),
-            Ok(_) => Ok(Some(byte[0])),
-            Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => Ok(None),
-            Err(e) => Err(anyhow::anyhow!("串口读取错误: {}", e)),
+        loop {
+            let mut byte = [0u8; 1];
+            match port.read(&mut byte) {
+                Ok(0) => return Err(anyhow::anyhow!("串口已断开（EOF）")),
+                Ok(_) => return Ok(Some(byte[0])),
+                Err(ref e) if e.kind() == std::io::ErrorKind::TimedOut => return Ok(None),
+                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(anyhow::anyhow!("串口读取错误: {}", e)),
+            }
         }
     }
 
@@ -576,6 +620,10 @@ impl SerialManager {
                 if byte == FRAME_HEADER[1] {
                     *state = FrameParseState::ReadingFrame;
                     true
+                } else if byte == FRAME_HEADER[0] {
+                    line_buf.push(FRAME_HEADER[0]);
+                    *state = FrameParseState::Header0;
+                    false
                 } else {
                     line_buf.push(FRAME_HEADER[0]);
                     line_buf.push(FRAME_HEADER[0]);
@@ -623,21 +671,24 @@ impl SerialManager {
     /// 返回 Ok(Some(_)) 表示找到 magic 且已消费；Ok(None) 表示超时未找到（不返回 Err，避免任务崩溃）
     fn resync_stream(port: &mut BufReader<Box<dyn SerialPort>>) -> Result<Option<ResyncFound>> {
         let start = std::time::Instant::now();
-        // prev_byte 初始为 0，视为行边界（兼容首个字节即 magic 的情况）
         let mut prev_byte = 0u8;
+        let mut at_line_start = true;
         while start.elapsed() < RESYNC_TIMEOUT {
             match Self::read_byte_timeout(port)? {
                 None => continue,
                 Some(b) => {
-                    // 整帧头：0xAA 0x55（两字节均已消费）
                     if prev_byte == FRAME_HEADER[0] && b == FRAME_HEADER[1] {
                         debug!("流对齐恢复成功（整帧头 0xAA 0x55）");
                         return Ok(Some(ResyncFound::Frame));
                     }
-                    // 分片 magic：0xCC（需在行边界，即前一字节为 0 或 '\n'）
-                    if b == CHUNK_MAGIC && (prev_byte == 0 || prev_byte == b'\n') {
+                    if b == CHUNK_MAGIC && at_line_start {
                         debug!("流对齐恢复成功（分片 magic 0xCC）");
                         return Ok(Some(ResyncFound::Chunk));
+                    }
+                    if b == b'\n' {
+                        at_line_start = true;
+                    } else if b != CHUNK_MAGIC && b != FRAME_HEADER[0] {
+                        at_line_start = false;
                     }
                     prev_byte = b;
                 }
@@ -801,6 +852,7 @@ impl SerialManager {
             // 行缓冲溢出保护
             if line_buf.len() > LINE_BUF_MAX {
                 warn!("行缓冲区超过 {} 字节上限，丢弃", LINE_BUF_MAX);
+                Self::flush_pending_header(&mut state, &mut line_buf);
                 line_buf.clear();
             }
 
@@ -835,7 +887,6 @@ impl SerialManager {
                     } else if byte == b'\n' {
                         if !line_buf.is_empty() {
                             Self::flush_line(&mut line_buf, &mut results);
-                            return Ok(results);
                         }
                     } else {
                         line_buf.push(byte);
@@ -878,7 +929,7 @@ impl SerialManager {
 enum SerialTaskResult {
     Items(Vec<SerialReadResult>),
     NoData,
-    Error { msg: String },
+    Error { msg: String, generation: u64 },
 }
 
 /// 串口通信任务（在独立线程中运行）
@@ -896,12 +947,35 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
     let mut last_odom_heading = 0.0f32;
 
     let mut chunk_reassembler = VideoChunkReassembler::new();
+    let mut reconnect_attempts: u32 = 0;
+    let mut was_connected = false;
+    let mut last_seen_generation: u64 = 0;
 
     loop {
-        let is_connected = {
+        let (is_connected, last_port, last_baud, current_gen) = {
             let manager = state.serial_manager.lock_or_panic("serial_manager");
-            matches!(manager.state, SerialConnectionState::Connected { .. })
+            let connected = matches!(manager.state, SerialConnectionState::Connected { .. });
+            let port = manager.last_connected_port.clone();
+            let baud = manager.last_connected_baud;
+            let gen = manager.port_generation.load(Ordering::Relaxed);
+            (connected, port, baud, gen)
         };
+
+        let new_connection = is_connected && (!was_connected || current_gen != last_seen_generation);
+        if new_connection {
+            info!("检测到新串口连接 (gen={})，重置旧状态", current_gen);
+            chunk_reassembler = VideoChunkReassembler::new();
+            first_frame_received = false;
+            frame_count_period = 0;
+            bytes_total_period = 0;
+            last_summary_time = std::time::Instant::now();
+            *state.video_frame.lock_or_recover("video_frame") = None;
+            *state.odometry.lock_or_recover("odometry") = OdometryData::default();
+            *state.link_status.lock_or_recover("link_status") = LinkStatus::default();
+            reconnect_attempts = 0;
+        }
+        last_seen_generation = current_gen;
+        was_connected = is_connected;
 
         if is_connected {
             let state_clone = Arc::clone(&state);
@@ -941,7 +1015,7 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                             SerialTaskResult::Items(items)
                         }
                     }
-                    Err(e) => SerialTaskResult::Error { msg: e.to_string() },
+                    Err(e) => SerialTaskResult::Error { msg: e.to_string(), generation: taken_generation },
                 }
             });
 
@@ -1024,7 +1098,7 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                         {
                             let mut manager = state.serial_manager.lock_or_panic("serial_manager");
                             manager.frames_received += 1;
-                            manager.frame_count = manager.frames_received as u32;
+                            manager.frame_count = manager.frames_received;
                         }
 
                         if !first_frame_received {
@@ -1086,10 +1160,20 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                 Ok(SerialTaskResult::NoData) => {
                     tokio::time::sleep(Duration::from_millis(50)).await;
                 }
-                Ok(SerialTaskResult::Error { msg }) => {
+                Ok(SerialTaskResult::Error { msg, generation: error_gen }) => {
                     error!("串口读取错误: {}", msg);
-                    let mut manager = state.serial_manager.lock_or_panic("serial_manager");
-                    manager.disconnect();
+                    {
+                        let mut manager = state.serial_manager.lock_or_panic("serial_manager");
+                        let current_gen = manager.port_generation.load(Ordering::Relaxed);
+                        if current_gen == error_gen {
+                            manager.disconnect();
+                        } else {
+                            warn!(
+                                "错误处理: generation已变化 (错误时={}, 当前={})，跳过disconnect",
+                                error_gen, current_gen
+                            );
+                        }
+                    }
                 }
                 Err(e) if e.is_panic() => {
                     error!("串口任务 panic: {:?}，可能需要重启", e);
@@ -1104,7 +1188,44 @@ pub async fn run_serial_task(state: std::sync::Arc<AppState>) -> Result<()> {
                 }
             }
         } else {
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            if let Some(ref port_name) = last_port {
+                let shift = std::cmp::min(reconnect_attempts, 5);
+                let delay_secs = std::cmp::min(1u64 * (1u64 << shift), 30);
+                reconnect_attempts += 1;
+                info!(
+                    "串口未连接，{}秒后尝试自动重连({})... (第{}次尝试)",
+                    delay_secs, port_name, reconnect_attempts
+                );
+                tokio::time::sleep(Duration::from_secs(delay_secs)).await;
+
+                let port_name_clone = port_name.clone();
+                let baud_rate = last_baud;
+                let reconnect_state = Arc::clone(&state);
+                let reconnect_result = tokio::task::spawn_blocking(move || {
+                    let mut manager = reconnect_state.serial_manager.lock_or_panic("serial_manager");
+                    if matches!(manager.state, SerialConnectionState::Connected { .. }) {
+                        return Ok(());
+                    }
+                    manager.connect(&port_name_clone, baud_rate)
+                })
+                .await;
+
+                match reconnect_result {
+                    Ok(Ok(())) => {
+                        info!("自动重连成功: {}", port_name);
+                        reconnect_attempts = 0;
+                        tokio::time::sleep(Duration::from_secs(3)).await;
+                    }
+                    Ok(Err(e)) => {
+                        warn!("自动重连失败: {}", e);
+                    }
+                    Err(e) => {
+                        warn!("自动重连任务异常: {}", e);
+                    }
+                }
+            } else {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
         }
     }
 }

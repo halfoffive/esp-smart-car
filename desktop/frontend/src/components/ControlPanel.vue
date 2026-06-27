@@ -72,6 +72,7 @@
             @mouseleave="isDraggingSpeed = false"
             @touchstart="isDraggingSpeed = true"
             @touchend="isDraggingSpeed = false"
+            @touchcancel="isDraggingSpeed = false"
             :disabled="!backendAvailable"
             aria-label="速度控制滑块"
           />
@@ -256,7 +257,6 @@ let buttonRepeatTimer: ReturnType<typeof setInterval> | null = null
 const pressedButton = ref<string | null>(null)
 const driveMode = computed(() => status.value.driveMode ?? 0)
 const logs = ref<{ id: number, time: string, message: string, color: string }[]>([])
-/** 日志 ID 自增计数器（避免 Date.now() 碰撞） */
 let logIdCounter = 0
 
 const speedPercent = computed(() => Math.round((currentSpeed.value / 255) * 100))
@@ -266,15 +266,16 @@ const sliderBackground = computed(() => {
   return `linear-gradient(to right, #0ea5e9 0%, #0ea5e9 ${percent}%, #374151 ${percent}%, #374151 100%)`
 })
 
-/** 行走模式描述文本 */
-const driveModeDesc = computed(() => {
-  switch (driveMode.value) {
+const getDriveModeDesc = (mode: number) => {
+  switch (mode) {
     case 0: return '普通模式：无自动修正'
     case 1: return '直线修正：自动修正左右轮速度差'
     case 2: return '航向锁定：锁定当前航向角，自动纠偏'
     default: return ''
   }
-})
+}
+
+const driveModeDesc = computed(() => getDriveModeDesc(driveMode.value))
 
 const setDriveMode = (mode: number) => {
   if (!isConnected.value) {
@@ -282,7 +283,7 @@ const setDriveMode = (mode: number) => {
     return
   }
   if (sendDriveMode(mode)) {
-    addLog(`行走模式: ${driveModeDesc.value}`, 'info')
+    addLog(`行走模式: ${getDriveModeDesc(mode)}`, 'info')
   } else {
     addLog('行走模式切换失败，请检查 WebSocket 连接', 'error')
   }
@@ -314,7 +315,9 @@ const sendCommand = (cmd: string) => {
     return
   }
 
-  wsSendCommand(cmd)
+  if (!wsSendCommand(cmd)) {
+    console.warn('[ControlPanel] 命令发送失败:', cmd)
+  }
 }
 
 const stopButtonRepeat = () => {
@@ -324,12 +327,29 @@ const stopButtonRepeat = () => {
   }
 }
 
+const setSpeed = (pwm: number) => {
+  if (!backendAvailable.value) return
+  if (!isConnected.value) {
+    addLog('WebSocket 未连接，无法设置速度', 'warning')
+    return
+  }
+  const rounded = Math.round(pwm)
+  if (sendSpeed(rounded)) {
+    currentSpeed.value = rounded
+  } else {
+    console.warn('[ControlPanel] 速度发送失败:', rounded)
+  }
+}
+
+const { activeKeys, currentDirectionKey, pauseKeyboard, resumeKeyboard } = useKeyboard(sendCommand, setSpeed)
+
 const handleButtonPress = (cmd: string) => {
   if (!backendAvailable.value) return
   if (!isConnected.value) {
     addLog('未连接，无法发送命令', 'warning')
     return
   }
+  pauseKeyboard()
   stopButtonRepeat()
   pressedButton.value = cmd
   sendCommand(cmd)
@@ -338,22 +358,18 @@ const handleButtonPress = (cmd: string) => {
   }, COMMAND_REPEAT_INTERVAL_MS)
 }
 
-const DIRECTION_KEYS = ['W', 'A', 'S', 'D', 'Q', 'E']
-
 const handleButtonRelease = () => {
   if (!pressedButton.value) return
   stopButtonRepeat()
   pressedButton.value = null
 
-  const remainingDirection = DIRECTION_KEYS.find((key) => activeKeys.has(key))
-  if (remainingDirection) {
-    sendCommand(remainingDirection)
+  if (currentDirectionKey.value) {
+    resumeKeyboard()
   } else {
     sendCommand(' ')
   }
 }
 
-/** 速度滑块输入处理（带 200ms 防抖）：只发送最终值，不发送中间值 */
 const handleSpeedInput = () => {
   if (speedDebounceTimer !== null) {
     clearTimeout(speedDebounceTimer)
@@ -364,18 +380,6 @@ const handleSpeedInput = () => {
   }, 200)
 }
 
-const setSpeed = (pwm: number) => {
-  if (!backendAvailable.value) return
-  if (!isConnected.value) {
-    addLog('WebSocket 未连接，无法设置速度', 'warning')
-    return
-  }
-  sendSpeed(Math.round(pwm))
-}
-
-const { activeKeys } = useKeyboard(sendCommand, setSpeed)
-
-// 速度滑块与后端 currentSpeed 同步（仅在未拖动时）
 watch(() => status.value.currentSpeed, (v) => {
   if (!isDraggingSpeed.value && typeof v === 'number') {
     currentSpeed.value = v
@@ -416,7 +420,6 @@ const disconnect = async () => {
   }
 }
 
-/** 扫描可用串口：调用 /api/ports 获取列表并填充下拉框（兜底手动扫描） */
 const scanPorts = async () => {
   isScanning.value = true
   try {
@@ -437,7 +440,6 @@ const scanPorts = async () => {
   }
 }
 
-/** 当可用串口列表变化时，如果当前选中的串口已不在列表中则清除 */
 watch(displayedPorts, (newPorts) => {
   if (selectedPort.value && !newPorts.includes(selectedPort.value)) {
     selectedPort.value = ''

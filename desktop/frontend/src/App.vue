@@ -22,7 +22,7 @@
           </div>
           <h1 class="text-base font-bold text-dark-100">智能车控制系统</h1>
           <span class="text-[10px] text-dark-500 bg-dark-800 px-1.5 py-0.5 rounded">
-            v1.3.0
+            v{{ appVersion }}
           </span>
         </div>
 
@@ -47,7 +47,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
 import VideoPlayer from './components/VideoPlayer.vue'
 import ControlPanel from './components/ControlPanel.vue'
 import StatusBar from './components/StatusBar.vue'
@@ -56,7 +56,17 @@ import { useBackendHealth } from './composables/useBackendHealth'
 import { useWebSocket } from './composables/useWebSocket'
 
 const { backendAvailable, start: startHealthCheck, stop: stopHealthCheck } = useBackendHealth()
-const { connect: wsConnect, disconnect: wsDisconnect } = useWebSocket()
+const { connect: wsConnect, disconnect: wsDisconnect, isConnected: wsConnected } = useWebSocket()
+
+const appVersion = __APP_VERSION__
+
+watch(backendAvailable, (available, wasAvailable) => {
+  if (available && !wasAvailable && !wsConnected.value) {
+    wsConnect().catch((err: Error) => {
+      console.warn('[App] 后端恢复后自动重连失败:', err.message)
+    })
+  }
+})
 
 onMounted(() => {
   startHealthCheck()

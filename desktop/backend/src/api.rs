@@ -46,7 +46,7 @@ pub struct StatusResponse {
     /// 串口波特率
     pub baud_rate: Option<u32>,
     /// 已接收帧数
-    pub frame_count: u32,
+    pub frame_count: u64,
     /// 已发送字节数
     pub bytes_sent: u64,
     /// 当前速度 PWM 值（0-255）
@@ -157,6 +157,7 @@ pub async fn handle_command(
                 return match send_result {
                     Ok(Ok(())) => {
                         state.current_speed.store(speed, Ordering::Relaxed);
+                        state.log_command_forward(b'S');
                         info!("设置速度 PWM: {}", speed);
                         (
                             StatusCode::OK,
@@ -262,6 +263,7 @@ pub async fn handle_command(
 
     match send_result {
         Ok(Ok(())) => {
+            state.log_command_forward(cmd);
             info!("发送命令: {}", request.command);
             (
                 StatusCode::OK,
@@ -371,8 +373,32 @@ pub async fn connect_serial(
     State(state): State<Arc<AppState>>,
     Json(request): Json<ConnectRequest>,
 ) -> (StatusCode, Json<ApiResponse>) {
+    let port_name = request.port_name.trim().to_string();
+    if port_name.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse {
+                success: false,
+                message: "端口名不能为空".to_string(),
+            }),
+        );
+    }
+
+    const MIN_BAUD: u32 = 1200;
+    const MAX_BAUD: u32 = 12_000_000;
     let baud_rate = request.baud_rate.unwrap_or(DEFAULT_BAUD_RATE);
-    let port_name = request.port_name;
+    if baud_rate < MIN_BAUD || baud_rate > MAX_BAUD {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse {
+                success: false,
+                message: format!(
+                    "波特率必须在 {}-{} 之间",
+                    MIN_BAUD, MAX_BAUD
+                ),
+            }),
+        );
+    }
 
     let state_clone = Arc::clone(&state);
     let port_name_clone = port_name.clone();
@@ -399,9 +425,10 @@ pub async fn connect_serial(
             let probe_port_name = port_name.clone();
             tokio::spawn(async move {
                 tokio::time::sleep(tokio::time::Duration::from_secs(3)).await;
+                let seq = probe_state.packet_seq.fetch_add(1, Ordering::Relaxed);
                 let result = tokio::task::spawn_blocking(move || {
                     let mut manager = probe_state.serial_manager.lock_or_panic("serial_manager");
-                    manager.send_packet(&crate::websocket::build_wireless_packet(11, 0, 0, 0))
+                    manager.send_packet(&crate::websocket::build_wireless_packet(11, 0, 0, seq))
                 })
                 .await;
 

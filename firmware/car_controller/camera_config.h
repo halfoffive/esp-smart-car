@@ -156,8 +156,8 @@ inline bool initializeCamera(const CameraConfiguration& config) {
     camera_config_t cameraConfig;
     memset(&cameraConfig, 0, sizeof(cameraConfig));
     
-    cameraConfig.ledc_channel = LEDC_CHANNEL_0;
-    cameraConfig.ledc_timer = LEDC_TIMER_0;
+    cameraConfig.ledc_channel = LEDC_CHANNEL_5;
+    cameraConfig.ledc_timer = LEDC_TIMER_2;
     cameraConfig.pin_pwdn = CameraPins::PWDN;
     cameraConfig.pin_reset = CameraPins::RESET;
     cameraConfig.pin_xclk = CameraPins::XCLK;

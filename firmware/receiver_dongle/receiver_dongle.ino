@@ -582,6 +582,12 @@ void setup() {
     Serial.println(mac);
     
     // 初始化 BLE（扫描前只需初始化一次）
+    // FW-L7: BLE与WiFi共存说明 - ESP32-C6的BLE和WiFi共享2.4GHz射频，
+    // BLE扫描期间可能造成WiFi短暂吞吐下降，但由于：
+    // 1) BLE扫描仅在用户主动触发时运行（非持续扫描）
+    // 2) 视频使用UDP且有丢帧恢复机制
+    // 3) 控制命令对延迟不敏感（100ms级）
+    // 故共存问题在实际使用中影响可接受
     BLEDevice::init("智能车");
 
     Serial.println("[初始化] 接收器就绪，等待命令...");
@@ -594,18 +600,18 @@ void setup() {
 
 void loop() {
     // 1. 处理串口输入（二进制 WirelessPacket）
-    if (Serial.available() >= static_cast<int>(sizeof(WirelessPacket))) {
-        WirelessPacket packet{};  // aggregate initialization，删除构造函数后的调用方式
-        if (readSerialPacket(packet)) {
-            // 本地命令：不转发到车载端
-            if (packet.type == CommandType::BLE_SCAN) {
-                performBleScan();
-            } else if (packet.type == CommandType::LINK_STATUS) {
-                sendLinkStatus();
-            } else {
-                // 运动/速度/行走模式/停止/状态/校准等命令：转发到车载端
-                forwardToCar(packet);
-            }
+    // FW-M4: 移除冗余的 Serial.available() >= sizeof(WirelessPacket) 前置判断
+    // readSerialPacket() 内部已实现滑动窗口帧同步逻辑，能处理任意长度的字节流
+    WirelessPacket packet{};
+    if (readSerialPacket(packet)) {
+        // 本地命令：不转发到车载端
+        if (packet.type == CommandType::BLE_SCAN) {
+            performBleScan();
+        } else if (packet.type == CommandType::LINK_STATUS) {
+            sendLinkStatus();
+        } else {
+            // 运动/速度/行走模式/停止/状态/校准等命令：转发到车载端
+            forwardToCar(packet);
         }
     }
 

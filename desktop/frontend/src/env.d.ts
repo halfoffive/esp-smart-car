@@ -3,3 +3,5 @@
 interface ImportMetaEnv {
   readonly VITE_API_TOKEN?: string
 }
+
+declare const __APP_VERSION__: string
