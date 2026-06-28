@@ -29,8 +29,11 @@ pub const DEFAULT_BAUD_RATE: u32 = 3_000_000;
 const READ_TIMEOUT: Duration = Duration::from_millis(100);
 /// 最大帧大小，与固件 VideoFrameBuffer 对齐
 const MAX_FRAME_SIZE: usize = 32 * 1024;
-/// read_next 总超时
+/// read_next 总超时（等待首个数据的最长时间）
 const READ_TOTAL_TIMEOUT: Duration = Duration::from_secs(5);
+/// 连续数据突发处理上限：收到首个结果后，最多处理这么长时间即返回，
+/// 避免在高速流中累积数秒数据导致延迟尖峰和 FPS 暴跌
+const BURST_PROCESS_DURATION: Duration = Duration::from_millis(15);
 /// 流对齐恢复超时
 const RESYNC_TIMEOUT: Duration = Duration::from_secs(2);
 /// 行缓冲区上限
@@ -687,7 +690,7 @@ impl SerialManager {
                     }
                     if b == b'\n' {
                         at_line_start = true;
-                    } else if b != CHUNK_MAGIC && b != FRAME_HEADER[0] {
+                    } else {
                         at_line_start = false;
                     }
                     prev_byte = b;
@@ -825,8 +828,21 @@ impl SerialManager {
         let mut line_buf: Vec<u8> = Vec::new();
         let mut results: Vec<SerialReadResult> = Vec::new();
         let mut state = FrameParseState::WaitingHeader;
+        let mut first_result_time: Option<std::time::Instant> = None;
 
-        while start.elapsed() < READ_TOTAL_TIMEOUT {
+        loop {
+            let elapsed = start.elapsed();
+            // 尚未收到任何数据：使用总超时等待首个字节
+            if first_result_time.is_none() && elapsed >= READ_TOTAL_TIMEOUT {
+                break;
+            }
+            // 已有数据：限制单次突发处理时长，避免累积过多数据导致延迟
+            if let Some(frt) = first_result_time {
+                if frt.elapsed() >= BURST_PROCESS_DURATION {
+                    break;
+                }
+            }
+
             // 原子读取 generation，无需锁 manager
             let current_gen = generation.load(Ordering::Relaxed);
             if current_gen != expected {
@@ -863,12 +879,13 @@ impl SerialManager {
                         let at_boundary = line_buf.is_empty() || line_buf.last() == Some(&b'\n');
                         if at_boundary {
                             if byte == CHUNK_MAGIC {
-                                // 0xCC 是单字节 magic，立即读取分片（无需 ChunkHeader 中间态，
-                                // 否则下一字节 totalBytes[0] 会被当作状态机输入而丢失）
                                 Self::flush_line(&mut line_buf, &mut results);
                                 match Self::read_chunk(port)? {
                                     Some(item) => {
                                         results.push(item);
+                                        if first_result_time.is_none() {
+                                            first_result_time = Some(std::time::Instant::now());
+                                        }
                                         continue;
                                     }
                                     None => {
@@ -887,6 +904,9 @@ impl SerialManager {
                     } else if byte == b'\n' {
                         if !line_buf.is_empty() {
                             Self::flush_line(&mut line_buf, &mut results);
+                            if first_result_time.is_none() {
+                                first_result_time = Some(std::time::Instant::now());
+                            }
                         }
                     } else {
                         line_buf.push(byte);
@@ -894,12 +914,14 @@ impl SerialManager {
                 }
                 FrameParseState::Header0 | FrameParseState::Header1 => {
                     if Self::try_match_frame_header(&mut state, &mut line_buf, byte) {
-                        // 帧头匹配成功
                         Self::flush_line(&mut line_buf, &mut results);
                         state = FrameParseState::WaitingHeader;
                         match Self::read_frame(port)? {
                             Some(item) => {
                                 results.push(item);
+                                if first_result_time.is_none() {
+                                    first_result_time = Some(std::time::Instant::now());
+                                }
                                 continue;
                             }
                             None => {
@@ -912,15 +934,24 @@ impl SerialManager {
                     }
                 }
                 FrameParseState::ReadingFrame => {
-                    // read_frame 已在 Header0/Header1 分支内调用，此处不应到达
                     state = FrameParseState::WaitingHeader;
                 }
             }
         }
 
-        // 总超时：回填待定状态字节并刷新行缓冲区，防止部分 JSON 行数据丢失
+        // 超时退出：回填待定状态字节，但仅刷新以 \n 结尾的完整行；
+        // 不完整的行（半截 JSON）丢弃，避免解析错误
         Self::flush_pending_header(&mut state, &mut line_buf);
-        Self::flush_line(&mut line_buf, &mut results);
+        if !line_buf.is_empty() {
+            if line_buf.last() == Some(&b'\n') {
+                Self::flush_line(&mut line_buf, &mut results);
+            } else {
+                warn!(
+                    "超时丢弃不完整行（{} 字节）",
+                    line_buf.len()
+                );
+            }
+        }
         Ok(results)
     }
 }
